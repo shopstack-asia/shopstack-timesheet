@@ -4,10 +4,10 @@ import { getZohoPeopleService } from '@/lib/zoho-people';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
-  try {
-    const searchParams = request.nextUrl.searchParams;
-    const email = searchParams.get('email');
+  const searchParams = request.nextUrl.searchParams;
+  const email = searchParams.get('email');
 
+  try {
     if (!email) {
       return NextResponse.json({
         error: 'Please provide email parameter: ?email=test@shopstack.asia',
@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
       troubleshooting: {
         checkCredentials: 'Verify ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, and ZOHO_REFRESH_TOKEN in .env',
         checkDomain: `Current ZOHO_API_DOMAIN: ${process.env.ZOHO_API_DOMAIN || 'https://people.zoho.com'}`,
-        checkEmail: `Email tested: ${email}`,
+        checkEmail: email ? `Email tested: ${email}` : 'No email parameter provided',
       },
     }, { status: 500 });
   }

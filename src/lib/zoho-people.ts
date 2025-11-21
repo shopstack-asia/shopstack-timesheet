@@ -2,9 +2,12 @@ import axios, { AxiosInstance } from 'axios';
 import { StaffProfile, ZohoEmployeeResponse } from '@/types';
 
 interface ZohoTokenResponse {
-  access_token: string;
-  refresh_token: string;
-  expires_in: number;
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  error?: string;
+  api_domain?: string;
+  scope?: string;
 }
 
 export class ZohoPeopleService {
