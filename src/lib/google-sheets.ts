@@ -167,12 +167,58 @@ export class GoogleSheetsService {
   }
 
   /**
-   * Append time log entries to Time Log sheet
+   * Find existing time log entry by Date, Staff ID, Project ID, and Task ID
+   * Returns an object with row number and existing Time Log ID if found, or null if not found
    */
-  async appendTimeLogEntries(entries: TimeLogRow[]): Promise<void> {
+  async findExistingTimeLogEntry(
+    date: string,
+    staffId: string,
+    projectId: string,
+    taskId: string
+  ): Promise<{ rowNumber: number; timeLogId: number } | null> {
     try {
-      // Convert entries to rows
-      const rows = entries.map((entry) => [
+      // Get all time log entries
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: 'Time Log!A2:M', // Skip header row
+      });
+
+      const rows = response.data.values || [];
+      
+      // Search for matching entry
+      // Column order: Time Log ID (A), Date (B), Staff ID (C), Project ID (G), Task ID (K)
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (
+          row.length >= 11 &&
+          row[1] === date && // Date (column B, index 1)
+          row[2] === staffId && // Staff ID (column C, index 2)
+          row[6] === projectId && // Project ID (column G, index 6)
+          row[10] === taskId // Task ID (column K, index 10)
+        ) {
+          // Return row number (2-indexed because we skipped header, so +2) and existing ID
+          const timeLogId = row[0] ? parseInt(String(row[0]), 10) : 0;
+          return {
+            rowNumber: i + 2,
+            timeLogId: isNaN(timeLogId) ? 0 : timeLogId,
+          };
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Error finding existing time log entry:', error);
+      // If sheet doesn't exist or is empty, return null
+      return null;
+    }
+  }
+
+  /**
+   * Update time log entry at specific row
+   */
+  async updateTimeLogEntry(rowNumber: number, entry: TimeLogRow): Promise<void> {
+    try {
+      const row = [
         entry['Time Log ID'],
         entry.Date,
         entry['Staff ID'],
@@ -186,21 +232,111 @@ export class GoogleSheetsService {
         entry['Task ID'],
         entry.Task,
         entry.Hours,
-      ]);
+      ];
 
-      await this.sheets.spreadsheets.values.append({
+      await this.sheets.spreadsheets.values.update({
         spreadsheetId: this.spreadsheetId,
-        range: 'Time Log!A:M',
+        range: `Time Log!A${rowNumber}:M${rowNumber}`,
         valueInputOption: 'USER_ENTERED',
-        insertDataOption: 'INSERT_ROWS',
         requestBody: {
-          values: rows,
+          values: [row],
         },
       });
+
+      console.log(`[Google Sheets] Updated time log entry at row ${rowNumber}`);
     } catch (error) {
-      console.error('Error appending time log entries:', error);
+      console.error('Error updating time log entry:', error);
+      throw new Error('Failed to update time log entry in Google Sheets');
+    }
+  }
+
+  /**
+   * Append or update time log entries
+   * If an entry with the same Date, Staff ID, Project ID, and Task ID exists, it will be updated
+   * Otherwise, a new entry will be appended
+   */
+  async appendOrUpdateTimeLogEntries(entries: TimeLogRow[]): Promise<void> {
+    try {
+      const entriesToAppend: TimeLogRow[] = [];
+      const updates: Array<{ rowNumber: number; entry: TimeLogRow }> = [];
+
+      // Check each entry for existing records
+      for (const entry of entries) {
+        const existing = await this.findExistingTimeLogEntry(
+          entry.Date,
+          entry['Staff ID'],
+          entry['Project ID'],
+          entry['Task ID']
+        );
+
+        if (existing) {
+          // Entry exists, prepare for update
+          // Use existing Time Log ID to preserve it
+          const entryWithExistingId = {
+            ...entry,
+            'Time Log ID': existing.timeLogId,
+          };
+          console.log(
+            `[Google Sheets] Found existing entry for Date: ${entry.Date}, Staff: ${entry['Staff ID']}, Project: ${entry['Project ID']}, Task: ${entry['Task ID']} at row ${existing.rowNumber} (ID: ${existing.timeLogId})`
+          );
+          updates.push({ rowNumber: existing.rowNumber, entry: entryWithExistingId });
+        } else {
+          // New entry, prepare for append
+          entriesToAppend.push(entry);
+        }
+      }
+
+      // Perform updates
+      for (const { rowNumber, entry } of updates) {
+        await this.updateTimeLogEntry(rowNumber, entry);
+      }
+
+      // Perform appends for new entries
+      if (entriesToAppend.length > 0) {
+        const rows = entriesToAppend.map((entry) => [
+          entry['Time Log ID'],
+          entry.Date,
+          entry['Staff ID'],
+          entry['Staff First Name'],
+          entry['Staff Last Name'],
+          entry['Staff Position'],
+          entry['Project ID'],
+          entry['Project Client'],
+          entry['Project Name'],
+          entry['Project Code'],
+          entry['Task ID'],
+          entry.Task,
+          entry.Hours,
+        ]);
+
+        await this.sheets.spreadsheets.values.append({
+          spreadsheetId: this.spreadsheetId,
+          range: 'Time Log!A:M',
+          valueInputOption: 'USER_ENTERED',
+          insertDataOption: 'INSERT_ROWS',
+          requestBody: {
+            values: rows,
+          },
+        });
+
+        console.log(`[Google Sheets] Appended ${entriesToAppend.length} new time log entries`);
+      }
+
+      if (updates.length > 0) {
+        console.log(`[Google Sheets] Updated ${updates.length} existing time log entries`);
+      }
+    } catch (error) {
+      console.error('Error appending/updating time log entries:', error);
       throw new Error('Failed to write time log entries to Google Sheets');
     }
+  }
+
+  /**
+   * Append time log entries to Time Log sheet (deprecated - use appendOrUpdateTimeLogEntries instead)
+   */
+  async appendTimeLogEntries(entries: TimeLogRow[]): Promise<void> {
+    // Redirect to new method for backward compatibility
+    return this.appendOrUpdateTimeLogEntries(entries);
   }
 
   /**

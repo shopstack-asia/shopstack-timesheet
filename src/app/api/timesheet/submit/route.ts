@@ -92,17 +92,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Get last Time Log ID
+    // Get Google Sheets service
     const sheetsService = getGoogleSheetsService();
+    
+    // Get last Time Log ID for new entries
     const lastId = await sheetsService.getLastTimeLogId();
+    let newIdCounter = 0;
 
     // Prepare time log rows
-    const timeLogRows: TimeLogRow[] = entries.map((entry, index) => {
+    const timeLogRows: TimeLogRow[] = entries.map((entry) => {
       const project = projectMap.get(entry.projectId)!;
       const task = taskMap.get(entry.taskId)!;
 
+      // Generate new ID for now (will be replaced if entry exists during appendOrUpdate)
+      const timeLogId = lastId + (++newIdCounter);
+
       return {
-        'Time Log ID': lastId + index + 1,
+        'Time Log ID': timeLogId,
         Date: date,
         'Staff ID': session.staffProfile!.EmployeeID,
         'Staff First Name': session.staffProfile!.FirstName,
@@ -118,8 +124,9 @@ export async function POST(request: NextRequest) {
       };
     });
 
-    // Write to Google Sheets
-    await sheetsService.appendTimeLogEntries(timeLogRows);
+    // Write to Google Sheets (will update existing or append new)
+    // The appendOrUpdateTimeLogEntries method will check for duplicates and update accordingly
+    await sheetsService.appendOrUpdateTimeLogEntries(timeLogRows);
 
     return NextResponse.json<ApiResponse<void>>({
       success: true,
