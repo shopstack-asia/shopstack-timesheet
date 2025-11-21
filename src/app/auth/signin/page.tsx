@@ -7,6 +7,7 @@ import { useEffect, useState, Suspense } from 'react';
 function SignInForm() {
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const err = searchParams.get('error');
@@ -17,8 +18,21 @@ function SignInForm() {
     }
   }, [searchParams]);
 
-  const handleSignIn = () => {
-    signIn('google', { callbackUrl: '/timesheet' });
+  const handleSignIn = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      console.log('Attempting to sign in with Google...');
+      const result = await signIn('google', { 
+        callbackUrl: '/timesheet',
+        redirect: true 
+      });
+      console.log('Sign in result:', result);
+    } catch (err) {
+      console.error('Sign in error:', err);
+      setError('Failed to initiate sign in. Please try again.');
+      setLoading(false);
+    }
   };
 
   return (
@@ -41,7 +55,8 @@ function SignInForm() {
 
         <button
           onClick={handleSignIn}
-          className="w-full flex justify-center items-center gap-3 py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          disabled={loading}
+          className="w-full flex justify-center items-center gap-3 py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-blue-400 disabled:cursor-not-allowed"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
             <path
@@ -61,7 +76,7 @@ function SignInForm() {
               d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
             />
           </svg>
-          Sign in with Google
+          {loading ? 'Redirecting...' : 'Sign in with Google'}
         </button>
 
         <p className="text-xs text-center text-gray-500">

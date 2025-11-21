@@ -9,14 +9,30 @@ export class GoogleSheetsService {
     this.spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || '';
 
     if (!this.spreadsheetId) {
-      throw new Error('Google Sheets Spreadsheet ID is missing');
+      console.error('[Google Sheets] Missing environment variables:');
+      console.error('[Google Sheets] GOOGLE_SHEETS_SPREADSHEET_ID:', process.env.GOOGLE_SHEETS_SPREADSHEET_ID ? 'SET' : 'MISSING');
+      console.error('[Google Sheets] GOOGLE_SERVICE_ACCOUNT_EMAIL:', process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? 'SET' : 'MISSING');
+      console.error('[Google Sheets] GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY:', process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY ? 'SET' : 'MISSING');
+      throw new Error('Google Sheets Spreadsheet ID is missing. Please check your .env file and restart the server.');
     }
 
     // Initialize Google Sheets API with service account
+    const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n');
+    
+    if (!serviceAccountEmail || !privateKey) {
+      console.error('[Google Sheets] Missing service account credentials:');
+      console.error('[Google Sheets] GOOGLE_SERVICE_ACCOUNT_EMAIL:', serviceAccountEmail ? 'SET' : 'MISSING');
+      console.error('[Google Sheets] GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY:', privateKey ? 'SET' : 'MISSING');
+      throw new Error('Google Service Account credentials are missing. Please check your .env file.');
+    }
+    
+    console.log(`[Google Sheets] Using service account: ${serviceAccountEmail.substring(0, 20)}...`);
+    
     const auth = new google.auth.GoogleAuth({
       credentials: {
-        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        private_key: process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+        client_email: serviceAccountEmail,
+        private_key: privateKey,
       },
       scopes: ['https://www.googleapis.com/auth/spreadsheets'],
     });
@@ -29,12 +45,16 @@ export class GoogleSheetsService {
    */
   async getProjects(): Promise<Project[]> {
     try {
+      console.log(`[Google Sheets] Fetching projects from spreadsheet: ${this.spreadsheetId}`);
+      console.log(`[Google Sheets] Range: Projects!A2:D`);
+      
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
         range: 'Projects!A2:D', // Skip header row
       });
 
       const rows = response.data.values || [];
+      console.log(`[Google Sheets] Found ${rows.length} project rows`);
 
       return rows
         .filter((row: any[]) => row.length >= 4 && row[0]) // Filter empty rows
@@ -44,9 +64,29 @@ export class GoogleSheetsService {
           ProjectName: String(row[2] || ''),
           ProjectCode: String(row[3] || ''),
         }));
-    } catch (error) {
-      console.error('Error fetching projects from Google Sheets:', error);
-      throw new Error('Failed to fetch projects from Google Sheets');
+    } catch (error: any) {
+      console.error('[Google Sheets] Error fetching projects:', error);
+      
+      if (error.response?.data?.error) {
+        const apiError = error.response.data.error;
+        console.error('[Google Sheets] API Error:', {
+          code: apiError.code,
+          message: apiError.message,
+          status: apiError.status,
+        });
+        
+        if (apiError.message?.includes('not supported for this document')) {
+          throw new Error(
+            'Google Sheets access denied. Please ensure:\n' +
+            '1. The Google Sheet is shared with the service account email\n' +
+            '2. The service account has "Editor" or "Viewer" permission\n' +
+            '3. The sheet name "Projects" exists in the spreadsheet\n' +
+            `Service account email: ${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'NOT SET'}`
+          );
+        }
+      }
+      
+      throw new Error(`Failed to fetch projects from Google Sheets: ${error.message}`);
     }
   }
 
@@ -55,12 +95,16 @@ export class GoogleSheetsService {
    */
   async getTasks(): Promise<Task[]> {
     try {
+      console.log(`[Google Sheets] Fetching tasks from spreadsheet: ${this.spreadsheetId}`);
+      console.log(`[Google Sheets] Range: Roles and Tasks!A2:B`);
+      
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
         range: 'Roles and Tasks!A2:B', // Skip header row
       });
 
       const rows = response.data.values || [];
+      console.log(`[Google Sheets] Found ${rows.length} task rows`);
 
       return rows
         .filter((row: any[]) => row.length >= 2 && row[0]) // Filter empty rows
@@ -68,9 +112,29 @@ export class GoogleSheetsService {
           TaskID: String(row[0] || ''),
           Task: String(row[1] || ''),
         }));
-    } catch (error) {
-      console.error('Error fetching tasks from Google Sheets:', error);
-      throw new Error('Failed to fetch tasks from Google Sheets');
+    } catch (error: any) {
+      console.error('[Google Sheets] Error fetching tasks:', error);
+      
+      if (error.response?.data?.error) {
+        const apiError = error.response.data.error;
+        console.error('[Google Sheets] API Error:', {
+          code: apiError.code,
+          message: apiError.message,
+          status: apiError.status,
+        });
+        
+        if (apiError.message?.includes('not supported for this document')) {
+          throw new Error(
+            'Google Sheets access denied. Please ensure:\n' +
+            '1. The Google Sheet is shared with the service account email\n' +
+            '2. The service account has "Editor" or "Viewer" permission\n' +
+            '3. The sheet name "Roles and Tasks" exists in the spreadsheet\n' +
+            `Service account email: ${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'NOT SET'}`
+          );
+        }
+      }
+      
+      throw new Error(`Failed to fetch tasks from Google Sheets: ${error.message}`);
     }
   }
 

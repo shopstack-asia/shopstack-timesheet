@@ -69,8 +69,11 @@ export interface ApiResponse<T> {
 }
 
 // Zoho People API Response
+// Zoho People API can return data in two formats:
+// 1. Old format: { response: { result: { Employees: { row: [...] } } } }
+// 2. New format: [{...}, {...}] (direct array)
 export interface ZohoEmployeeResponse {
-  response: {
+  response?: {
     result: {
       Employees: {
         row: Array<{
@@ -82,5 +85,7 @@ export interface ZohoEmployeeResponse {
       };
     };
   };
+  // New format: direct array of employee objects
+  [index: number]?: Record<string, any>;
 }
 
