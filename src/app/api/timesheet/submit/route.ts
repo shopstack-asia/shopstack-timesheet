@@ -49,16 +49,7 @@ export async function POST(request: NextRequest) {
 
     const { date, entries } = validationResult.data;
 
-    // Validate that entries exist
-    if (entries.length === 0) {
-      return NextResponse.json<ApiResponse<void>>(
-        {
-          success: false,
-          error: 'At least one entry is required',
-        },
-        { status: 400 }
-      );
-    }
+    // Note: entries can be empty array to delete all entries for the day
 
     // Get master data
     const [projects, tasks] = await Promise.all([
@@ -70,42 +61,79 @@ export async function POST(request: NextRequest) {
     const projectMap = new Map(projects.map((p) => [p.ProjectID, p]));
     const taskMap = new Map(tasks.map((t) => [t.TaskID, t]));
 
-    // Validate all entries reference valid projects and tasks
-    for (const entry of entries) {
-      if (!projectMap.has(entry.projectId)) {
-        return NextResponse.json<ApiResponse<void>>(
-          {
-            success: false,
-            error: `Invalid project ID: ${entry.projectId}`,
-          },
-          { status: 400 }
-        );
-      }
-      if (!taskMap.has(entry.taskId)) {
-        return NextResponse.json<ApiResponse<void>>(
-          {
-            success: false,
-            error: `Invalid task ID: ${entry.taskId}`,
-          },
-          { status: 400 }
-        );
+    // Validate all entries reference valid projects and tasks (only if entries exist)
+    if (entries.length > 0) {
+      for (const entry of entries) {
+        if (!projectMap.has(entry.projectId)) {
+          return NextResponse.json<ApiResponse<void>>(
+            {
+              success: false,
+              error: `Invalid project ID: ${entry.projectId}`,
+            },
+            { status: 400 }
+          );
+        }
+        if (!taskMap.has(entry.taskId)) {
+          return NextResponse.json<ApiResponse<void>>(
+            {
+              success: false,
+              error: `Invalid task ID: ${entry.taskId}`,
+            },
+            { status: 400 }
+          );
+        }
       }
     }
 
     // Get Google Sheets service
     const sheetsService = getGoogleSheetsService();
     
-    // Get last Time Log ID for new entries
-    const lastId = await sheetsService.getLastTimeLogId();
-    let newIdCounter = 0;
+    // Get existing entries for this date and staff from Google Sheets
+    const existingEntries = await sheetsService.getTimeLogEntriesByDateAndStaff(
+      date,
+      session.staffProfile!.EmployeeID
+    );
 
-    // Prepare time log rows
+    // Create a map of existing entries by Project ID + Task ID for comparison
+    const existingEntriesMap = new Map<string, { rowNumber: number; entry: TimeLogRow }>();
+    existingEntries.forEach(({ rowNumber, entry }) => {
+      const key = `${entry['Project ID']}|${entry['Task ID']}`;
+      existingEntriesMap.set(key, { rowNumber, entry });
+    });
+
+    // Create a set of submitted entries by Project ID + Task ID
+    const submittedEntriesSet = new Set<string>();
+    entries.forEach((entry) => {
+      const key = `${entry.projectId}|${entry.taskId}`;
+      submittedEntriesSet.add(key);
+    });
+
+    // Find entries to delete (exist in Google Sheets but not in submitted entries)
+    const entriesToDelete: number[] = [];
+    existingEntriesMap.forEach(({ rowNumber, entry }, key) => {
+      if (!submittedEntriesSet.has(key)) {
+        entriesToDelete.push(rowNumber);
+      }
+    });
+
+    // Delete entries that were removed
+    if (entriesToDelete.length > 0) {
+      await sheetsService.deleteTimeLogEntries(entriesToDelete);
+      console.log(`[API] Deleted ${entriesToDelete.length} removed entries for date ${date}`);
+    }
+
+    // Prepare time log rows for entries to add/update
     const timeLogRows: TimeLogRow[] = entries.map((entry) => {
       const project = projectMap.get(entry.projectId)!;
       const task = taskMap.get(entry.taskId)!;
 
-      // Generate new ID for now (will be replaced if entry exists during appendOrUpdate)
-      const timeLogId = lastId + (++newIdCounter);
+      // Generate Time Log ID from Date + Staff ID + Project ID + Task ID
+      const timeLogId = sheetsService.generateTimeLogId(
+        date,
+        session.staffProfile!.EmployeeID,
+        project.ProjectID,
+        task.TaskID
+      );
 
       return {
         'Time Log ID': timeLogId,
@@ -126,7 +154,9 @@ export async function POST(request: NextRequest) {
 
     // Write to Google Sheets (will update existing or append new)
     // The appendOrUpdateTimeLogEntries method will check for duplicates and update accordingly
-    await sheetsService.appendOrUpdateTimeLogEntries(timeLogRows);
+    if (timeLogRows.length > 0) {
+      await sheetsService.appendOrUpdateTimeLogEntries(timeLogRows);
+    }
 
     return NextResponse.json<ApiResponse<void>>({
       success: true,

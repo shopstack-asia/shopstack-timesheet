@@ -8,12 +8,12 @@ interface DailyCardProps {
   day: DailyTimesheet;
   dayIndex: number;
   projects: Project[];
+  clients: string[];
   tasks: Task[];
   onAddEntry: () => void;
   onUpdateEntry: (entryIndex: number, updates: Partial<TimeEntry>) => void;
   onDeleteEntry: (entryIndex: number) => void;
   onCopyYesterday: () => void;
-  onSubmit: () => void;
   submitting: boolean;
 }
 
@@ -21,12 +21,12 @@ export default function DailyCard({
   day,
   dayIndex,
   projects,
+  clients,
   tasks,
   onAddEntry,
   onUpdateEntry,
   onDeleteEntry,
   onCopyYesterday,
-  onSubmit,
   submitting,
 }: DailyCardProps) {
   const dayName = format(parseISO(day.date), 'EEEE');
@@ -48,6 +48,7 @@ export default function DailyCard({
             key={entry.id}
             entry={entry}
             projects={projects}
+            clients={clients}
             tasks={tasks}
             onUpdate={(updates) => onUpdateEntry(entryIndex, updates)}
             onDelete={() => onDeleteEntry(entryIndex)}
@@ -63,22 +64,13 @@ export default function DailyCard({
           + Add Entry
         </button>
 
-        {dayIndex > 0 && (
+        {dayIndex > 0 && day.entries.length === 0 && (
           <button
             onClick={onCopyYesterday}
-            className="w-full px-3 py-2 text-sm bg-gray-50 text-gray-700 rounded hover:bg-gray-100 border border-gray-200"
+            disabled={submitting}
+            className="w-full px-3 py-2 text-sm bg-gray-50 text-gray-700 rounded hover:bg-gray-100 border border-gray-200 disabled:bg-gray-100 disabled:cursor-not-allowed"
           >
             Copy Yesterday
-          </button>
-        )}
-
-        {day.entries.length > 0 && (
-          <button
-            onClick={onSubmit}
-            disabled={submitting}
-            className="w-full px-3 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-          >
-            {submitting ? 'Submitting...' : 'Submit Day'}
           </button>
         )}
       </div>

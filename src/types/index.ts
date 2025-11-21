@@ -46,7 +46,7 @@ export interface WeeklyTimesheet {
 
 // Time Log Row (for Google Sheets submission)
 export interface TimeLogRow {
-  'Time Log ID': number;
+  'Time Log ID': string; // Generated from Date + Staff ID + Project ID + Task ID
   Date: string;
   'Staff ID': string;
   'Staff First Name': string;

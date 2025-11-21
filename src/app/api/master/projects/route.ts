@@ -23,9 +23,17 @@ export async function GET(request: NextRequest) {
     // Get projects from cache or Google Sheets
     const projects = await getCachedProjects();
 
-    return NextResponse.json<ApiResponse<Project[]>>({
+    // Extract unique project clients
+    const uniqueClients = Array.from(
+      new Set(projects.map((p) => p.ProjectClient).filter((client) => client))
+    ).sort();
+
+    return NextResponse.json<ApiResponse<{ projects: Project[]; clients: string[] }>>({
       success: true,
-      data: projects,
+      data: {
+        projects,
+        clients: uniqueClients,
+      },
     });
   } catch (error) {
     console.error('Error fetching projects:', error);
