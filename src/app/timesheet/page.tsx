@@ -46,48 +46,53 @@ export default function TimesheetPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <nav className="bg-white shadow-sm border-b">
-        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-          <h1 className="text-xl font-bold text-gray-900">Shopstack Timesheet</h1>
-          <div className="flex items-center gap-4">
-            {session.staffProfile && (
-              <span className="text-sm text-gray-600">
-                {session.staffProfile.FirstName} {session.staffProfile.LastName}
-              </span>
-            )}
-            <button
-              onClick={() => signOut({ callbackUrl: '/auth/signin' })}
-              className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900"
-            >
-              Sign Out
-            </button>
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+            <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Shopstack Timesheet</h1>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+              {session.staffProfile && (
+                <span className="text-sm text-gray-600">
+                  {session.staffProfile.FirstName} {session.staffProfile.LastName}
+                </span>
+              )}
+              <button
+                onClick={() => signOut({ callbackUrl: '/auth/signin' })}
+                className="px-4 py-2 text-sm text-gray-700 hover:text-gray-900 text-left sm:text-center"
+              >
+                Sign Out
+              </button>
+            </div>
           </div>
         </div>
       </nav>
 
       <div className="container mx-auto px-4 py-6">
-        <div className="mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button
-              onClick={handlePreviousWeek}
-              className="px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50"
-            >
-              ← Previous
-            </button>
-            <button
-              onClick={handleCurrentWeek}
-              className="px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50"
-            >
-              Current Week
-            </button>
-            <button
-              onClick={handleNextWeek}
-              className="px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50"
-            >
-              Next →
-            </button>
-          </div>
-          <div className="text-lg font-semibold text-gray-700">
-            {format(weekStart, 'MMM d')} - {format(addWeeks(weekStart, 1).getTime() - 1, 'MMM d, yyyy')}
+        <div className="mb-6">
+          {/* Week Navigation */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+            <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+              <button
+                onClick={handlePreviousWeek}
+                className="px-3 sm:px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50 text-sm sm:text-base whitespace-nowrap"
+              >
+                ← Previous
+              </button>
+              <button
+                onClick={handleCurrentWeek}
+                className="px-3 sm:px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50 text-sm sm:text-base whitespace-nowrap"
+              >
+                Current Week
+              </button>
+              <button
+                onClick={handleNextWeek}
+                className="px-3 sm:px-4 py-2 bg-white border border-gray-300 rounded hover:bg-gray-50 text-sm sm:text-base whitespace-nowrap"
+              >
+                Next →
+              </button>
+            </div>
+            <div className="text-base sm:text-lg font-semibold text-gray-700 text-center sm:text-right">
+              {format(weekStart, 'MMM d')} - {format(addWeeks(weekStart, 1).getTime() - 1, 'MMM d, yyyy')}
+            </div>
           </div>
         </div>
 

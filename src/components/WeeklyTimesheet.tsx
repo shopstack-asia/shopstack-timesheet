@@ -360,46 +360,46 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="container mx-auto px-4 py-4 sm:py-8">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2">
           Weekly Timesheet
         </h1>
         {session?.staffProfile && (
-          <div className="text-gray-600">
+          <div className="text-gray-600 text-sm sm:text-base">
             <p>
               {session.staffProfile.FirstName} {session.staffProfile.LastName} (
               {session.staffProfile.Position})
             </p>
             {timesheet[0] && (
-              <p className="text-sm">
+              <p className="text-xs sm:text-sm mt-1">
                 Week of {format(parseISO(timesheet[0].date), 'MMM d, yyyy')}
               </p>
             )}
           </div>
         )}
-        <div className="mt-4 text-lg font-semibold">
+        <div className="mt-4 text-base sm:text-lg font-semibold">
           Week Total: {weekTotalHours.toFixed(2)} hours
         </div>
         
         {/* Submit Week Button */}
-        <div className="mt-6">
+        <div className="mt-4 sm:mt-6">
           <button
             onClick={handleSubmitWeek}
             disabled={submitting || weekTotalHours === 0}
-            className="px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-md transition-colors"
+            className="w-full sm:w-auto px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-md transition-colors text-sm sm:text-base"
           >
             {submitting ? 'Submitting...' : 'Submit Week'}
           </button>
           {weekTotalHours === 0 && (
-            <p className="mt-2 text-sm text-gray-500">
+            <p className="mt-2 text-xs sm:text-sm text-gray-500">
               Add entries to enable submission
             </p>
           )}
         </div>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-5">
+      <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
         {timesheet.map((day, dayIndex) => (
           <DailyCard
             key={day.date}
