@@ -34,6 +34,7 @@ NEXTAUTH_SECRET=your-secret-here
 
 **วิธีหา:**
 - `NEXTAUTH_URL`: URL ของแอป (localhost สำหรับ dev, domain จริงสำหรับ production)
+- `NEXT_PUBLIC_APP_URL` หรือ `APP_URL`: (Optional) Base URL สำหรับ Slack message links (ถ้าไม่ตั้งค่า จะใช้ `NEXTAUTH_URL` หรือ request headers แทน)
   - **สำคัญ:** ต้องตรงกับ PORT ที่ตั้งค่า (เช่น ถ้า PORT=3001 ให้ใช้ `http://localhost:3001`)
 - `NEXTAUTH_SECRET`: สร้างด้วยคำสั่ง `openssl rand -base64 32`
 
@@ -132,10 +133,19 @@ openssl rand -base64 32
 
 ### Slack Integration (สำหรับ Friday Reminder)
 
+**Single Channel (แบบเดิม):**
 ```env
 SLACK_BOT_TOKEN=xoxb-your-token
 SLACK_CHANNEL_ID=C1234567890
 ```
+
+**Multiple Channels (รองรับหลายช่องทาง):**
+```env
+SLACK_BOT_TOKEN=xoxb-your-token
+SLACK_CHANNEL_IDS=C1234567890,C9876543210,C1111111111
+```
+
+> **หมายเหตุ:** สามารถใช้ `SLACK_CHANNEL_ID` (ช่องทางเดียว) หรือ `SLACK_CHANNEL_IDS` (หลายช่องทาง คั่นด้วย comma) ได้ทั้งสองแบบ
 
 **วิธีหา:**
 1. ไปที่ [Slack API](https://api.slack.com/apps)
@@ -145,6 +155,7 @@ SLACK_CHANNEL_ID=C1234567890
 5. Install App to Workspace
 6. คัดลอก **Bot User OAuth Token** → `SLACK_BOT_TOKEN`
 7. คัดลอก Channel ID จาก Slack (คลิกขวาที่ channel > View channel details)
+8. สำหรับหลายช่องทาง: คัดลอก Channel IDs ทั้งหมดมาใส่ใน `SLACK_CHANNEL_IDS` คั่นด้วย comma (เช่น `C1234567890,C9876543210`)
 
 ---
 

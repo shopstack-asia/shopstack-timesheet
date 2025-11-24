@@ -37,7 +37,7 @@ Required environment variables:
 - `GOOGLE_SERVICE_ACCOUNT_EMAIL` - Service account email
 - `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` - Service account private key
 - `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_REFRESH_TOKEN` - Zoho People API credentials
-- `SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` - Slack integration (optional)
+- `SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` or `SLACK_CHANNEL_IDS` - Slack integration (optional, supports multiple channels)
 - `SMTP_*` - Email configuration for reminders (optional)
 - `CRON_SECRET` - Secret for cron job authentication
 

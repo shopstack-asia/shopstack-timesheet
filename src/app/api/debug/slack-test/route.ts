@@ -4,14 +4,51 @@ import { ApiResponse } from '@/types';
 
 export const dynamic = 'force-dynamic';
 
+// Helper function to get timesheet URL
+function getTimesheetUrl(request: NextRequest): string {
+  // Try environment variable first
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || process.env.NEXTAUTH_URL;
+  if (appUrl) {
+    return `${appUrl}/timesheet`;
+  }
+  
+  // Fallback to request headers
+  const protocol = request.headers.get('x-forwarded-proto') || 'https';
+  const host = request.headers.get('host') || request.headers.get('x-forwarded-host');
+  if (host) {
+    return `${protocol}://${host}/timesheet`;
+  }
+  
+  // Default fallback
+  return 'https://your-domain.com/timesheet';
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Check if Slack is configured
-    if (!process.env.SLACK_BOT_TOKEN || !process.env.SLACK_CHANNEL_ID) {
+    if (!process.env.SLACK_BOT_TOKEN) {
       return NextResponse.json<ApiResponse<{ configured: boolean }>>(
         {
           success: false,
-          error: 'Slack is not configured. Please set SLACK_BOT_TOKEN and SLACK_CHANNEL_ID in environment variables.',
+          error: 'Slack is not configured. Please set SLACK_BOT_TOKEN in environment variables.',
+          data: { configured: false },
+        },
+        { status: 400 }
+      );
+    }
+
+    // Support both SLACK_CHANNEL_ID (single) and SLACK_CHANNEL_IDS (multiple, comma-separated)
+    const channelIds = process.env.SLACK_CHANNEL_IDS 
+      ? process.env.SLACK_CHANNEL_IDS.split(',').map(id => id.trim()).filter(id => id.length > 0)
+      : process.env.SLACK_CHANNEL_ID 
+        ? [process.env.SLACK_CHANNEL_ID.trim()]
+        : [];
+
+    if (channelIds.length === 0) {
+      return NextResponse.json<ApiResponse<{ configured: boolean }>>(
+        {
+          success: false,
+          error: 'No Slack channels configured. Please set SLACK_CHANNEL_ID or SLACK_CHANNEL_IDS in environment variables.',
           data: { configured: false },
         },
         { status: 400 }
@@ -30,31 +67,61 @@ export async function POST(request: NextRequest) {
     // Initialize Slack client
     const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
+    // Get timesheet URL
+    const timesheetUrl = getTimesheetUrl(request);
+
     // Prepare message
     const message = customMessage || 
-      `🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅`;
+      `🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
 
-    // Send message to Slack
-    const result = await slack.chat.postMessage({
-      channel: process.env.SLACK_CHANNEL_ID,
-      text: message,
+    // Send message to all channels
+    const results = await Promise.allSettled(
+      channelIds.map((channelId) =>
+        slack.chat.postMessage({
+          channel: channelId,
+          text: message,
+        })
+      )
+    );
+
+    // Process results
+    const successful: Array<{ channel: string; timestamp: string }> = [];
+    const failed: Array<{ channel: string; error: string }> = [];
+
+    results.forEach((result, index) => {
+      const channelId = channelIds[index];
+      if (result.status === 'fulfilled') {
+        successful.push({
+          channel: channelId,
+          timestamp: result.value.ts || '',
+        });
+      } else {
+        const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        failed.push({
+          channel: channelId,
+          error,
+        });
+      }
     });
 
+    // Return response with results for all channels
     return NextResponse.json<ApiResponse<{
       configured: boolean;
-      messageSent: boolean;
-      channel: string;
-      timestamp: string;
+      channels: Array<{ channel: string; success: boolean; timestamp?: string; error?: string }>;
       message: string;
     }>>({
-      success: true,
+      success: failed.length === 0,
       data: {
         configured: true,
-        messageSent: true,
-        channel: process.env.SLACK_CHANNEL_ID,
-        timestamp: result.ts || '',
+        channels: [
+          ...successful.map((s) => ({ channel: s.channel, success: true, timestamp: s.timestamp })),
+          ...failed.map((f) => ({ channel: f.channel, success: false, error: f.error })),
+        ],
         message: message,
       },
+      ...(failed.length > 0 && {
+        error: `Failed to send to ${failed.length} channel(s): ${failed.map(f => `${f.channel} (${f.error})`).join(', ')}`,
+      }),
     });
   } catch (error) {
     console.error('Error sending Slack test notification:', error);
@@ -68,7 +135,7 @@ export async function POST(request: NextRequest) {
       if (error.message.includes('invalid_auth')) {
         errorMessage = 'Invalid Slack Bot Token. Please check SLACK_BOT_TOKEN.';
       } else if (error.message.includes('channel_not_found')) {
-        errorMessage = 'Slack channel not found. Please check SLACK_CHANNEL_ID.';
+        errorMessage = 'Slack channel not found. Please check SLACK_CHANNEL_ID or SLACK_CHANNEL_IDS.';
       } else if (error.message.includes('not_in_channel')) {
         errorMessage = 'Bot is not in the channel. Please invite the bot to the channel.';
       }
@@ -89,11 +156,29 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     // Check if Slack is configured
-    if (!process.env.SLACK_BOT_TOKEN || !process.env.SLACK_CHANNEL_ID) {
+    if (!process.env.SLACK_BOT_TOKEN) {
       return NextResponse.json<ApiResponse<{ configured: boolean }>>(
         {
           success: false,
-          error: 'Slack is not configured. Please set SLACK_BOT_TOKEN and SLACK_CHANNEL_ID in environment variables.',
+          error: 'Slack is not configured. Please set SLACK_BOT_TOKEN in environment variables.',
+          data: { configured: false },
+        },
+        { status: 400 }
+      );
+    }
+
+    // Support both SLACK_CHANNEL_ID (single) and SLACK_CHANNEL_IDS (multiple, comma-separated)
+    const channelIds = process.env.SLACK_CHANNEL_IDS 
+      ? process.env.SLACK_CHANNEL_IDS.split(',').map(id => id.trim()).filter(id => id.length > 0)
+      : process.env.SLACK_CHANNEL_ID 
+        ? [process.env.SLACK_CHANNEL_ID.trim()]
+        : [];
+
+    if (channelIds.length === 0) {
+      return NextResponse.json<ApiResponse<{ configured: boolean }>>(
+        {
+          success: false,
+          error: 'No Slack channels configured. Please set SLACK_CHANNEL_ID or SLACK_CHANNEL_IDS in environment variables.',
           data: { configured: false },
         },
         { status: 400 }
@@ -103,30 +188,60 @@ export async function GET(request: NextRequest) {
     // Initialize Slack client
     const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
 
-    // Prepare default test message
-    const message = `🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅`;
+    // Get timesheet URL
+    const timesheetUrl = getTimesheetUrl(request);
 
-    // Send message to Slack
-    const result = await slack.chat.postMessage({
-      channel: process.env.SLACK_CHANNEL_ID,
-      text: message,
+    // Prepare default test message
+    const message = `🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
+
+    // Send message to all channels
+    const results = await Promise.allSettled(
+      channelIds.map((channelId) =>
+        slack.chat.postMessage({
+          channel: channelId,
+          text: message,
+        })
+      )
+    );
+
+    // Process results
+    const successful: Array<{ channel: string; timestamp: string }> = [];
+    const failed: Array<{ channel: string; error: string }> = [];
+
+    results.forEach((result, index) => {
+      const channelId = channelIds[index];
+      if (result.status === 'fulfilled') {
+        successful.push({
+          channel: channelId,
+          timestamp: result.value.ts || '',
+        });
+      } else {
+        const error = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        failed.push({
+          channel: channelId,
+          error,
+        });
+      }
     });
 
+    // Return response with results for all channels
     return NextResponse.json<ApiResponse<{
       configured: boolean;
-      messageSent: boolean;
-      channel: string;
-      timestamp: string;
+      channels: Array<{ channel: string; success: boolean; timestamp?: string; error?: string }>;
       message: string;
     }>>({
-      success: true,
+      success: failed.length === 0,
       data: {
         configured: true,
-        messageSent: true,
-        channel: process.env.SLACK_CHANNEL_ID,
-        timestamp: result.ts || '',
+        channels: [
+          ...successful.map((s) => ({ channel: s.channel, success: true, timestamp: s.timestamp })),
+          ...failed.map((f) => ({ channel: f.channel, success: false, error: f.error })),
+        ],
         message: message,
       },
+      ...(failed.length > 0 && {
+        error: `Failed to send to ${failed.length} channel(s): ${failed.map(f => `${f.channel} (${f.error})`).join(', ')}`,
+      }),
     });
   } catch (error) {
     console.error('Error sending Slack test notification:', error);
@@ -138,7 +253,7 @@ export async function GET(request: NextRequest) {
       if (error.message.includes('invalid_auth')) {
         errorMessage = 'Invalid Slack Bot Token. Please check SLACK_BOT_TOKEN.';
       } else if (error.message.includes('channel_not_found')) {
-        errorMessage = 'Slack channel not found. Please check SLACK_CHANNEL_ID.';
+        errorMessage = 'Slack channel not found. Please check SLACK_CHANNEL_ID or SLACK_CHANNEL_IDS.';
       } else if (error.message.includes('not_in_channel')) {
         errorMessage = 'Bot is not in the channel. Please invite the bot to the channel.';
       }
@@ -154,4 +269,5 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
 

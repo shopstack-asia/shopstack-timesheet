@@ -108,8 +108,12 @@ ZOHO_REFRESH_TOKEN=your-refresh-token
 ZOHO_API_DOMAIN=https://people.zoho.com
 
 # Slack (optional)
+# Single channel:
 SLACK_BOT_TOKEN=xoxb-your-token
 SLACK_CHANNEL_ID=C1234567890
+
+# Multiple channels (comma-separated):
+# SLACK_CHANNEL_IDS=C1234567890,C9876543210,C1111111111
 
 # Email (optional)
 SMTP_HOST=smtp.gmail.com

@@ -9,6 +9,25 @@ export const dynamic = 'force-dynamic';
 // Verify cron secret (set in environment variables)
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
+// Helper function to get timesheet URL
+function getTimesheetUrl(request: NextRequest): string {
+  // Try environment variable first
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || process.env.NEXTAUTH_URL;
+  if (appUrl) {
+    return `${appUrl}/timesheet`;
+  }
+  
+  // Fallback to request headers
+  const protocol = request.headers.get('x-forwarded-proto') || 'https';
+  const host = request.headers.get('host') || request.headers.get('x-forwarded-host');
+  if (host) {
+    return `${protocol}://${host}/timesheet`;
+  }
+  
+  // Default fallback
+  return 'https://your-domain.com/timesheet';
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Verify cron secret
@@ -44,6 +63,7 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      const timesheetUrl = getTimesheetUrl(request);
       const emailPromises = employeesWithEmail.map((employee) => {
         return transporter.sendMail({
           from: process.env.FROM_EMAIL || 'noreply@shopstack.asia',
@@ -54,6 +74,7 @@ export async function POST(request: NextRequest) {
             <p>Hi ${employee.FirstName},</p>
             <p>This is a friendly reminder to submit your timesheet for this week (Monday - Friday).</p>
             <p>Please log in to the timesheet system and complete your entries.</p>
+            <p><a href="${timesheetUrl}" style="display: inline-block; padding: 10px 20px; background-color: #16a34a; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px;">Open Timesheet System</a></p>
             <p>Thank you!</p>
             <p>Shopstack Team</p>
           `,
@@ -63,14 +84,34 @@ export async function POST(request: NextRequest) {
       await Promise.allSettled(emailPromises);
     }
 
-    // Send Slack notification
-    if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_CHANNEL_ID) {
+    // Send Slack notification to multiple channels
+    if (process.env.SLACK_BOT_TOKEN) {
       const slack = new WebClient(process.env.SLACK_BOT_TOKEN);
+      
+      // Support both SLACK_CHANNEL_ID (single) and SLACK_CHANNEL_IDS (multiple, comma-separated)
+      const channelIds = process.env.SLACK_CHANNEL_IDS 
+        ? process.env.SLACK_CHANNEL_IDS.split(',').map(id => id.trim()).filter(id => id.length > 0)
+        : process.env.SLACK_CHANNEL_ID 
+          ? [process.env.SLACK_CHANNEL_ID.trim()]
+          : [];
 
-      await slack.chat.postMessage({
-        channel: process.env.SLACK_CHANNEL_ID,
-        text: `📅 Weekly Timesheet Reminder\n\nThis is a reminder for all Shopstack employees to submit their timesheets for this week (Monday - Friday).\n\nPlease log in to the timesheet system and complete your entries.`,
-      });
+      if (channelIds.length > 0) {
+        const timesheetUrl = getTimesheetUrl(request);
+        const message = `📅 Weekly Timesheet Reminder\n\nThis is a reminder for all Shopstack employees to submit their timesheets for this week (Monday - Friday).\n\nPlease log in to the timesheet system and complete your entries.\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
+        
+        // Send message to all channels
+        const slackPromises = channelIds.map((channelId) =>
+          slack.chat.postMessage({
+            channel: channelId,
+            text: message,
+          }).catch((error) => {
+            console.error(`Failed to send Slack message to channel ${channelId}:`, error);
+            return { success: false, channel: channelId, error };
+          })
+        );
+
+        await Promise.allSettled(slackPromises);
+      }
     }
 
     return NextResponse.json<ApiResponse<void>>({
