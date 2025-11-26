@@ -7,12 +7,13 @@ export function getRedisClient(): Redis {
     return redisClient;
   }
 
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  // Use Vercel KV environment variables
+  const url = process.env.REDIS_URL || process.env.KV_REST_API_URL;
+  const token = process.env.KV_REST_API_TOKEN || process.env.KV_REST_API_READ_ONLY_TOKEN;
 
   if (!url || !token) {
     throw new Error(
-      'Upstash Redis credentials not found. Please set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN environment variables.'
+      'Redis credentials not found. Please set REDIS_URL (or KV_REST_API_URL) and KV_REST_API_TOKEN (or KV_REST_API_READ_ONLY_TOKEN) environment variables.'
     );
   }
 
