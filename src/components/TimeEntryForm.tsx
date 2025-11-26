@@ -9,6 +9,7 @@ interface TimeEntryFormProps {
   projects: Project[];
   tasks: Task[];
   clients: string[];
+  disabled?: boolean;
   onUpdate: (updates: Partial<TimeEntry>) => void;
   onDelete: () => void;
 }
@@ -18,6 +19,7 @@ export default function TimeEntryForm({
   projects,
   tasks,
   clients,
+  disabled = false,
   onUpdate,
   onDelete,
 }: TimeEntryFormProps) {
@@ -138,11 +140,20 @@ export default function TimeEntryForm({
   };
 
   return (
-    <div className="p-3 bg-gray-50 rounded border border-gray-200 relative group">
+    <div className={`p-3 rounded border relative group ${
+      disabled 
+        ? 'bg-gray-100 border-gray-300 opacity-60' 
+        : 'bg-gray-50 border-gray-200'
+    }`}>
       {/* Remove Button */}
       <button
         onClick={onDelete}
-        className="absolute top-0 right-0 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors z-10"
+        disabled={disabled}
+        className={`absolute top-0 right-0 p-1.5 rounded transition-colors z-10 ${
+          disabled
+            ? 'text-gray-300 cursor-not-allowed'
+            : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
+        }`}
         title="Remove entry"
         type="button"
       >
@@ -171,6 +182,7 @@ export default function TimeEntryForm({
             placeholder="Select Client *"
             required
             error={showErrors.client}
+            disabled={disabled}
           />
           {showErrors.client && (
             <p className="mt-1 text-xs text-red-600">Client is required</p>
@@ -183,7 +195,7 @@ export default function TimeEntryForm({
             value={projectId}
             onChange={handleProjectChange}
             placeholder="Select Project *"
-            disabled={!selectedClient}
+            disabled={disabled || !selectedClient}
             required
             error={showErrors.project}
           />
@@ -200,6 +212,7 @@ export default function TimeEntryForm({
             placeholder="Select Task *"
             required
             error={showErrors.task}
+            disabled={disabled}
           />
           {showErrors.task && (
             <p className="mt-1 text-xs text-red-600">Task is required</p>
@@ -217,8 +230,11 @@ export default function TimeEntryForm({
               max="24"
               step="0.25"
               placeholder="Hours"
+              disabled={disabled}
               className={`w-full px-2 py-1 pr-10 text-sm border rounded focus:outline-none focus:ring-2 ${
-                showErrors.hours
+                disabled
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-300'
+                  : showErrors.hours
                   ? 'border-red-500 focus:ring-red-500'
                   : 'border-gray-300 focus:ring-blue-500'
               }`}

@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
     // Delete entries that were removed
     if (entriesToDelete.length > 0) {
       await sheetsService.deleteTimeLogEntries(entriesToDelete);
-      console.log(`[API] Deleted ${entriesToDelete.length} removed entries for date ${date}`);
+      // console.log(`[API] Deleted ${entriesToDelete.length} removed entries for date ${date}`);
     }
 
     // Prepare time log rows for entries to add/update

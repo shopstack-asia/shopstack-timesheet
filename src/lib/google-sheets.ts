@@ -43,7 +43,7 @@ export class GoogleSheetsService {
       throw new Error('Google Service Account credentials are missing. Please check your .env file.');
     }
     
-    console.log(`[Google Sheets] Using service account: ${serviceAccountEmail.substring(0, 20)}...`);
+    // console.log(`[Google Sheets] Using service account: ${serviceAccountEmail.substring(0, 20)}...`);
     
     const auth = new google.auth.GoogleAuth({
       credentials: {
@@ -61,8 +61,8 @@ export class GoogleSheetsService {
    */
   async getProjects(): Promise<Project[]> {
     try {
-      console.log(`[Google Sheets] Fetching projects from spreadsheet: ${this.spreadsheetId}`);
-      console.log(`[Google Sheets] Range: Projects!A2:D`);
+      // console.log(`[Google Sheets] Fetching projects from spreadsheet: ${this.spreadsheetId}`);
+      // console.log(`[Google Sheets] Range: Projects!A2:D`);
       
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
@@ -70,7 +70,7 @@ export class GoogleSheetsService {
       });
 
       const rows = response.data.values || [];
-      console.log(`[Google Sheets] Found ${rows.length} project rows`);
+      // console.log(`[Google Sheets] Found ${rows.length} project rows`);
 
       return rows
         .filter((row: any[]) => row.length >= 4 && row[0]) // Filter empty rows
@@ -111,8 +111,8 @@ export class GoogleSheetsService {
    */
   async getTasks(): Promise<Task[]> {
     try {
-      console.log(`[Google Sheets] Fetching tasks from spreadsheet: ${this.spreadsheetId}`);
-      console.log(`[Google Sheets] Range: Roles and Tasks!A2:B`);
+      // console.log(`[Google Sheets] Fetching tasks from spreadsheet: ${this.spreadsheetId}`);
+      // console.log(`[Google Sheets] Range: Roles and Tasks!A2:B`);
       
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
@@ -120,7 +120,7 @@ export class GoogleSheetsService {
       });
 
       const rows = response.data.values || [];
-      console.log(`[Google Sheets] Found ${rows.length} task rows`);
+      // console.log(`[Google Sheets] Found ${rows.length} task rows`);
 
       return rows
         .filter((row: any[]) => row.length >= 2 && row[0]) // Filter empty rows
@@ -245,7 +245,7 @@ export class GoogleSheetsService {
         },
       });
 
-      console.log(`[Google Sheets] Updated time log entry at row ${rowNumber}`);
+      // console.log(`[Google Sheets] Updated time log entry at row ${rowNumber}`);
     } catch (error) {
       console.error('Error updating time log entry:', error);
       throw new Error('Failed to update time log entry in Google Sheets');
@@ -287,9 +287,9 @@ export class GoogleSheetsService {
 
         if (existing) {
           // Entry exists, prepare for update
-          console.log(
-            `[Google Sheets] Found existing entry for Date: ${entry.Date}, Staff: ${entry['Staff ID']}, Project: ${entry['Project ID']}, Task: ${entry['Task ID']} at row ${existing.rowNumber} (ID: ${timeLogId})`
-          );
+          // console.log(
+          //   `[Google Sheets] Found existing entry for Date: ${entry.Date}, Staff: ${entry['Staff ID']}, Project: ${entry['Project ID']}, Task: ${entry['Task ID']} at row ${existing.rowNumber} (ID: ${timeLogId})`
+          // );
           updates.push({ rowNumber: existing.rowNumber, entry: entryWithId });
         } else {
           // New entry, prepare for append
@@ -330,11 +330,11 @@ export class GoogleSheetsService {
           },
         });
 
-        console.log(`[Google Sheets] Appended ${entriesToAppend.length} new time log entries`);
+        // console.log(`[Google Sheets] Appended ${entriesToAppend.length} new time log entries`);
       }
 
       if (updates.length > 0) {
-        console.log(`[Google Sheets] Updated ${updates.length} existing time log entries`);
+        // console.log(`[Google Sheets] Updated ${updates.length} existing time log entries`);
       }
     } catch (error) {
       console.error('Error appending/updating time log entries:', error);
@@ -463,7 +463,7 @@ export class GoogleSheetsService {
         });
       }
 
-      console.log(`[Google Sheets] Deleted ${rowNumbers.length} time log entries`);
+      // console.log(`[Google Sheets] Deleted ${rowNumbers.length} time log entries`);
     } catch (error) {
       console.error('Error deleting time log entries:', error);
       throw new Error('Failed to delete time log entries from Google Sheets');
@@ -530,14 +530,14 @@ export class GoogleSheetsService {
 
   async getTimeLogEntries(startDate: string, endDate: string): Promise<TimeLogRow[]> {
     try {
-      console.log(`[Google Sheets] Fetching time log entries from ${startDate} to ${endDate}`);
+      // console.log(`[Google Sheets] Fetching time log entries from ${startDate} to ${endDate}`);
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
         range: 'Time Log!A2:M',
       });
 
       const rows = response.data.values || [];
-      console.log(`[Google Sheets] Found ${rows.length} total rows in Time Log sheet`);
+      // console.log(`[Google Sheets] Found ${rows.length} total rows in Time Log sheet`);
 
       const filteredRows = rows.filter((row: any[]) => {
         if (row.length < 2) return false;
@@ -551,12 +551,12 @@ export class GoogleSheetsService {
         
         const inRange = normalizedDate >= startDate && normalizedDate <= endDate;
         if (inRange) {
-          console.log(`[Google Sheets] Found entry with date ${normalizedDate} (raw: ${rawDate})`);
+          // console.log(`[Google Sheets] Found entry with date ${normalizedDate} (raw: ${rawDate})`);
         }
         return inRange;
       });
 
-      console.log(`[Google Sheets] Filtered to ${filteredRows.length} entries in date range`);
+      // console.log(`[Google Sheets] Filtered to ${filteredRows.length} entries in date range`);
 
       return filteredRows.map((row: any[]) => {
         const normalizedDate = this.normalizeDate(row[1]) || row[1];

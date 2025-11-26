@@ -19,9 +19,9 @@ export async function GET(request: NextRequest) {
       }, { status: 400 });
     }
 
-    console.log('[Zoho Token Test] Attempting to refresh token...');
-    console.log('[Zoho Token Test] Client ID:', clientId.substring(0, 20) + '...');
-    console.log('[Zoho Token Test] Refresh Token:', refreshToken.substring(0, 20) + '...');
+    // console.log('[Zoho Token Test] Attempting to refresh token...');
+    // console.log('[Zoho Token Test] Client ID:', clientId.substring(0, 20) + '...');
+    // console.log('[Zoho Token Test] Refresh Token:', refreshToken.substring(0, 20) + '...');
 
     const response = await axios.post(
       'https://accounts.zoho.com/oauth/v2/token',

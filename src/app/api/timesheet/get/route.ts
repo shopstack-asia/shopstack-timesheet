@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
     const startDateStr = startDate.toISOString().split('T')[0];
     const endDateStr = endDate.toISOString().split('T')[0];
 
-    console.log(`[API] Fetching time logs for staff ${session.staffProfile.EmployeeID} from ${startDateStr} to ${endDateStr}`);
+    // console.log(`[API] Fetching time logs for staff ${session.staffProfile.EmployeeID} from ${startDateStr} to ${endDateStr}`);
 
     // Get time log entries from Google Sheets
     const sheetsService = getGoogleSheetsService();
@@ -53,14 +53,14 @@ export async function GET(request: NextRequest) {
       (entry) => entry['Staff ID'] === session.staffProfile!.EmployeeID
     );
 
-    console.log(`[API] Found ${staffEntries.length} time log entries for staff ${session.staffProfile.EmployeeID}`);
-    console.log(`[API] Sample entries:`, staffEntries.slice(0, 3).map(e => ({
-      date: e.Date,
-      staffId: e['Staff ID'],
-      projectId: e['Project ID'],
-      taskId: e['Task ID'],
-      hours: e.Hours
-    })));
+    // console.log(`[API] Found ${staffEntries.length} time log entries for staff ${session.staffProfile.EmployeeID}`);
+    // console.log(`[API] Sample entries:`, staffEntries.slice(0, 3).map(e => ({
+    //   date: e.Date,
+    //   staffId: e['Staff ID'],
+    //   projectId: e['Project ID'],
+    //   taskId: e['Task ID'],
+    //   hours: e.Hours
+    // })));
 
     // Group entries by date and convert to TimeEntry format
     const entriesByDate: Record<string, TimeEntry[]> = {};
@@ -91,14 +91,14 @@ export async function GET(request: NextRequest) {
       });
     });
     
-    console.log(`[API] Grouped entries by date:`, Object.keys(entriesByDate).map(date => ({
-      date,
-      count: entriesByDate[date].length
-    })));
+    // console.log(`[API] Grouped entries by date:`, Object.keys(entriesByDate).map(date => ({
+    //   date,
+    //   count: entriesByDate[date].length
+    // })));
     
     // Log all dates found
     const allDates = staffEntries.map(e => e.Date);
-    console.log(`[API] All dates found in entries:`, [...new Set(allDates)]);
+    // console.log(`[API] All dates found in entries:`, [...new Set(allDates)]);
 
     return NextResponse.json<ApiResponse<Record<string, TimeEntry[]>>>({
       success: true,

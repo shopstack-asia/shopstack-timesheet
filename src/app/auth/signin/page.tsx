@@ -22,12 +22,12 @@ function SignInForm() {
     try {
       setLoading(true);
       setError(null);
-      console.log('Attempting to sign in with Google...');
+      // console.log('Attempting to sign in with Google...');
       const result = await signIn('google', { 
         callbackUrl: '/timesheet',
         redirect: true 
       });
-      console.log('Sign in result:', result);
+      // console.log('Sign in result:', result);
     } catch (err) {
       console.error('Sign in error:', err);
       setError('Failed to initiate sign in. Please try again.');

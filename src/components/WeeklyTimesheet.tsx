@@ -1,14 +1,19 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import DailyCard from './DailyCard';
-import { Project, Task, TimeEntry, DailyTimesheet } from '@/types';
+import { Project, Task, TimeEntry, DailyTimesheet, LeaveDayEntry, Holiday } from '@/types';
 
 interface WeeklyTimesheetProps {
   weekStart: Date;
 }
+
+const DEFAULT_HOLIDAY_LOCATION =
+  process.env.NEXT_PUBLIC_ZOHO_HOLIDAY_LOCATION ||
+  process.env.NEXT_PUBLIC_DEFAULT_LOCATION ||
+  '';
 
 export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
   const { data: session } = useSession();
@@ -16,10 +21,13 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
   const [clients, setClients] = useState<string[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [timesheet, setTimesheet] = useState<DailyTimesheet[]>([]);
+  const [leaveData, setLeaveData] = useState<LeaveDayEntry[]>([]);
+  const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const loadedWeekRef = useRef<string | null>(null);
   const timesheetInitializedRef = useRef<boolean>(false);
+  const holidayCacheRef = useRef<Record<string, Holiday[]>>({});
 
   // Initialize days of the week (Monday-Friday)
   useEffect(() => {
@@ -43,11 +51,69 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     setTimesheet(days);
   }, [weekStart]);
 
+  const resolvedLocation = session?.staffProfile?.Location?.trim() || DEFAULT_HOLIDAY_LOCATION;
+
+  // Load yearly holidays once per location/year and filter locally
+  useEffect(() => {
+    const location = resolvedLocation;
+    if (!location) {
+      setHolidays([]);
+      return;
+    }
+
+    const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
+    const friday = addDays(monday, 4);
+    const yearSet = new Set<number>([monday.getFullYear(), friday.getFullYear()]);
+
+    const fetchHolidays = async () => {
+      const missingYears = Array.from(yearSet).filter((year) => {
+        const cacheKey = `${location}:${year}`;
+        return !holidayCacheRef.current[cacheKey];
+      });
+
+      if (missingYears.length > 0) {
+        try {
+          const responses = await Promise.all(
+            missingYears.map(async (year) => {
+              const response = await fetch(`/api/timesheet/holidays?year=${year}`);
+
+              if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || `Failed to load holidays for ${year}`);
+              }
+
+              const payload = await response.json();
+              if (!payload.success) {
+                throw new Error(payload.error || `Failed to load holidays for ${year}`);
+              }
+
+              holidayCacheRef.current[`${location}:${year}`] = payload.data || [];
+              return payload.data || [];
+            })
+          );
+
+          if (!responses.length) {
+            return;
+          }
+        } catch (error) {
+          console.error('Error loading holidays:', error);
+        }
+      }
+
+      const combined = Array.from(yearSet)
+        .map((year) => holidayCacheRef.current[`${location}:${year}`] || [])
+        .flat();
+      setHolidays(combined);
+    };
+
+    fetchHolidays();
+  }, [weekStart, resolvedLocation]);
+
   // Load existing entries from Google Sheets
   useEffect(() => {
     async function loadExistingEntries() {
       if (!session?.staffProfile || loading) {
-        console.log(`[WeeklyTimesheet] Skipping load - session: ${!!session?.staffProfile}, loading: ${loading}`);
+        // console.log(`[WeeklyTimesheet] Skipping load - session: ${!!session?.staffProfile}, loading: ${loading}`);
         return;
       }
 
@@ -56,7 +122,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
       
       // Prevent loading the same week multiple times
       if (loadedWeekRef.current === weekStartStr) {
-        console.log(`[WeeklyTimesheet] Already loaded week: ${weekStartStr}`);
+        // console.log(`[WeeklyTimesheet] Already loaded week: ${weekStartStr}`);
         return;
       }
 
@@ -69,23 +135,23 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
       }
 
       try {
-        console.log(`[WeeklyTimesheet] Loading entries for week: ${weekStartStr}`);
+        // console.log(`[WeeklyTimesheet] Loading entries for week: ${weekStartStr}`);
         loadedWeekRef.current = weekStartStr;
         const response = await fetch(`/api/timesheet/get?weekStart=${weekStartStr}`);
         
         if (response.ok) {
           const result = await response.json();
-          console.log(`[WeeklyTimesheet] API response:`, result);
+          // console.log(`[WeeklyTimesheet] API response:`, result);
           if (result.success && result.data) {
             const entriesByDate = result.data as Record<string, TimeEntry[]>;
-            console.log(`[WeeklyTimesheet] Loaded ${Object.keys(entriesByDate).length} days with entries`);
-            console.log(`[WeeklyTimesheet] Entries by date:`, entriesByDate);
+            // console.log(`[WeeklyTimesheet] Loaded ${Object.keys(entriesByDate).length} days with entries`);
+            // console.log(`[WeeklyTimesheet] Entries by date:`, entriesByDate);
             
             // Update timesheet with existing entries
             setTimesheet((prevTimesheet) => {
               // Only update if timesheet structure matches
               if (prevTimesheet.length === 0) {
-                console.warn(`[WeeklyTimesheet] Timesheet structure not ready`);
+                // console.warn(`[WeeklyTimesheet] Timesheet structure not ready`);
                 return prevTimesheet;
               }
               
@@ -93,7 +159,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
                 const existingEntries = entriesByDate[day.date] || [];
                 const totalHours = existingEntries.reduce((sum, entry) => sum + (entry.hours || 0), 0);
                 
-                console.log(`[WeeklyTimesheet] Day ${day.date}: ${existingEntries.length} entries, ${totalHours} hours`);
+                // console.log(`[WeeklyTimesheet] Day ${day.date}: ${existingEntries.length} entries, ${totalHours} hours`);
                 
                 return {
                   ...day,
@@ -103,7 +169,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
               });
             });
           } else {
-            console.log(`[WeeklyTimesheet] No entries found for week: ${weekStartStr}`, result);
+            // console.log(`[WeeklyTimesheet] No entries found for week: ${weekStartStr}`, result);
           }
         } else {
           const errorText = await response.text();
@@ -120,13 +186,21 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart, session?.staffProfile?.EmployeeID, loading]);
 
-  // Load master data
+  // Load master data and leave data
   useEffect(() => {
     async function loadMasterData() {
       try {
-        const [projectsRes, tasksRes] = await Promise.all([
+        // Calculate date range for leave data (week start ± 1 month)
+        const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
+        const weekStartStr = format(monday, 'yyyy-MM-dd');
+        const weekEndStr = format(addDays(monday, 4), 'yyyy-MM-dd'); // Friday
+        const fromDate = format(addDays(monday, -30), 'yyyy-MM-dd'); // 30 days before
+        const toDate = format(addDays(monday, 30), 'yyyy-MM-dd'); // 30 days after
+
+        const [projectsRes, tasksRes, leaveRes] = await Promise.all([
           fetch('/api/master/projects'),
           fetch('/api/master/tasks'),
+          fetch(`/api/staff/leave?from=${fromDate}&to=${toDate}`),
         ]);
 
         if (projectsRes.ok) {
@@ -151,6 +225,16 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
           const tasksData = await tasksRes.json();
           setTasks(tasksData.data || []);
         }
+
+        if (leaveRes.ok) {
+          const leaveData = await leaveRes.json();
+          if (leaveData.success && leaveData.data) {
+            setLeaveData(leaveData.data);
+            // console.log('[WeeklyTimesheet] Loaded leave data:', leaveData.data.length, 'leave days');
+          }
+        } else {
+          console.warn('[WeeklyTimesheet] Failed to load leave data:', leaveRes.status);
+        }
       } catch (error) {
         console.error('Error loading master data:', error);
       } finally {
@@ -159,7 +243,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     }
 
     loadMasterData();
-  }, []);
+  }, [weekStart]);
 
   const handleAddEntry = (dayIndex: number) => {
     const newEntry: TimeEntry = {
@@ -295,14 +379,14 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
         
         // Reload entries from Google Sheets
         try {
-          console.log(`[WeeklyTimesheet] Reloading entries after submit for week: ${weekStartStr}`);
+          // console.log(`[WeeklyTimesheet] Reloading entries after submit for week: ${weekStartStr}`);
           const response = await fetch(`/api/timesheet/get?weekStart=${weekStartStr}`);
           if (response.ok) {
             const result = await response.json();
-            console.log(`[WeeklyTimesheet] Reload response:`, result);
+            // console.log(`[WeeklyTimesheet] Reload response:`, result);
             if (result.success && result.data) {
               const entriesByDate = result.data as Record<string, TimeEntry[]>;
-              console.log(`[WeeklyTimesheet] Reloaded entries:`, entriesByDate);
+              // console.log(`[WeeklyTimesheet] Reloaded entries:`, entriesByDate);
               
               // Update timesheet with entries from Google Sheets
               setTimesheet((prevTimesheet) => {
@@ -310,7 +394,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
                   const existingEntries = entriesByDate[day.date] || [];
                   const totalHours = existingEntries.reduce((sum, entry) => sum + (entry.hours || 0), 0);
                   
-                  console.log(`[WeeklyTimesheet] Day ${day.date}: ${existingEntries.length} entries, ${totalHours} hours`);
+                  // console.log(`[WeeklyTimesheet] Day ${day.date}: ${existingEntries.length} entries, ${totalHours} hours`);
                   
                   return {
                     ...day,
@@ -350,6 +434,32 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     (sum, day) => sum + day.totalHours,
     0
   );
+
+  const activeMonthKeys = useMemo(() => {
+    const keys = new Set<string>();
+    timesheet.forEach((day) => {
+      const date = parseISO(day.date);
+      if (!isNaN(date.getTime())) {
+        keys.add(`${date.getFullYear()}-${date.getMonth()}`);
+      }
+    });
+    return keys;
+  }, [timesheet]);
+
+  const visibleHolidays = useMemo(() => {
+    if (holidays.length === 0 || activeMonthKeys.size === 0) {
+      return [];
+    }
+
+    return holidays.filter((holiday) => {
+      const date = parseISO(holiday.date);
+      if (isNaN(date.getTime())) {
+        return false;
+      }
+      const key = `${date.getFullYear()}-${date.getMonth()}`;
+      return activeMonthKeys.has(key);
+    });
+  }, [holidays, activeMonthKeys]);
 
   if (loading) {
     return (
@@ -408,6 +518,8 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
             projects={projects}
             clients={clients}
             tasks={tasks}
+            leaveData={leaveData}
+            holidays={visibleHolidays}
             onAddEntry={() => handleAddEntry(dayIndex)}
             onUpdateEntry={(entryIndex, updates) =>
               handleUpdateEntry(dayIndex, entryIndex, updates)

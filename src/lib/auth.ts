@@ -16,7 +16,7 @@ export const authOptions: NextAuthOptions = {
       // Only allow @shopstack.asia domain
       const email = user.email || profile?.email;
       
-      console.log('[NextAuth] Sign in attempt for email:', email);
+      // console.log('[NextAuth] Sign in attempt for email:', email);
       
       if (!email) {
         console.error('[NextAuth] No email found in user profile');
@@ -30,7 +30,7 @@ export const authOptions: NextAuthOptions = {
 
       // Fetch staff profile from Zoho People
       try {
-        console.log(`[NextAuth] Fetching staff profile from Zoho People for: ${email}`);
+        // console.log(`[NextAuth] Fetching staff profile from Zoho People for: ${email}`);
         const zohoService = getZohoPeopleService();
         const staffProfile = await zohoService.getEmployeeByEmail(email);
 
@@ -39,11 +39,11 @@ export const authOptions: NextAuthOptions = {
           return false;
         }
 
-        console.log(`[NextAuth] Staff profile found:`, {
-          EmployeeID: staffProfile.EmployeeID,
-          Name: `${staffProfile.FirstName} ${staffProfile.LastName}`,
-          Position: staffProfile.Position,
-        });
+        // console.log(`[NextAuth] Staff profile found:`, {
+        //   EmployeeID: staffProfile.EmployeeID,
+        //   Name: `${staffProfile.FirstName} ${staffProfile.LastName}`,
+        //   Position: staffProfile.Position,
+        // });
 
         // Store staff profile in user object
         user.staffProfile = staffProfile;

@@ -6,6 +6,17 @@ export interface StaffProfile {
   Nickname: string;
   Email: string;
   Position: string;
+  Location?: string;
+}
+
+export interface Holiday {
+  id: string;
+  name: string;
+  date: string; // YYYY-MM-DD
+  shift_name?: string;
+  location_name?: string;
+  remarks?: string;
+  is_holiday: boolean;
 }
 
 // Project from Google Sheets
@@ -88,4 +99,75 @@ export type ZohoEmployeeResponse =
       };
     }
   | Array<Record<string, any>>;
+
+// Leave Data Types - Zoho Leave API v2
+export interface LeaveDayEntry {
+  date: string; // YYYY-MM-DD (expanded)
+  type: 'FULL' | 'HALF';
+  dayType: string; // Zoho raw value: FULL_DAY | FIRST_HALF | SECOND_HALF
+  leaveType: string;
+  reason: string;
+  status: string;
+  approvedBy?: string;
+}
+
+// Zoho Leave API v2 Response Structure
+export interface ZohoLeaveDayDetail {
+  LeaveCount: string; // "1.0" for full day, "0.5" for half day, "0.0" for half day
+  StartTime?: string;
+  EndTime?: string;
+  Session?: number; // 1 for first half, 2 for second half (only for half days)
+}
+
+export interface ZohoLeaveRecord {
+  'Zoho.ID': number;
+  From: string; // YYYY-MM-DD
+  To: string; // YYYY-MM-DD
+  Leavetype: string;
+  'Leavetype.ID': number;
+  Reason?: string;
+  ApprovalStatus: string; // "Approved", "Pending", "Cancelled", "Rejected"
+  EmployeeId: string; // e.g., "S0005"
+  Employee: string;
+  ZUID: number;
+  'Employee.ID': number;
+  Days: Record<string, ZohoLeaveDayDetail>; // Keys are dates (YYYY-MM-DD)
+  DateOfRequest?: string;
+  [key: string]: any;
+}
+
+export interface ZohoLeaveApiResponse {
+  records?: Record<string, ZohoLeaveRecord>; // Keys are record IDs
+  [key: string]: any;
+}
+
+// Legacy types (kept for backward compatibility)
+export interface NormalizedLeaveDay {
+  date: string; // YYYY-MM-DD
+  type: 'FULL' | 'FIRST_HALF' | 'SECOND_HALF';
+  leaveType?: string;
+  reason?: string;
+  status?: string;
+  session?: string;
+  raw: any; // Store original attendance record
+}
+
+// Zoho Attendance API Response
+export interface ZohoAttendanceResponse {
+  response?: {
+    result?: {
+      attendance?: {
+        row?: Array<{
+          FL: Array<{
+            val: string;
+            content: string;
+          }>;
+        }>;
+      };
+    };
+  };
+  // New format: direct array or object
+  [key: string]: any;
+}
+
 
