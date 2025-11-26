@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
 
     // Get EmployeeID from session (required for filtering leave records)
     if (!session.staffProfile?.EmployeeID || session.staffProfile.EmployeeID.trim() === '') {
-      console.error('[Leave Yearly API] EmployeeID not found in session:', {
+      console.error('[Leave Monthly API] EmployeeID not found in session:', {
         hasStaffProfile: !!session.staffProfile,
         employeeID: session.staffProfile?.EmployeeID,
         profileKeys: session.staffProfile ? Object.keys(session.staffProfile) : [],
@@ -42,10 +42,14 @@ export async function GET(request: NextRequest) {
 
     const employeeId = session.staffProfile.EmployeeID;
 
-    // Get year from query params or default to current year
+    // Get year and month from query params
     const searchParams = request.nextUrl.searchParams;
     const yearParam = searchParams.get('year');
-    const year = yearParam ? Number.parseInt(yearParam, 10) : new Date().getFullYear();
+    const monthParam = searchParams.get('month');
+
+    const now = new Date();
+    const year = yearParam ? Number.parseInt(yearParam, 10) : now.getFullYear();
+    const month = monthParam ? Number.parseInt(monthParam, 10) - 1 : now.getMonth(); // month is 0-indexed
 
     if (Number.isNaN(year) || year < 2000) {
       return NextResponse.json<ApiResponse<LeaveDayEntry[]>>(
@@ -57,9 +61,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Build date range for entire year
-    const fromDate = format(new Date(year, 0, 1), 'yyyy-MM-dd');
-    const toDate = format(new Date(year, 11, 31), 'yyyy-MM-dd');
+    if (Number.isNaN(month) || month < 0 || month > 11) {
+      return NextResponse.json<ApiResponse<LeaveDayEntry[]>>(
+        {
+          success: false,
+          error: 'Invalid month parameter (should be 1-12)',
+        },
+        { status: 400 }
+      );
+    }
+
+    // Build date range for the month
+    const fromDate = format(new Date(year, month, 1), 'yyyy-MM-dd');
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const toDate = format(new Date(year, month, lastDay), 'yyyy-MM-dd');
 
     // Check Redis cache first
     const redis = getRedisClient();
@@ -77,7 +92,7 @@ export async function GET(request: NextRequest) {
         });
       }
     } catch (redisError) {
-      console.warn('[Leave Yearly API] Redis cache read error (continuing to fetch):', redisError);
+      console.warn('[Leave Monthly API] Redis cache read error (continuing to fetch):', redisError);
     }
 
     // Fetch fresh data from Zoho
@@ -89,7 +104,7 @@ export async function GET(request: NextRequest) {
     try {
       await redis.setex(cacheKey, 21600, JSON.stringify(apiResponse));
     } catch (redisError) {
-      console.warn('[Leave Yearly API] Redis cache write error:', redisError);
+      console.warn('[Leave Monthly API] Redis cache write error:', redisError);
     }
 
     // Normalize leave data (expand date ranges)
@@ -100,11 +115,11 @@ export async function GET(request: NextRequest) {
       data: normalizedLeaveData,
     });
   } catch (error) {
-    console.error('Error fetching yearly leave data:', error);
+    console.error('Error fetching monthly leave data:', error);
     return NextResponse.json<ApiResponse<LeaveDayEntry[]>>(
       {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to fetch yearly leave data',
+        error: error instanceof Error ? error.message : 'Failed to fetch monthly leave data',
       },
       { status: 500 }
     );

@@ -5,68 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useState, useEffect, useRef } from 'react';
 import { format, startOfWeek, addWeeks, subWeeks } from 'date-fns';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
-import {
-  storeYearlyLeaveData,
-} from '@/lib/leave-storage';
 
 export default function TimesheetPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [currentWeek, setCurrentWeek] = useState(new Date());
-  const leaveDataLoadedRef = useRef<Set<number>>(new Set());
-
-  // Load yearly leave data fresh from API after login and overwrite localStorage
-  useEffect(() => {
-    if (status !== 'authenticated' || !session?.staffProfile?.EmployeeID) {
-      return;
-    }
-
-    const employeeId = session.staffProfile.EmployeeID;
-    const currentYear = new Date().getFullYear();
-    const yearsToLoad = [currentYear, currentYear + 1]; // Current year and next year
-
-    // Check if we already loaded for this session
-    const allLoaded = yearsToLoad.every((year) => leaveDataLoadedRef.current.has(year));
-    if (allLoaded) {
-      return; // Already loaded in this session
-    }
-
-    const loadYearlyLeaveData = async () => {
-      try {
-        // Mark years as loading to prevent duplicate requests
-        yearsToLoad.forEach((year) => leaveDataLoadedRef.current.add(year));
-
-        // Always fetch fresh data from API and overwrite localStorage
-        await Promise.all(
-          yearsToLoad.map(async (year) => {
-            const response = await fetch(`/api/staff/leave/yearly?year=${year}`);
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              throw new Error(errorText || `Failed to load yearly leave data for ${year}`);
-            }
-
-            const payload = await response.json();
-            if (!payload.success) {
-              throw new Error(payload.error || `Failed to load yearly leave data for ${year}`);
-            }
-
-            const data = payload.data || [];
-            // Always overwrite localStorage with fresh data
-            console.log('[TimesheetPage] Storing yearly leave data for year', year, data);
-            storeYearlyLeaveData(employeeId, year, data);
-          })
-        );
-      } catch (error) {
-        console.error('[TimesheetPage] Error loading yearly leave data:', error);
-        // Remove failed years from loading set to allow retry
-        yearsToLoad.forEach((year) => leaveDataLoadedRef.current.delete(year));
-      }
-    };
-
-    loadYearlyLeaveData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, session?.staffProfile?.EmployeeID]);
 
   useEffect(() => {
     if (status === 'unauthenticated') {

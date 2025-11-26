@@ -5,12 +5,6 @@ import { useSession } from 'next-auth/react';
 import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import DailyCard from './DailyCard';
 import { Project, Task, TimeEntry, DailyTimesheet, LeaveDayEntry, Holiday } from '@/types';
-import {
-  storeYearlyLeaveData,
-  getYearlyLeaveData,
-  getAllLeaveData,
-  hasYearlyLeaveData,
-} from '@/lib/leave-storage';
 
 interface WeeklyTimesheetProps {
   weekStart: Date;
@@ -34,7 +28,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
   const loadedWeekRef = useRef<string | null>(null);
   const timesheetInitializedRef = useRef<boolean>(false);
   const holidayCacheRef = useRef<Record<string, Holiday[]>>({});
-  const leaveDataLoadedRef = useRef<Set<number>>(new Set());
+  const leaveDataCacheRef = useRef<Map<string, LeaveDayEntry[]>>(new Map());
 
   // Initialize days of the week (Monday-Friday)
   useEffect(() => {
@@ -193,7 +187,8 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart, session?.staffProfile?.EmployeeID, loading]);
 
-  // Load leave data from localStorage (should be loaded by TimesheetPage after login)
+  // Load leave data from API (API uses Redis cache)
+  // Focus on months that contain the displayed week
   useEffect(() => {
     const employeeId = session?.staffProfile?.EmployeeID;
     if (!employeeId) {
@@ -202,52 +197,83 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
 
     const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
     const friday = addDays(monday, 4);
-    const yearSet = new Set<number>([monday.getFullYear(), friday.getFullYear()]);
-
-    // Get leave data from localStorage
-    const allYears = Array.from(yearSet);
-    const allLeaveData = getAllLeaveData(employeeId, allYears);
     
-    // Check if we need to load missing years (fallback in case TimesheetPage hasn't loaded yet)
-    const missingYears = Array.from(yearSet).filter(
-      (year) => !hasYearlyLeaveData(employeeId, year) && !leaveDataLoadedRef.current.has(year)
-    );
+    // Get months that contain this week (Monday and Friday might be in different months)
+    const mondayMonth = monday.getMonth() + 1; // 1-12
+    const fridayMonth = friday.getMonth() + 1; // 1-12
+    const mondayYear = monday.getFullYear();
+    const fridayYear = friday.getFullYear();
 
-    if (missingYears.length > 0) {
-      // Fallback: Load missing years if TimesheetPage hasn't loaded them yet
-      const loadMissingYears = async () => {
-        try {
-          missingYears.forEach((year) => leaveDataLoadedRef.current.add(year));
+    const monthsToLoad: Array<{ year: number; month: number }> = [
+      { year: mondayYear, month: mondayMonth },
+    ];
 
-          await Promise.all(
-            missingYears.map(async (year) => {
-              const response = await fetch(`/api/staff/leave/yearly?year=${year}`);
-              if (!response.ok) {
-                throw new Error(`Failed to load yearly leave data for ${year}`);
-              }
-              const payload = await response.json();
-              if (!payload.success) {
-                throw new Error(payload.error || `Failed to load yearly leave data for ${year}`);
-              }
-              const data = payload.data || [];
-              storeYearlyLeaveData(employeeId, year, data);
-              
-              // Update leave data after loading
-              const updatedData = getAllLeaveData(employeeId, allYears);
-              setLeaveData(updatedData);
-            })
-          );
-        } catch (error) {
-          console.error('[WeeklyTimesheet] Error loading missing years:', error);
-          missingYears.forEach((year) => leaveDataLoadedRef.current.delete(year));
-        }
-      };
-
-      loadMissingYears();
-    } else {
-      // All data available in localStorage
-      setLeaveData(allLeaveData);
+    // Add Friday's month if different
+    if (mondayYear !== fridayYear || mondayMonth !== fridayMonth) {
+      monthsToLoad.push({ year: fridayYear, month: fridayMonth });
     }
+
+    // Check in-memory cache first
+    const cacheKeys = monthsToLoad.map(({ year, month }) => `${year}-${month}`);
+    const cachedData: LeaveDayEntry[] = [];
+    const missingMonths: Array<{ year: number; month: number }> = [];
+
+    monthsToLoad.forEach(({ year, month }) => {
+      const key = `${year}-${month}`;
+      const cached = leaveDataCacheRef.current.get(key);
+      if (cached) {
+        cachedData.push(...cached);
+      } else {
+        missingMonths.push({ year, month });
+      }
+    });
+
+    // If all data is cached, use it
+    if (missingMonths.length === 0) {
+      setLeaveData(cachedData);
+      return;
+    }
+
+    // Load missing months from API (API will use Redis cache)
+    const loadMissingMonths = async () => {
+      try {
+        const responses = await Promise.all(
+          missingMonths.map(async ({ year, month }) => {
+            const response = await fetch(`/api/staff/leave/monthly?year=${year}&month=${month}`);
+            if (!response.ok) {
+              throw new Error(`Failed to load monthly leave data for ${year}-${month}`);
+            }
+            const payload = await response.json();
+            if (!payload.success) {
+              throw new Error(payload.error || `Failed to load monthly leave data for ${year}-${month}`);
+            }
+            return { year, month, data: payload.data || [] };
+          })
+        );
+
+        // Update in-memory cache
+        responses.forEach(({ year, month, data }) => {
+          const key = `${year}-${month}`;
+          leaveDataCacheRef.current.set(key, data);
+        });
+
+        // Combine all data (cached + newly loaded)
+        const allData = [...cachedData];
+        responses.forEach(({ data }) => {
+          allData.push(...data);
+        });
+
+        setLeaveData(allData);
+      } catch (error) {
+        console.error('[WeeklyTimesheet] Error loading monthly leave data:', error);
+        // Still set cached data if available
+        if (cachedData.length > 0) {
+          setLeaveData(cachedData);
+        }
+      }
+    };
+
+    loadMissingMonths();
   }, [weekStart, session?.staffProfile?.EmployeeID]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load master data (projects and tasks)
