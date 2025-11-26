@@ -3,8 +3,9 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getZohoPeopleService } from '@/lib/zoho-people';
 import { normalizeZohoLeaveRecords } from '@/lib/leave-utils';
-import { ApiResponse, LeaveDayEntry } from '@/types';
+import { ApiResponse, LeaveDayEntry, ZohoLeaveApiResponse } from '@/types';
 import { format, subMonths, addMonths } from 'date-fns';
+import { getRedisClient } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,10 +47,36 @@ export async function GET(request: NextRequest) {
     const fromDate = searchParams.get('from') || format(subMonths(new Date(), 3), 'yyyy-MM-dd');
     const toDate = searchParams.get('to') || format(addMonths(new Date(), 3), 'yyyy-MM-dd');
 
-    // Fetch leave data from Zoho People using Leave API v2
-    // API returns all records, we filter by EmployeeId in the service
+    // Check Redis cache first using EmployeeID
+    const redis = getRedisClient();
+    const cacheKey = `leave:${employeeId}:${fromDate}:${toDate}`;
+    
+    try {
+      const cached = await redis.get<ZohoLeaveApiResponse>(cacheKey);
+      if (cached) {
+        console.log('Using Redis cache for leaves');
+        // Normalize cached data
+        const normalizedLeaveData = normalizeZohoLeaveRecords(cached);
+        return NextResponse.json<ApiResponse<LeaveDayEntry[]>>({
+          success: true,
+          data: normalizedLeaveData,
+        });
+      }
+    } catch (redisError) {
+      console.warn('[Leave API] Redis cache read error (continuing to fetch):', redisError);
+    }
+
+    // Fetch fresh data from Zoho
+    console.log('Fetching fresh leave data from Zoho');
     const zohoService = getZohoPeopleService();
     const apiResponse = await zohoService.fetchLeaveRecords(employeeId, fromDate, toDate);
+
+    // Cache the response with 6 hours TTL
+    try {
+      await redis.setex(cacheKey, 21600, JSON.stringify(apiResponse));
+    } catch (redisError) {
+      console.warn('[Leave API] Redis cache write error:', redisError);
+    }
 
     // Normalize leave data (expand date ranges)
     const normalizedLeaveData = normalizeZohoLeaveRecords(apiResponse);

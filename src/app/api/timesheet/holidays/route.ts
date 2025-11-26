@@ -3,12 +3,9 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getYearlyHolidays } from '@/lib/zoho/getYearlyHolidays';
 import { ApiResponse, Holiday } from '@/types';
-import { getCachedValue, setCachedValue } from '@/lib/cache';
+import { getRedisClient } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
-
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const CACHE_VERSION = 'v2';
 
 const resolveLocation = (sessionLocation?: string | null) => {
   const trimmedSessionLocation = sessionLocation?.trim();
@@ -47,16 +44,11 @@ export async function GET(request: NextRequest) {
     }
 
     const searchParams = request.nextUrl.searchParams;
-    const yearParam = searchParams.get('year');
-
+    let yearParam = searchParams.get('year');
+    
+    // If year not provided, infer from current date
     if (!yearParam) {
-      return NextResponse.json<ApiResponse<Holiday[]>>(
-        {
-          success: false,
-          error: 'Missing required parameter: year',
-        },
-        { status: 400 }
-      );
+      yearParam = new Date().getFullYear().toString();
     }
 
     const year = Number.parseInt(yearParam, 10);
@@ -70,18 +62,33 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const cacheKey = `holidays:${CACHE_VERSION}:${location}:${year}`;
-    const cached = getCachedValue<Holiday[]>(cacheKey);
-
-    if (cached) {
-      return NextResponse.json<ApiResponse<Holiday[]>>({
-        success: true,
-        data: cached,
-      });
+    // Check Redis cache first
+    const redis = getRedisClient();
+    const cacheKey = `holiday:${year}`;
+    
+    try {
+      const cached = await redis.get<Holiday[]>(cacheKey);
+      if (cached) {
+        console.log('Using Redis cache for holidays');
+        return NextResponse.json<ApiResponse<Holiday[]>>({
+          success: true,
+          data: cached,
+        });
+      }
+    } catch (redisError) {
+      console.warn('[Holiday API] Redis cache read error (continuing to fetch):', redisError);
     }
 
+    // Fetch fresh data from Zoho
+    console.log('Fetching fresh holiday data from Zoho');
     const holidays = await getYearlyHolidays({ location, year });
-    setCachedValue(cacheKey, holidays, CACHE_TTL_MS);
+    
+    // Cache in Redis with 12 hours TTL
+    try {
+      await redis.setex(cacheKey, 43200, JSON.stringify(holidays));
+    } catch (redisError) {
+      console.warn('[Holiday API] Redis cache write error:', redisError);
+    }
 
     return NextResponse.json<ApiResponse<Holiday[]>>({
       success: true,

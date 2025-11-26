@@ -467,6 +467,7 @@ export class ZohoPeopleService {
         apiUrl,
         requestConfig
       );
+      console.log('[Zoho] Leave API v2 response', response.data);
 
       // console.log(`[Zoho] Leave API v2 response status: ${response.status}`);
 

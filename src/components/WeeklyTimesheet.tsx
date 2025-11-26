@@ -193,7 +193,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart, session?.staffProfile?.EmployeeID, loading]);
 
-  // Load yearly leave data once per employee/year and store in localStorage
+  // Load leave data from localStorage (should be loaded by TimesheetPage after login)
   useEffect(() => {
     const employeeId = session?.staffProfile?.EmployeeID;
     if (!employeeId) {
@@ -204,55 +204,51 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     const friday = addDays(monday, 4);
     const yearSet = new Set<number>([monday.getFullYear(), friday.getFullYear()]);
 
-    const loadYearlyLeaveData = async () => {
-      const missingYears = Array.from(yearSet).filter(
-        (year) => !hasYearlyLeaveData(employeeId, year) && !leaveDataLoadedRef.current.has(year)
-      );
+    // Get leave data from localStorage
+    const allYears = Array.from(yearSet);
+    const allLeaveData = getAllLeaveData(employeeId, allYears);
+    
+    // Check if we need to load missing years (fallback in case TimesheetPage hasn't loaded yet)
+    const missingYears = Array.from(yearSet).filter(
+      (year) => !hasYearlyLeaveData(employeeId, year) && !leaveDataLoadedRef.current.has(year)
+    );
 
-      if (missingYears.length > 0) {
+    if (missingYears.length > 0) {
+      // Fallback: Load missing years if TimesheetPage hasn't loaded them yet
+      const loadMissingYears = async () => {
         try {
-          // Mark years as loading to prevent duplicate requests
           missingYears.forEach((year) => leaveDataLoadedRef.current.add(year));
 
-          const responses = await Promise.all(
+          await Promise.all(
             missingYears.map(async (year) => {
               const response = await fetch(`/api/staff/leave/yearly?year=${year}`);
-
               if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(errorText || `Failed to load yearly leave data for ${year}`);
+                throw new Error(`Failed to load yearly leave data for ${year}`);
               }
-
               const payload = await response.json();
               if (!payload.success) {
                 throw new Error(payload.error || `Failed to load yearly leave data for ${year}`);
               }
-
               const data = payload.data || [];
               storeYearlyLeaveData(employeeId, year, data);
-              return data;
+              
+              // Update leave data after loading
+              const updatedData = getAllLeaveData(employeeId, allYears);
+              setLeaveData(updatedData);
             })
           );
-
-          // Update leave data from localStorage (includes newly loaded data)
-          const allYears = Array.from(yearSet);
-          const allLeaveData = getAllLeaveData(employeeId, allYears);
-          setLeaveData(allLeaveData);
         } catch (error) {
-          console.error('Error loading yearly leave data:', error);
-          // Remove failed years from loading set to allow retry
+          console.error('[WeeklyTimesheet] Error loading missing years:', error);
           missingYears.forEach((year) => leaveDataLoadedRef.current.delete(year));
         }
-      } else {
-        // All years are already loaded, get from localStorage
-        const allYears = Array.from(yearSet);
-        const allLeaveData = getAllLeaveData(employeeId, allYears);
-        setLeaveData(allLeaveData);
-      }
-    };
+      };
 
-    loadYearlyLeaveData();
-  }, [weekStart, session?.staffProfile?.EmployeeID]);
+      loadMissingYears();
+    } else {
+      // All data available in localStorage
+      setLeaveData(allLeaveData);
+    }
+  }, [weekStart, session?.staffProfile?.EmployeeID]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load master data (projects and tasks)
   useEffect(() => {
