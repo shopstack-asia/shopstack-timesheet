@@ -5,6 +5,12 @@ import { useSession } from 'next-auth/react';
 import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import DailyCard from './DailyCard';
 import { Project, Task, TimeEntry, DailyTimesheet, LeaveDayEntry, Holiday } from '@/types';
+import {
+  storeYearlyLeaveData,
+  getYearlyLeaveData,
+  getAllLeaveData,
+  hasYearlyLeaveData,
+} from '@/lib/leave-storage';
 
 interface WeeklyTimesheetProps {
   weekStart: Date;
@@ -28,6 +34,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
   const loadedWeekRef = useRef<string | null>(null);
   const timesheetInitializedRef = useRef<boolean>(false);
   const holidayCacheRef = useRef<Record<string, Holiday[]>>({});
+  const leaveDataLoadedRef = useRef<Set<number>>(new Set());
 
   // Initialize days of the week (Monday-Friday)
   useEffect(() => {
@@ -186,21 +193,74 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart, session?.staffProfile?.EmployeeID, loading]);
 
-  // Load master data and leave data
+  // Load yearly leave data once per employee/year and store in localStorage
+  useEffect(() => {
+    const employeeId = session?.staffProfile?.EmployeeID;
+    if (!employeeId) {
+      return;
+    }
+
+    const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
+    const friday = addDays(monday, 4);
+    const yearSet = new Set<number>([monday.getFullYear(), friday.getFullYear()]);
+
+    const loadYearlyLeaveData = async () => {
+      const missingYears = Array.from(yearSet).filter(
+        (year) => !hasYearlyLeaveData(employeeId, year) && !leaveDataLoadedRef.current.has(year)
+      );
+
+      if (missingYears.length > 0) {
+        try {
+          // Mark years as loading to prevent duplicate requests
+          missingYears.forEach((year) => leaveDataLoadedRef.current.add(year));
+
+          const responses = await Promise.all(
+            missingYears.map(async (year) => {
+              const response = await fetch(`/api/staff/leave/yearly?year=${year}`);
+
+              if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || `Failed to load yearly leave data for ${year}`);
+              }
+
+              const payload = await response.json();
+              if (!payload.success) {
+                throw new Error(payload.error || `Failed to load yearly leave data for ${year}`);
+              }
+
+              const data = payload.data || [];
+              storeYearlyLeaveData(employeeId, year, data);
+              return data;
+            })
+          );
+
+          // Update leave data from localStorage (includes newly loaded data)
+          const allYears = Array.from(yearSet);
+          const allLeaveData = getAllLeaveData(employeeId, allYears);
+          setLeaveData(allLeaveData);
+        } catch (error) {
+          console.error('Error loading yearly leave data:', error);
+          // Remove failed years from loading set to allow retry
+          missingYears.forEach((year) => leaveDataLoadedRef.current.delete(year));
+        }
+      } else {
+        // All years are already loaded, get from localStorage
+        const allYears = Array.from(yearSet);
+        const allLeaveData = getAllLeaveData(employeeId, allYears);
+        setLeaveData(allLeaveData);
+      }
+    };
+
+    loadYearlyLeaveData();
+  }, [weekStart, session?.staffProfile?.EmployeeID]);
+
+  // Load master data (projects and tasks)
   useEffect(() => {
     async function loadMasterData() {
       try {
-        // Calculate date range for leave data (week start ± 1 month)
-        const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
-        const weekStartStr = format(monday, 'yyyy-MM-dd');
-        const weekEndStr = format(addDays(monday, 4), 'yyyy-MM-dd'); // Friday
-        const fromDate = format(addDays(monday, -30), 'yyyy-MM-dd'); // 30 days before
-        const toDate = format(addDays(monday, 30), 'yyyy-MM-dd'); // 30 days after
-
-        const [projectsRes, tasksRes, leaveRes] = await Promise.all([
+        const [projectsRes, tasksRes] = await Promise.all([
           fetch('/api/master/projects'),
           fetch('/api/master/tasks'),
-          fetch(`/api/staff/leave?from=${fromDate}&to=${toDate}`),
         ]);
 
         if (projectsRes.ok) {
@@ -225,16 +285,6 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
           const tasksData = await tasksRes.json();
           setTasks(tasksData.data || []);
         }
-
-        if (leaveRes.ok) {
-          const leaveData = await leaveRes.json();
-          if (leaveData.success && leaveData.data) {
-            setLeaveData(leaveData.data);
-            // console.log('[WeeklyTimesheet] Loaded leave data:', leaveData.data.length, 'leave days');
-          }
-        } else {
-          console.warn('[WeeklyTimesheet] Failed to load leave data:', leaveRes.status);
-        }
       } catch (error) {
         console.error('Error loading master data:', error);
       } finally {
@@ -243,7 +293,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     }
 
     loadMasterData();
-  }, [weekStart]);
+  }, []);
 
   const handleAddEntry = (dayIndex: number) => {
     const newEntry: TimeEntry = {
