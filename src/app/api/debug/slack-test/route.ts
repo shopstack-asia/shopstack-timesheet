@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
 
     // Prepare message
     const message = customMessage || 
-      `🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
+      `<!channel> 🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
 
     // Send message to all channels
     const results = await Promise.allSettled(
@@ -192,7 +192,7 @@ export async function GET(request: NextRequest) {
     const timesheetUrl = getTimesheetUrl(request);
 
     // Prepare default test message
-    const message = `🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
+    const message = `<!channel> 🧪 Test Notification from Timesheet System\n\nThis is a test message sent at ${new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok' })}.\n\nIf you receive this message, Slack integration is working correctly! ✅\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
 
     // Send message to all channels
     const results = await Promise.allSettled(

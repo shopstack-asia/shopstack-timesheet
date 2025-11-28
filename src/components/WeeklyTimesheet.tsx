@@ -5,9 +5,14 @@ import { useSession } from 'next-auth/react';
 import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import DailyCard from './DailyCard';
 import { Project, Task, TimeEntry, DailyTimesheet, LeaveDayEntry, Holiday } from '@/types';
+import { getLeaveEntry, isFullLeave, isHalfLeave } from '@/lib/leave-utils';
+
+type ViewMode = 'column' | 'tab';
 
 interface WeeklyTimesheetProps {
   weekStart: Date;
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
 }
 
 const DEFAULT_HOLIDAY_LOCATION =
@@ -15,7 +20,7 @@ const DEFAULT_HOLIDAY_LOCATION =
   process.env.NEXT_PUBLIC_DEFAULT_LOCATION ||
   '';
 
-export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
+export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange }: WeeklyTimesheetProps) {
   const { data: session } = useSession();
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<string[]>([]);
@@ -25,6 +30,7 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [selectedDayIndex, setSelectedDayIndex] = useState<number>(0);
   const loadedWeekRef = useRef<string | null>(null);
   const timesheetInitializedRef = useRef<boolean>(false);
   const holidayCacheRef = useRef<Record<string, Holiday[]>>({});
@@ -50,6 +56,8 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
     }
 
     setTimesheet(days);
+    // Reset selected day when week changes
+    setSelectedDayIndex(0);
   }, [weekStart]);
 
   const resolvedLocation = session?.staffProfile?.Location?.trim() || DEFAULT_HOLIDAY_LOCATION;
@@ -564,46 +572,210 @@ export default function WeeklyTimesheet({ weekStart }: WeeklyTimesheetProps) {
           Week Total: {weekTotalHours.toFixed(2)} hours
         </div>
         
-        {/* Submit Week Button */}
+        {/* Submit Week Button and Controls */}
         <div className="mt-4 sm:mt-6">
-          <button
-            onClick={handleSubmitWeek}
-            disabled={submitting || weekTotalHours === 0}
-            className="w-full sm:w-auto px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-md transition-colors text-sm sm:text-base"
-          >
-            {submitting ? 'Submitting...' : 'Submit Week'}
-          </button>
-          {weekTotalHours === 0 && (
-            <p className="mt-2 text-xs sm:text-sm text-gray-500">
-              Add entries to enable submission
-            </p>
-          )}
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center flex-wrap">
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center flex-wrap flex-1">
+              <button
+                onClick={handleSubmitWeek}
+                disabled={submitting || weekTotalHours === 0}
+                className="w-full sm:w-auto px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-md transition-colors text-sm sm:text-base"
+              >
+                {submitting ? 'Submitting...' : 'Submit Week'}
+              </button>
+              {weekTotalHours === 0 && (
+                <p className="mt-2 sm:mt-0 text-xs sm:text-sm text-gray-500">
+                  Add entries to enable submission
+                </p>
+              )}
+              
+              {/* Tab View: Day Selection Buttons */}
+              {viewMode === 'tab' && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {timesheet.map((day, dayIndex) => {
+                    const dayName = format(parseISO(day.date), 'EEE');
+                    const dayDate = format(parseISO(day.date), 'MMM d');
+                    const isSelected = selectedDayIndex === dayIndex;
+                    
+                    // Check holiday and leave status
+                    const holidayEntry = visibleHolidays.find((holiday) => holiday.date === day.date);
+                    const isHoliday = Boolean(holidayEntry?.is_holiday ?? holidayEntry);
+                    const leaveEntry = getLeaveEntry(day.date, leaveData);
+                    const isFull = isFullLeave(day.date, leaveData);
+                    const isHalf = isHalfLeave(day.date, leaveData);
+                    
+                    // Build tooltip text
+                    let tooltipText = `${dayName} ${dayDate}`;
+                    if (isHoliday && holidayEntry) {
+                      tooltipText += `\n🎉 Holiday: ${holidayEntry.name}`;
+                      if (holidayEntry.remarks) {
+                        tooltipText += `\n${holidayEntry.remarks}`;
+                      }
+                    }
+                    if (leaveEntry) {
+                      if (isFull) {
+                        tooltipText += `\n🚫 On leave (Full Day): ${leaveEntry.leaveType}`;
+                        if (leaveEntry.reason) {
+                          tooltipText += `\nReason: ${leaveEntry.reason}`;
+                        }
+                      } else if (isHalf) {
+                        tooltipText += `\n⚠️ On leave (Half Day - ${leaveEntry.dayType}): ${leaveEntry.leaveType}`;
+                        if (leaveEntry.reason) {
+                          tooltipText += `\nReason: ${leaveEntry.reason}`;
+                        }
+                      }
+                    }
+                    
+                    // Determine button style based on status
+                    let buttonClasses = 'px-4 py-2 border rounded-lg font-medium text-sm transition-colors';
+                    
+                    if (isSelected) {
+                      if (isHoliday) {
+                        buttonClasses += ' bg-red-600 text-white border-red-600 shadow-md';
+                      } else if (isFull) {
+                        buttonClasses += ' bg-orange-600 text-white border-orange-600 shadow-md';
+                      } else if (isHalf) {
+                        buttonClasses += ' bg-yellow-600 text-white border-yellow-600 shadow-md';
+                      } else {
+                        buttonClasses += ' bg-blue-600 text-white border-blue-600 shadow-md';
+                      }
+                    } else {
+                      if (isHoliday) {
+                        buttonClasses += ' bg-red-50 text-red-700 border-red-300 hover:bg-red-100';
+                      } else if (isFull) {
+                        buttonClasses += ' bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100';
+                      } else if (isHalf) {
+                        buttonClasses += ' bg-yellow-50 text-yellow-700 border-yellow-300 hover:bg-yellow-100';
+                      } else {
+                        buttonClasses += ' bg-white text-gray-700 border-gray-300 hover:bg-gray-50';
+                      }
+                    }
+                    
+                    return (
+                      <button
+                        key={day.date}
+                        onClick={() => setSelectedDayIndex(dayIndex)}
+                        className={buttonClasses}
+                        title={tooltipText}
+                      >
+                        {dayName} {dayDate}
+                        {isHoliday && <span className="ml-1">🎉</span>}
+                        {isFull && <span className="ml-1">🚫</span>}
+                        {isHalf && <span className="ml-1">⚠️</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            
+            {/* View Mode Selection - Icon Buttons (Always on the right) */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => onViewModeChange('column')}
+                title="Weekly View"
+                className={`p-2 border rounded-lg hover:bg-gray-50 transition-colors ${
+                  viewMode === 'column'
+                    ? 'bg-blue-600 border-blue-600 text-white shadow-md'
+                    : 'bg-white border-gray-300 text-gray-700'
+                }`}
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"
+                  />
+                </svg>
+              </button>
+              <button
+                onClick={() => onViewModeChange('tab')}
+                title="Daily View"
+                className={`p-2 border rounded-lg hover:bg-gray-50 transition-colors ${
+                  viewMode === 'tab'
+                    ? 'bg-blue-600 border-blue-600 text-white shadow-md'
+                    : 'bg-white border-gray-300 text-gray-700'
+                }`}
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
-        {timesheet.map((day, dayIndex) => (
+      {/* Column View: Show all days */}
+      {viewMode === 'column' && (
+        <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+          {timesheet.map((day, dayIndex) => (
+            <DailyCard
+              key={day.date}
+              day={day}
+              dayIndex={dayIndex}
+              projects={projects}
+              clients={clients}
+              tasks={tasks}
+              leaveData={leaveData}
+              holidays={visibleHolidays}
+              onAddEntry={() => handleAddEntry(dayIndex)}
+              onUpdateEntry={(entryIndex, updates) =>
+                handleUpdateEntry(dayIndex, entryIndex, updates)
+              }
+              onDeleteEntry={(entryIndex) =>
+                handleDeleteEntry(dayIndex, entryIndex)
+              }
+              onCopyYesterday={() => handleCopyYesterday(dayIndex)}
+              submitting={submitting}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Tab View: Show only selected day */}
+      {viewMode === 'tab' && timesheet[selectedDayIndex] && (
+        <div className="w-full">
           <DailyCard
-            key={day.date}
-            day={day}
-            dayIndex={dayIndex}
+            key={timesheet[selectedDayIndex].date}
+            day={timesheet[selectedDayIndex]}
+            dayIndex={selectedDayIndex}
             projects={projects}
             clients={clients}
             tasks={tasks}
             leaveData={leaveData}
             holidays={visibleHolidays}
-            onAddEntry={() => handleAddEntry(dayIndex)}
+            showLabels={true}
+            onAddEntry={() => handleAddEntry(selectedDayIndex)}
             onUpdateEntry={(entryIndex, updates) =>
-              handleUpdateEntry(dayIndex, entryIndex, updates)
+              handleUpdateEntry(selectedDayIndex, entryIndex, updates)
             }
             onDeleteEntry={(entryIndex) =>
-              handleDeleteEntry(dayIndex, entryIndex)
+              handleDeleteEntry(selectedDayIndex, entryIndex)
             }
-            onCopyYesterday={() => handleCopyYesterday(dayIndex)}
+            onCopyYesterday={() => handleCopyYesterday(selectedDayIndex)}
             submitting={submitting}
           />
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

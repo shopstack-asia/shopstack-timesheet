@@ -10,6 +10,7 @@ interface TimeEntryFormProps {
   tasks: Task[];
   clients: string[];
   disabled?: boolean;
+  showLabels?: boolean;
   onUpdate: (updates: Partial<TimeEntry>) => void;
   onDelete: () => void;
 }
@@ -20,6 +21,7 @@ export default function TimeEntryForm({
   tasks,
   clients,
   disabled = false,
+  showLabels = false,
   onUpdate,
   onDelete,
 }: TimeEntryFormProps) {
@@ -175,76 +177,110 @@ export default function TimeEntryForm({
 
       <div className="space-y-2 mt-3">
         <div>
-          <SearchableSelect
-            options={clientOptions}
-            value={selectedClient}
-            onChange={handleClientChange}
-            placeholder="Select Client *"
-            required
-            error={showErrors.client}
-            disabled={disabled}
-          />
+          <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
+            {showLabels && (
+              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+                Client
+              </label>
+            )}
+            <div className="flex-1">
+              <SearchableSelect
+                options={clientOptions}
+                value={selectedClient}
+                onChange={handleClientChange}
+                placeholder={showLabels ? "Select Client" : "Select Client *"}
+                required
+                error={showErrors.client}
+                disabled={disabled}
+              />
+            </div>
+          </div>
           {showErrors.client && (
-            <p className="mt-1 text-xs text-red-600">Client is required</p>
+            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Client is required</p>
           )}
         </div>
 
         <div>
-          <SearchableSelect
-            options={projectOptions}
-            value={projectId}
-            onChange={handleProjectChange}
-            placeholder="Select Project *"
-            disabled={disabled || !selectedClient}
-            required
-            error={showErrors.project}
-          />
+          <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
+            {showLabels && (
+              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+                Project
+              </label>
+            )}
+            <div className="flex-1">
+              <SearchableSelect
+                options={projectOptions}
+                value={projectId}
+                onChange={handleProjectChange}
+                placeholder={showLabels ? "Select Project" : "Select Project *"}
+                disabled={disabled || !selectedClient}
+                required
+                error={showErrors.project}
+              />
+            </div>
+          </div>
           {showErrors.project && (
-            <p className="mt-1 text-xs text-red-600">Project is required</p>
+            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Project is required</p>
           )}
         </div>
 
         <div>
-          <SearchableSelect
-            options={taskOptions}
-            value={taskId}
-            onChange={handleTaskChange}
-            placeholder="Select Task *"
-            required
-            error={showErrors.task}
-            disabled={disabled}
-          />
+          <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
+            {showLabels && (
+              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+                Task
+              </label>
+            )}
+            <div className="flex-1">
+              <SearchableSelect
+                options={taskOptions}
+                value={taskId}
+                onChange={handleTaskChange}
+                placeholder={showLabels ? "Select Task" : "Select Task *"}
+                required
+                error={showErrors.task}
+                disabled={disabled}
+              />
+            </div>
+          </div>
           {showErrors.task && (
-            <p className="mt-1 text-xs text-red-600">Task is required</p>
+            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Task is required</p>
           )}
         </div>
 
         <div>
-          <div className="relative">
-            <input
-              type="number"
-              value={hours}
-              onChange={handleHoursChange}
-              onBlur={() => setTouched((prev) => ({ ...prev, hours: true }))}
-              min="0"
-              max="24"
-              step="0.25"
-              placeholder="Hours"
-              disabled={disabled}
-              className={`w-full px-2 py-1 pr-10 text-sm border rounded focus:outline-none focus:ring-2 ${
-                disabled
-                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-300'
-                  : showErrors.hours
-                  ? 'border-red-500 focus:ring-red-500'
-                  : 'border-gray-300 focus:ring-blue-500'
-              }`}
-            />
-            <span className="absolute right-2 top-1/2 transform -translate-y-1/2 text-sm text-gray-500 pointer-events-none">
-              hr
-            </span>
+          <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
+            {showLabels && (
+              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+                Hours
+              </label>
+            )}
+            <div className="flex-1 relative">
+              <input
+                type="number"
+                value={hours}
+                onChange={handleHoursChange}
+                onBlur={() => setTouched((prev) => ({ ...prev, hours: true }))}
+                min="0"
+                max="24"
+                step="0.25"
+                placeholder={showLabels ? "Hours" : "Hours"}
+                disabled={disabled}
+                className={`w-full px-2 py-1 pr-10 text-sm border rounded focus:outline-none focus:ring-2 ${
+                  disabled
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-300'
+                    : showErrors.hours
+                    ? 'border-red-500 focus:ring-red-500'
+                    : 'border-gray-300 focus:ring-blue-500'
+                }`}
+              />
+              <span className="absolute right-2 top-1/2 transform -translate-y-1/2 text-sm text-gray-500 pointer-events-none">
+                hr
+              </span>
+            </div>
           </div>
           {showErrors.hours && (
-            <p className="mt-1 text-xs text-red-600">Hours must be greater than 0</p>
+            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Hours must be greater than 0</p>
           )}
         </div>
       </div>

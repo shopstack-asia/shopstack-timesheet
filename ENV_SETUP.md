@@ -177,6 +177,88 @@ FROM_EMAIL=noreply@shopstack.asia
 
 ---
 
+### Redis Configuration (สำหรับ Caching)
+
+```env
+# Option 1: Local Redis (สำหรับ development)
+REDIS_URL=redis://127.0.0.1:6379/7
+
+# Option 2: Upstash Redis - ใช้ REDIS_URL แบบ rediss:// (แนะนำ)
+REDIS_URL=rediss://default:your-token@your-redis-host.upstash.io:6379
+
+# Option 3: Upstash Redis - ใช้ REDIS_URL + Token แยก (สำหรับ https:// URL)
+REDIS_URL=https://your-redis-host.upstash.io
+KV_REST_API_TOKEN=your-token-here
+
+# Option 4: Vercel KV format
+KV_REST_API_URL=https://your-redis-host.upstash.io
+KV_REST_API_TOKEN=your-token-here
+
+# หรือใช้ read-only token
+# KV_REST_API_READ_ONLY_TOKEN=your-read-only-token-here
+```
+
+**วิธีตั้งค่า:**
+
+**สำหรับ Local Redis (Development):**
+```env
+REDIS_URL=redis://127.0.0.1:6379/7
+```
+- ใช้สำหรับ development เมื่อมี Redis ติดตั้งบนเครื่อง
+- รูปแบบ: `redis://[password@]host:port[/database]`
+- ตัวอย่าง:
+  - `redis://127.0.0.1:6379` (default port, db 0)
+  - `redis://127.0.0.1:6379/7` (port 6379, db 7)
+  - `redis://:password@127.0.0.1:6379/7` (มี password)
+
+**สำหรับ Upstash Redis (Production):**
+
+**Option 1: ใช้ REDIS_URL แบบ rediss:// (แนะนำ)**
+```env
+REDIS_URL=rediss://default:your-token-here@your-host.upstash.io:6379
+```
+- ระบบจะ extract token จาก URL อัตโนมัติ
+- ตัวอย่าง: `rediss://default:AXrQACQgYj...@helpful-cow-12345.upstash.io:6379`
+
+**Option 2: ใช้ REDIS_URL + Token แยก (สำหรับ https:// URL)**
+```env
+REDIS_URL=https://your-host.upstash.io
+KV_REST_API_TOKEN=your-token-here
+```
+- หรือใช้ `KV_REST_API_READ_ONLY_TOKEN` แทน
+
+**Option 3: ใช้ Vercel KV format**
+```env
+KV_REST_API_URL=https://your-host.upstash.io
+KV_REST_API_TOKEN=your-token-here
+```
+
+**ขั้นตอนการตั้งค่า:**
+1. ไปที่ [Upstash Console](https://console.upstash.com/)
+2. สร้าง Redis Database ใหม่
+3. ไปที่ **Details** > **REST API**
+4. คัดลอกค่า:
+   - **UPSTASH_REDIS_REST_URL** → ใช้เป็น `REDIS_URL` (ถ้าต้องการ format https://) หรือ extract hostname
+   - **UPSTASH_REDIS_REST_TOKEN** → ใช้เป็น `KV_REST_API_TOKEN` หรือรวมใน `REDIS_URL`
+5. ถ้าใช้ Option 1: รวม token ใน URL format: `rediss://default:TOKEN@HOSTNAME:6379`
+
+**สำหรับ Vercel KV:**
+- ถ้าใช้ Vercel KV จะตั้งค่า environment variables อัตโนมัติใน Vercel Dashboard
+- ใช้ชื่อ `KV_REST_API_URL` และ `KV_REST_API_TOKEN`
+
+**หมายเหตุ:**
+- ระบบรองรับทั้ง Local Redis และ Upstash Redis อัตโนมัติ:
+  - **Local Redis**: ใช้เมื่อ URL เริ่มต้นด้วย `redis://127.0.0.1`, `redis://localhost`
+  - **Upstash Redis**: ใช้เมื่อ URL เป็น `rediss://` หรือ `https://`
+- Redis ใช้สำหรับ caching ข้อมูล holiday และ leave data เพื่อเพิ่มประสิทธิภาพ
+- ถ้าไม่ตั้งค่า Redis ระบบจะยังทำงานได้ แต่จะไม่มี caching (จะดึงข้อมูลจาก Zoho ทุกครั้ง)
+- **ถ้าเจอ error เกี่ยวกับ token**: ตรวจสอบว่า:
+  - ถ้าใช้ Local Redis (`redis://127.0.0.1`): ไม่ต้องตั้ง token
+  - ถ้าใช้ `rediss://` URL: token ต้องรวมอยู่ใน URL format: `rediss://default:TOKEN@HOST:PORT`
+  - ถ้าใช้ `https://` URL: ต้องตั้ง `KV_REST_API_TOKEN` หรือ `KV_REST_API_READ_ONLY_TOKEN` แยก
+
+---
+
 ## ตัวอย่างไฟล์ .env ที่สมบูรณ์
 
 ```env
@@ -215,6 +297,14 @@ SMTP_PORT=587
 SMTP_USER=noreply@shopstack.asia
 SMTP_PASSWORD=abcd efgh ijkl mnop
 FROM_EMAIL=noreply@shopstack.asia
+
+# Optional: Redis (สำหรับ Caching)
+# Option 1: ใช้ REDIS_URL (รองรับ rediss:// หรือ https://)
+# REDIS_URL=rediss://default:your-token@your-redis-host.upstash.io:6379
+
+# Option 2: ใช้ Vercel KV format
+# KV_REST_API_URL=https://your-redis-host.upstash.io
+# KV_REST_API_TOKEN=your-token-here
 ```
 
 ---

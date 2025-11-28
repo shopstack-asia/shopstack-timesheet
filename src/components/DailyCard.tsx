@@ -14,6 +14,7 @@ interface DailyCardProps {
   tasks: Task[];
   leaveData: LeaveDayEntry[];
   holidays: Holiday[];
+  showLabels?: boolean;
   onAddEntry: () => void;
   onUpdateEntry: (entryIndex: number, updates: Partial<TimeEntry>) => void;
   onDeleteEntry: (entryIndex: number) => void;
@@ -29,6 +30,7 @@ export default function DailyCard({
   tasks,
   leaveData,
   holidays,
+  showLabels = false,
   onAddEntry,
   onUpdateEntry,
   onDeleteEntry,
@@ -152,6 +154,7 @@ export default function DailyCard({
             clients={clients}
             tasks={tasks}
             disabled={isFull || isHoliday}
+            showLabels={showLabels}
             onUpdate={(updates) => onUpdateEntry(entryIndex, updates)}
             onDelete={() => onDeleteEntry(entryIndex)}
           />

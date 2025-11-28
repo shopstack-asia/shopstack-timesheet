@@ -6,10 +6,13 @@ import { useState, useEffect, useRef } from 'react';
 import { format, startOfWeek, addWeeks, subWeeks } from 'date-fns';
 import WeeklyTimesheet from '@/components/WeeklyTimesheet';
 
+type ViewMode = 'column' | 'tab';
+
 export default function TimesheetPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [currentWeek, setCurrentWeek] = useState(new Date());
+  const [viewMode, setViewMode] = useState<ViewMode>('column');
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -96,7 +99,7 @@ export default function TimesheetPage() {
           </div>
         </div>
 
-        <WeeklyTimesheet weekStart={weekStart} />
+        <WeeklyTimesheet weekStart={weekStart} viewMode={viewMode} onViewModeChange={setViewMode} />
       </div>
     </div>
   );

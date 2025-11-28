@@ -40,6 +40,7 @@ Required environment variables:
 - `SLACK_BOT_TOKEN` / `SLACK_CHANNEL_ID` or `SLACK_CHANNEL_IDS` - Slack integration (optional, supports multiple channels)
 - `SMTP_*` - Email configuration for reminders (optional)
 - `CRON_SECRET` - Secret for cron job authentication
+- `REDIS_URL` or `KV_REST_API_URL` / `KV_REST_API_TOKEN` - Redis configuration for caching (optional, recommended for performance)
 
 ### 3. Google Sheets Setup
 

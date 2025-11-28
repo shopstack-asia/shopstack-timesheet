@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
 
       if (channelIds.length > 0) {
         const timesheetUrl = getTimesheetUrl(request);
-        const message = `📅 Weekly Timesheet Reminder\n\nThis is a reminder for all Shopstack employees to submit their timesheets for this week (Monday - Friday).\n\nPlease log in to the timesheet system and complete your entries.\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
+        const message = `<!channel> 📅 Weekly Timesheet Reminder\n\nThis is a reminder for all Shopstack employees to submit their timesheets for this week (Monday - Friday).\n\nPlease log in to the timesheet system and complete your entries.\n\n<${timesheetUrl}|👉 Open Timesheet System>`;
         
         // Send message to all channels
         const slackPromises = channelIds.map((channelId) =>
