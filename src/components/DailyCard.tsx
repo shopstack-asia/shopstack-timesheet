@@ -52,44 +52,44 @@ export default function DailyCard({
 
   return (
     <div
-      className={`bg-white rounded-lg shadow-md p-4 border ${
+      className={`bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 border ${
         isHoliday
-          ? 'border-red-300 bg-red-50'
+          ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/30'
           : isFull
-          ? 'border-orange-300 bg-orange-50'
+          ? 'border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/30'
           : isHalf
-          ? 'border-yellow-300 bg-yellow-50'
-          : 'border-gray-200'
+          ? 'border-yellow-300 dark:border-yellow-700 bg-yellow-50 dark:bg-yellow-900/30'
+          : 'border-gray-200 dark:border-gray-700'
       }`}
     >
-      <div className="mb-4 pb-2 border-b">
+      <div className="mb-4 pb-2 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-start justify-between">
           <div>
             <h3
-              className="text-lg font-semibold text-gray-900"
+              className="text-lg font-semibold text-gray-900 dark:text-white"
               title={holidayEntry ? holidayTooltip : undefined}
             >
               {dayName}
             </h3>
-            <p className="text-sm text-gray-600">{dayDate}</p>
-            <div className="mt-2 text-sm font-medium text-blue-600">
+            <p className="text-sm text-gray-600 dark:text-gray-400">{dayDate}</p>
+            <div className="mt-2 text-sm font-medium text-blue-600 dark:text-blue-400">
               Total: {day.totalHours.toFixed(2)} hrs
             </div>
           </div>
           {leaveEntry && (
             <button
               onClick={() => setShowLeaveInfo(!showLeaveInfo)}
-              className="ml-2 p-1.5 rounded-full hover:bg-gray-100 transition-colors"
+              className="ml-2 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
               title="View leave information"
               type="button"
             >
               <svg
                 className={`w-5 h-5 ${
                   isFull 
-                    ? 'text-orange-600' 
+                    ? 'text-orange-600 dark:text-orange-400' 
                     : isHalf 
-                    ? 'text-yellow-600' 
-                    : 'text-gray-600'
+                    ? 'text-yellow-600 dark:text-yellow-400' 
+                    : 'text-gray-600 dark:text-gray-400'
                 }`}
                 fill="none"
                 stroke="currentColor"
@@ -109,7 +109,7 @@ export default function DailyCard({
         {/* Leave Information Banner */}
         {leaveEntry && (
           <div className={`mt-3 p-2 rounded text-xs ${
-            isFull ? 'bg-orange-100 text-orange-800' : 'bg-yellow-100 text-yellow-800'
+            isFull ? 'bg-orange-100 dark:bg-orange-900/50 text-orange-800 dark:text-orange-200' : 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-200'
           }`}>
             <div className="font-semibold">
               {isFull 
@@ -130,14 +130,14 @@ export default function DailyCard({
 
         {holidayEntry && (
           <div
-            className="mt-3 p-2 rounded text-xs bg-red-100 text-red-800"
+            className="mt-3 p-2 rounded text-xs bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-200"
             title={holidayTooltip}
           >
             <div className="font-semibold flex items-center gap-1.5">
               <span>{holidayEntry.name}</span>
             </div>
             {holidayEntry.remarks && (
-              <div className="mt-1 text-[11px] text-red-700 break-words">
+              <div className="mt-1 text-[11px] text-red-700 dark:text-red-300 break-words">
                 {holidayEntry.remarks}
               </div>
             )}
@@ -167,10 +167,10 @@ export default function DailyCard({
           disabled={isFull || isHoliday || submitting}
           className={`w-full px-3 py-2 text-sm rounded border ${
             isHoliday
-              ? 'bg-red-100 text-red-500 border-red-200 cursor-not-allowed'
+              ? 'bg-red-100 dark:bg-red-900/50 text-red-500 dark:text-red-400 border-red-200 dark:border-red-800 cursor-not-allowed'
               : isFull
-              ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-              : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-200'
+              ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-600 cursor-not-allowed'
+              : 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 border-blue-200 dark:border-blue-800'
           }`}
         >
           {isHoliday ? '🎉 Holiday' : isFull ? '🚫 Leave Day' : '+ Add Entry'}
@@ -180,7 +180,7 @@ export default function DailyCard({
           <button
             onClick={onCopyYesterday}
             disabled={submitting || isHoliday}
-            className="w-full px-3 py-2 text-sm bg-gray-50 text-gray-700 rounded hover:bg-gray-100 border border-gray-200 disabled:bg-gray-100 disabled:cursor-not-allowed"
+            className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 disabled:bg-gray-100 dark:disabled:bg-gray-700 disabled:cursor-not-allowed"
           >
             Copy Yesterday
           </button>

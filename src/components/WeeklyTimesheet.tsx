@@ -543,8 +543,8 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-lg">Loading...</div>
+      <div className="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-gray-900">
+        <div className="text-lg text-gray-900 dark:text-white">Loading...</div>
       </div>
     );
   }
@@ -552,11 +552,11 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
   return (
     <div className="container mx-auto px-4 py-4 sm:py-8">
       <div className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2">
+        <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-2">
           Weekly Timesheet
         </h1>
         {session?.staffProfile && (
-          <div className="text-gray-600 text-sm sm:text-base">
+          <div className="text-gray-600 dark:text-gray-400 text-sm sm:text-base">
             <p>
               {session.staffProfile.FirstName} {session.staffProfile.LastName} (
               {session.staffProfile.Position})
@@ -568,7 +568,7 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
             )}
           </div>
         )}
-        <div className="mt-4 text-base sm:text-lg font-semibold">
+        <div className="mt-4 text-base sm:text-lg font-semibold text-gray-900 dark:text-white">
           Week Total: {weekTotalHours.toFixed(2)} hours
         </div>
         
@@ -579,12 +579,12 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
               <button
                 onClick={handleSubmitWeek}
                 disabled={submitting || weekTotalHours === 0}
-                className="w-full sm:w-auto px-6 py-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-md transition-colors text-sm sm:text-base"
+                className="w-full sm:w-auto px-6 py-3 bg-green-600 dark:bg-green-700 text-white font-semibold rounded-lg hover:bg-green-700 dark:hover:bg-green-800 disabled:bg-gray-400 dark:disabled:bg-gray-600 disabled:cursor-not-allowed shadow-md transition-colors text-sm sm:text-base"
               >
                 {submitting ? 'Submitting...' : 'Submit Week'}
               </button>
               {weekTotalHours === 0 && (
-                <p className="mt-2 sm:mt-0 text-xs sm:text-sm text-gray-500">
+                <p className="mt-2 sm:mt-0 text-xs sm:text-sm text-gray-500 dark:text-gray-400">
                   Add entries to enable submission
                 </p>
               )}
@@ -641,13 +641,13 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
                       }
                     } else {
                       if (isHoliday) {
-                        buttonClasses += ' bg-red-50 text-red-700 border-red-300 hover:bg-red-100';
+                        buttonClasses += ' bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 border-red-300 dark:border-red-700 hover:bg-red-100 dark:hover:bg-red-900/50';
                       } else if (isFull) {
-                        buttonClasses += ' bg-orange-50 text-orange-700 border-orange-300 hover:bg-orange-100';
+                        buttonClasses += ' bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border-orange-300 dark:border-orange-700 hover:bg-orange-100 dark:hover:bg-orange-900/50';
                       } else if (isHalf) {
-                        buttonClasses += ' bg-yellow-50 text-yellow-700 border-yellow-300 hover:bg-yellow-100';
+                        buttonClasses += ' bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 border-yellow-300 dark:border-yellow-700 hover:bg-yellow-100 dark:hover:bg-yellow-900/50';
                       } else {
-                        buttonClasses += ' bg-white text-gray-700 border-gray-300 hover:bg-gray-50';
+                        buttonClasses += ' bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700';
                       }
                     }
                     
@@ -674,10 +674,10 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
               <button
                 onClick={() => onViewModeChange('column')}
                 title="Weekly View"
-                className={`p-2 border rounded-lg hover:bg-gray-50 transition-colors ${
+                className={`p-2 border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
                   viewMode === 'column'
                     ? 'bg-blue-600 border-blue-600 text-white shadow-md'
-                    : 'bg-white border-gray-300 text-gray-700'
+                    : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}
               >
                 <svg
@@ -698,10 +698,10 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
               <button
                 onClick={() => onViewModeChange('tab')}
                 title="Daily View"
-                className={`p-2 border rounded-lg hover:bg-gray-50 transition-colors ${
+                className={`p-2 border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
                   viewMode === 'tab'
                     ? 'bg-blue-600 border-blue-600 text-white shadow-md'
-                    : 'bg-white border-gray-300 text-gray-700'
+                    : 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300'
                 }`}
               >
                 <svg

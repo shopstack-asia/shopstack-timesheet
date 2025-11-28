@@ -144,8 +144,8 @@ export default function TimeEntryForm({
   return (
     <div className={`p-3 rounded border relative group ${
       disabled 
-        ? 'bg-gray-100 border-gray-300 opacity-60' 
-        : 'bg-gray-50 border-gray-200'
+        ? 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-700 opacity-60' 
+        : 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-600'
     }`}>
       {/* Remove Button */}
       <button
@@ -153,8 +153,8 @@ export default function TimeEntryForm({
         disabled={disabled}
         className={`absolute top-0 right-0 p-1.5 rounded transition-colors z-10 ${
           disabled
-            ? 'text-gray-300 cursor-not-allowed'
-            : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
+            ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
+            : 'text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30'
         }`}
         title="Remove entry"
         type="button"
@@ -179,7 +179,7 @@ export default function TimeEntryForm({
         <div>
           <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
             {showLabels && (
-              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap min-w-[80px]">
                 Client
               </label>
             )}
@@ -196,14 +196,14 @@ export default function TimeEntryForm({
             </div>
           </div>
           {showErrors.client && (
-            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Client is required</p>
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400 ml-[calc(80px+0.75rem)]">Client is required</p>
           )}
         </div>
 
         <div>
           <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
             {showLabels && (
-              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap min-w-[80px]">
                 Project
               </label>
             )}
@@ -220,14 +220,14 @@ export default function TimeEntryForm({
             </div>
           </div>
           {showErrors.project && (
-            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Project is required</p>
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400 ml-[calc(80px+0.75rem)]">Project is required</p>
           )}
         </div>
 
         <div>
           <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
             {showLabels && (
-              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap min-w-[80px]">
                 Task
               </label>
             )}
@@ -244,14 +244,14 @@ export default function TimeEntryForm({
             </div>
           </div>
           {showErrors.task && (
-            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Task is required</p>
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400 ml-[calc(80px+0.75rem)]">Task is required</p>
           )}
         </div>
 
         <div>
           <div className={`${showLabels ? 'flex items-center gap-3' : ''}`}>
             {showLabels && (
-              <label className="text-sm font-medium text-gray-700 whitespace-nowrap min-w-[80px]">
+              <label className="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap min-w-[80px]">
                 Hours
               </label>
             )}
@@ -266,21 +266,21 @@ export default function TimeEntryForm({
                 step="0.25"
                 placeholder={showLabels ? "Hours" : "Hours"}
                 disabled={disabled}
-                className={`w-full px-2 py-1 pr-10 text-sm border rounded focus:outline-none focus:ring-2 ${
+                className={`w-full px-2 py-1 pr-10 text-sm border rounded focus:outline-none focus:ring-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 ${
                   disabled
-                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed border-gray-300'
+                    ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed border-gray-300 dark:border-gray-700'
                     : showErrors.hours
-                    ? 'border-red-500 focus:ring-red-500'
-                    : 'border-gray-300 focus:ring-blue-500'
+                    ? 'border-red-500 dark:border-red-600 focus:ring-red-500 dark:focus:ring-red-600'
+                    : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 dark:focus:ring-blue-600'
                 }`}
               />
-              <span className="absolute right-2 top-1/2 transform -translate-y-1/2 text-sm text-gray-500 pointer-events-none">
+              <span className="absolute right-2 top-1/2 transform -translate-y-1/2 text-sm text-gray-500 dark:text-gray-400 pointer-events-none">
                 hr
               </span>
             </div>
           </div>
           {showErrors.hours && (
-            <p className="mt-1 text-xs text-red-600 ml-[calc(80px+0.75rem)]">Hours must be greater than 0</p>
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400 ml-[calc(80px+0.75rem)]">Hours must be greater than 0</p>
           )}
         </div>
       </div>
