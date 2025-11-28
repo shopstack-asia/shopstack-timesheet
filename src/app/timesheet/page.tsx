@@ -16,6 +16,28 @@ export default function TimesheetPage() {
   const { theme, toggleTheme } = useTheme();
   const [currentWeek, setCurrentWeek] = useState(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('column');
+  const [viewModeInitialized, setViewModeInitialized] = useState(false);
+
+  // Load saved view mode preference
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const savedViewMode = localStorage.getItem('timesheetViewMode') as ViewMode | null;
+    if (savedViewMode === 'column' || savedViewMode === 'tab') {
+      setViewMode(savedViewMode);
+    }
+    setViewModeInitialized(true);
+  }, []);
+
+  // Persist view mode preference
+  useEffect(() => {
+    if (!viewModeInitialized || typeof window === 'undefined') {
+      return;
+    }
+    localStorage.setItem('timesheetViewMode', viewMode);
+  }, [viewMode, viewModeInitialized]);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
