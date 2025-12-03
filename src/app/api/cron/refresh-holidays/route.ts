@@ -26,7 +26,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json<ApiResponse<void>>({
       success: true,
-      message: 'Holiday cache refreshed successfully',
     });
   } catch (error) {
     console.error('Error refreshing holiday cache:', error);
