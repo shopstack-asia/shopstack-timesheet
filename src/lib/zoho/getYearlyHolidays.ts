@@ -7,7 +7,7 @@ const REQUEST_DATE_FORMAT = 'dd-MMM-yyyy';
 const SUPPORTED_RESPONSE_FORMATS = ['dd-MMM-yyyy', 'yyyy-MM-dd'];
 
 export interface GetYearlyHolidaysInput {
-  location: string;
+  location?: string;
   year: number;
 }
 
@@ -163,17 +163,35 @@ const extractHolidayArray = (payload: any): HolidayRecord[] => {
   return [];
 };
 
-const buildUrl = (location: string, from: string, to: string) => {
+const buildUrl = (location: string | undefined, from: string, to: string, page?: number, limit?: number) => {
   const url = new URL(HOLIDAYS_ENDPOINT);
-  url.searchParams.set('location', location);
+  if (location) {
+    url.searchParams.set('location', location);
+  }
   url.searchParams.set('from', from);
   url.searchParams.set('to', to);
   url.searchParams.set('dateFormat', REQUEST_DATE_FORMAT);
+  
+  // Add pagination parameters if provided
+  if (page !== undefined) {
+    url.searchParams.set('page', page.toString());
+  }
+  if (limit !== undefined) {
+    url.searchParams.set('limit', limit.toString());
+  }
+  
   return url.toString();
 };
 
-const fetchHolidays = async (token: string, location: string, from: string, to: string) => {
-  const response = await fetch(buildUrl(location, from, to), {
+const fetchHolidays = async (
+  token: string,
+  location: string | undefined,
+  from: string,
+  to: string,
+  page?: number,
+  limit?: number
+) => {
+  const response = await fetch(buildUrl(location, from, to, page, limit), {
     method: 'GET',
     headers: {
       Authorization: `Zoho-oauthtoken ${token}`,
@@ -188,10 +206,6 @@ export async function getYearlyHolidays({
   location,
   year,
 }: GetYearlyHolidaysInput): Promise<Holiday[]> {
-  if (!location) {
-    throw new Error('Location is required to fetch holidays');
-  }
-
   if (!Number.isFinite(year)) {
     throw new Error('Year is required to fetch holidays');
   }
@@ -199,31 +213,80 @@ export async function getYearlyHolidays({
   const zohoService = getZohoPeopleService();
   const { from, to } = buildDateRange(year);
 
-  let accessToken = await zohoService.getValidAccessTokenForApi();
-  let response = await fetchHolidays(accessToken, location, from, to);
+  const allHolidays: Holiday[] = [];
+  const PAGE_LIMIT = 200; // Zoho API typically limits to 200 records per page
+  const MAX_PAGES = 100; // Safety limit to prevent infinite loops
+  let page = 1;
+  let hasMore = true;
 
-  if (response.status === 401) {
-    accessToken = await zohoService.refreshAccessTokenForApi();
-    response = await fetchHolidays(accessToken, location, from, to);
+  while (hasMore && page <= MAX_PAGES) {
+    let accessToken = await zohoService.getValidAccessTokenForApi();
+    let response = await fetchHolidays(accessToken, location, from, to, page, PAGE_LIMIT);
+
+    if (response.status === 401) {
+      accessToken = await zohoService.refreshAccessTokenForApi();
+      response = await fetchHolidays(accessToken, location, from, to, page, PAGE_LIMIT);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Zoho holiday API request failed (${response.status}): ${errorText || response.statusText}`
+      );
+    }
+
+    const payload = await response.json().catch((error) => {
+      console.error('[Zoho] Failed to parse holiday response', error);
+      throw new Error('Unable to parse Zoho holiday response');
+    });
+
+    const holidays = extractHolidayArray(payload);
+    const normalized = holidays
+      .map((record) => normalizeRecord(record))
+      .filter((holiday): holiday is Holiday => Boolean(holiday));
+
+    allHolidays.push(...normalized);
+
+    console.log(
+      `[Zoho] Fetched page ${page} with ${normalized.length} holidays (total so far: ${allHolidays.length})`
+    );
+
+    // Check if there are more pages
+    // Zoho API may return pagination info in different formats
+    const hasMoreData =
+      payload.hasMore ||
+      payload.moreRecords ||
+      payload.nextPage ||
+      (payload.pageInfo && payload.pageInfo.hasMore) ||
+      (payload.response && payload.response.pageInfo && payload.response.pageInfo.hasMore) ||
+      false;
+
+    // If we got fewer records than the limit, we've reached the last page
+    if (holidays.length < PAGE_LIMIT) {
+      hasMore = false;
+    } else if (hasMoreData) {
+      // If API explicitly says there's more, continue
+      page++;
+    } else {
+      // If we got exactly PAGE_LIMIT records, there might be more
+      // Try fetching next page to check
+      if (holidays.length === PAGE_LIMIT) {
+        page++;
+        // Continue loop to fetch next page
+        // If next page returns empty or fewer records, loop will end
+      } else {
+        hasMore = false;
+      }
+    }
   }
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `Zoho holiday API request failed (${response.status}): ${errorText || response.statusText}`
+  if (page > MAX_PAGES) {
+    console.warn(
+      `[Zoho] Reached maximum page limit (${MAX_PAGES}). There might be more holidays not fetched.`
     );
   }
 
-  const payload = await response.json().catch((error) => {
-    console.error('[Zoho] Failed to parse holiday response', error);
-    throw new Error('Unable to parse Zoho holiday response');
-  });
-  console.log('[Zoho] Payload', payload);
-
-  const normalized = extractHolidayArray(payload)
-    .map((record) => normalizeRecord(record))
-    .filter((holiday): holiday is Holiday => Boolean(holiday));
-
-  return normalized;
+  console.log(`[Zoho] Total holidays fetched: ${allHolidays.length} from ${page - 1} page(s)`);
+  return allHolidays;
 }
 

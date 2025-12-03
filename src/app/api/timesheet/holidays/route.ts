@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { getYearlyHolidays } from '@/lib/zoho/getYearlyHolidays';
 import { ApiResponse, Holiday } from '@/types';
-import { getRedisClient } from '@/lib/redis';
+import { getCachedHolidays } from '@/lib/holiday-cache';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,15 +32,6 @@ export async function GET(request: NextRequest) {
     }
 
     const location = resolveLocation(session.staffProfile?.Location);
-    if (!location) {
-      return NextResponse.json<ApiResponse<Holiday[]>>(
-        {
-          success: false,
-          error: 'Unable to determine staff location from profile',
-        },
-        { status: 400 }
-      );
-    }
 
     const searchParams = request.nextUrl.searchParams;
     let yearParam = searchParams.get('year');
@@ -62,38 +52,27 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Check Redis cache first
-    const redis = getRedisClient();
-    const cacheKey = `holiday:${year}`;
-    
+    // Get holidays from Redis cache only
+    // If location is available, it will be used to filter holidays
+    // If not, all holidays will be returned
     try {
-      const cached = await redis.get<Holiday[]>(cacheKey);
-      if (cached) {
-        console.log('Using Redis cache for holidays');
-        return NextResponse.json<ApiResponse<Holiday[]>>({
-          success: true,
-          data: cached,
-        });
-      }
-    } catch (redisError) {
-      console.warn('[Holiday API] Redis cache read error (continuing to fetch):', redisError);
+      console.log('[Holiday API] Getting cached holidays for location:', location, 'and year:', year);
+      const holidays = await getCachedHolidays(location || undefined, year);
+      console.log('[Holiday API] Holidays:', holidays);
+      return NextResponse.json<ApiResponse<Holiday[]>>({
+        success: true,
+        data: holidays,
+      });
+    } catch (error) {
+      console.error('[Holiday API] Failed to get cached holidays:', error);
+      return NextResponse.json<ApiResponse<Holiday[]>>(
+        {
+          success: false,
+          error: 'Failed to retrieve holidays from cache. Please contact administrator to refresh holiday cache.',
+        },
+        { status: 500 }
+      );
     }
-
-    // Fetch fresh data from Zoho
-    console.log('Fetching fresh holiday data from Zoho');
-    const holidays = await getYearlyHolidays({ location, year });
-    
-    // Cache in Redis with 12 hours TTL
-    try {
-      await redis.setex(cacheKey, 43200, JSON.stringify(holidays));
-    } catch (redisError) {
-      console.warn('[Holiday API] Redis cache write error:', redisError);
-    }
-
-    return NextResponse.json<ApiResponse<Holiday[]>>({
-      success: true,
-      data: holidays,
-    });
   } catch (error) {
     console.error('[API] Failed to fetch holidays:', error);
     return NextResponse.json<ApiResponse<Holiday[]>>(

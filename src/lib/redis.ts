@@ -7,6 +7,7 @@ type RedisClient = UpstashRedis | Redis;
 interface RedisAdapter {
   get<T>(key: string): Promise<T | null>;
   setex(key: string, seconds: number, value: string): Promise<void>;
+  del(key: string): Promise<void>;
 }
 
 // Upstash Redis adapter
@@ -20,6 +21,10 @@ class UpstashRedisAdapter implements RedisAdapter {
 
   async setex(key: string, seconds: number, value: string): Promise<void> {
     await this.client.setex(key, seconds, value);
+  }
+
+  async del(key: string): Promise<void> {
+    await this.client.del(key);
   }
 }
 
@@ -42,6 +47,10 @@ class LocalRedisAdapter implements RedisAdapter {
   async setex(key: string, seconds: number, value: string): Promise<void> {
     // value is already a string (JSON.stringify'd by caller)
     await this.client.setex(key, seconds, value);
+  }
+
+  async del(key: string): Promise<void> {
+    await this.client.del(key);
   }
 }
 

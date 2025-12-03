@@ -3,6 +3,7 @@ import { getZohoPeopleService } from '@/lib/zoho-people';
 import { WebClient } from '@slack/web-api';
 import nodemailer from 'nodemailer';
 import { ApiResponse } from '@/types';
+import { refreshHolidayCache } from '@/lib/holiday-cache';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,6 +41,14 @@ export async function POST(request: NextRequest) {
         },
         { status: 401 }
       );
+    }
+
+    // Refresh holiday cache for all locations and years
+    try {
+      await refreshHolidayCache();
+    } catch (error) {
+      console.error('[Friday Reminder] Failed to refresh holiday cache:', error);
+      // Continue with reminder even if holiday refresh fails
     }
 
     // Get all employees from Zoho People
