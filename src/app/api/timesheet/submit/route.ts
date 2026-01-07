@@ -12,7 +12,7 @@ const submitTimesheetSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   entries: z.array(
     z.object({
-      projectId: z.string().min(1),
+      projectId: z.string().min(1), // Can be either a valid project ID or a custom project name
       taskId: z.string().min(1),
       hours: z.number().min(0).max(24),
     })
@@ -61,18 +61,10 @@ export async function POST(request: NextRequest) {
     const projectMap = new Map(projects.map((p) => [p.ProjectID, p]));
     const taskMap = new Map(tasks.map((t) => [t.TaskID, t]));
 
-    // Validate all entries reference valid projects and tasks (only if entries exist)
+    // Validate all entries reference valid tasks (only if entries exist)
+    // Note: projectId can be either a valid project ID or a custom project name (text)
     if (entries.length > 0) {
       for (const entry of entries) {
-        if (!projectMap.has(entry.projectId)) {
-          return NextResponse.json<ApiResponse<void>>(
-            {
-              success: false,
-              error: `Invalid project ID: ${entry.projectId}`,
-            },
-            { status: 400 }
-          );
-        }
         if (!taskMap.has(entry.taskId)) {
           return NextResponse.json<ApiResponse<void>>(
             {
@@ -101,9 +93,10 @@ export async function POST(request: NextRequest) {
       existingEntriesMap.set(key, { rowNumber, entry });
     });
 
-    // Create a set of submitted entries by Project ID + Task ID
+    // Create a set of submitted entries by Project ID/Name + Task ID
     const submittedEntriesSet = new Set<string>();
     entries.forEach((entry) => {
+      // projectId can be either a valid project ID or a custom project name
       const key = `${entry.projectId}|${entry.taskId}`;
       submittedEntriesSet.add(key);
     });
@@ -123,15 +116,68 @@ export async function POST(request: NextRequest) {
     }
 
     // Prepare time log rows for entries to add/update
+    // First, handle custom projects (create them in Projects sheet)
+    const projectCreationPromises: Promise<void>[] = [];
+    const projectIdMap = new Map<string, string>(); // Maps custom project name to created Project ID
+    
+    for (const entry of entries) {
+      const project = projectMap.get(entry.projectId);
+      // If projectId is not found in projectMap, it's a custom project name
+      if (!project) {
+        // Check if we've already created this project in this batch
+        if (!projectIdMap.has(entry.projectId)) {
+          // Create new project in Projects sheet
+          const createPromise = sheetsService.createProject(entry.projectId).then((newProject) => {
+            projectIdMap.set(entry.projectId, newProject.ProjectID);
+            // Update projectMap with the new project
+            projectMap.set(newProject.ProjectID, newProject);
+          });
+          projectCreationPromises.push(createPromise);
+        }
+      }
+    }
+    
+    // Wait for all project creations to complete
+    if (projectCreationPromises.length > 0) {
+      await Promise.all(projectCreationPromises);
+      // Refresh projects list after creating new projects
+      const updatedProjects = await getCachedProjects();
+      updatedProjects.forEach((p) => {
+        if (!projectMap.has(p.ProjectID)) {
+          projectMap.set(p.ProjectID, p);
+        }
+      });
+    }
+    
+    // Now prepare time log rows
     const timeLogRows: TimeLogRow[] = entries.map((entry) => {
-      const project = projectMap.get(entry.projectId)!;
       const task = taskMap.get(entry.taskId)!;
+      
+      // Check if projectId is a valid project ID or a custom project name
+      let project = projectMap.get(entry.projectId);
+      
+      // If not found, it might be a custom project name that we just created
+      if (!project && projectIdMap.has(entry.projectId)) {
+        const createdProjectId = projectIdMap.get(entry.projectId)!;
+        project = projectMap.get(createdProjectId);
+      }
+      
+      if (!project) {
+        throw new Error(`Project not found: ${entry.projectId}`);
+      }
+      
+      const projectData = {
+        ProjectID: project.ProjectID,
+        ProjectClient: project.ProjectClient,
+        ProjectName: project.ProjectName,
+        ProjectCode: project.ProjectCode,
+      };
 
       // Generate Time Log ID from Date + Staff ID + Project ID + Task ID
       const timeLogId = sheetsService.generateTimeLogId(
         date,
         session.staffProfile!.EmployeeID,
-        project.ProjectID,
+        projectData.ProjectID,
         task.TaskID
       );
 
@@ -142,10 +188,10 @@ export async function POST(request: NextRequest) {
         'Staff First Name': session.staffProfile!.FirstName,
         'Staff Last Name': session.staffProfile!.LastName,
         'Staff Position': session.staffProfile!.Position,
-        'Project ID': project.ProjectID,
-        'Project Client': project.ProjectClient,
-        'Project Name': project.ProjectName,
-        'Project Code': project.ProjectCode,
+        'Project ID': projectData.ProjectID,
+        'Project Client': projectData.ProjectClient,
+        'Project Name': projectData.ProjectName,
+        'Project Code': projectData.ProjectCode,
         'Task ID': task.TaskID,
         Task: task.Task,
         Hours: entry.hours,

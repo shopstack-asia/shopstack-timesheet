@@ -29,6 +29,7 @@ export default function TimeEntryForm({
   const [projectId, setProjectId] = useState(entry.projectId);
   const [taskId, setTaskId] = useState(entry.taskId);
   const [hours, setHours] = useState(entry.hours.toString());
+  const [isCustomProject, setIsCustomProject] = useState<boolean>(false);
   
   // Validation states
   const [touched, setTouched] = useState({
@@ -41,7 +42,7 @@ export default function TimeEntryForm({
   // Check if fields are valid
   const isValid = {
     client: selectedClient !== '',
-    project: projectId !== '',
+    project: projectId !== '' && projectId.trim() !== '',
     task: taskId !== '',
     hours: parseFloat(hours) > 0,
   };
@@ -106,6 +107,15 @@ export default function TimeEntryForm({
       const currentProject = projects.find((p) => p.ProjectID === projectId);
       if (currentProject && currentProject.ProjectClient !== selectedClient) {
         setProjectId('');
+        setIsCustomProject(false);
+      }
+      // Reset custom project mode if client is not "*New"
+      if (selectedClient !== '*New') {
+        setIsCustomProject(false);
+        // If projectId is not a valid project ID, clear it
+        if (projectId && !projects.find((p) => p.ProjectID === projectId)) {
+          setProjectId('');
+        }
       }
     }
   }, [selectedClient, projectId, projects]);
@@ -124,11 +134,17 @@ export default function TimeEntryForm({
     setTouched((prev) => ({ ...prev, client: true }));
     setSelectedClient(value);
     setProjectId(''); // Reset project when client changes
+    // Reset custom project mode when client changes
+    if (value !== '*New') {
+      setIsCustomProject(false);
+    }
   };
   
   const handleProjectChange = (value: string) => {
     setTouched((prev) => ({ ...prev, project: true }));
     setProjectId(value);
+    // If selecting from dropdown, disable custom mode
+    setIsCustomProject(false);
   };
   
   const handleTaskChange = (value: string) => {
@@ -139,6 +155,17 @@ export default function TimeEntryForm({
   const handleHoursChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTouched((prev) => ({ ...prev, hours: true }));
     setHours(e.target.value);
+  };
+
+  const handleCustomProjectToggle = () => {
+    setIsCustomProject(true);
+    setProjectId(''); // Clear selected project
+    setTouched((prev) => ({ ...prev, project: true }));
+  };
+
+  const handleCustomProjectNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTouched((prev) => ({ ...prev, project: true }));
+    setProjectId(e.target.value); // Store directly in projectId
   };
 
   return (
@@ -207,16 +234,75 @@ export default function TimeEntryForm({
                 Project
               </label>
             )}
-            <div className="flex-1">
-              <SearchableSelect
-                options={projectOptions}
-                value={projectId}
-                onChange={handleProjectChange}
-                placeholder={showLabels ? "Select Project" : "Select Project *"}
-                disabled={disabled || !selectedClient}
-                required
-                error={showErrors.project}
-              />
+            <div className="flex-1 flex items-center gap-2">
+              {isCustomProject && selectedClient === '*New' ? (
+                <>
+                  <input
+                    type="text"
+                    value={projectId}
+                    onChange={handleCustomProjectNameChange}
+                    onBlur={() => setTouched((prev) => ({ ...prev, project: true }))}
+                    placeholder={showLabels ? "Enter Project Name" : "Enter Project Name *"}
+                    disabled={disabled || !selectedClient}
+                    className={`flex-1 px-2 py-1 text-sm border rounded focus:outline-none focus:ring-2 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 ${
+                      disabled
+                        ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-500 cursor-not-allowed border-gray-300 dark:border-gray-700'
+                        : showErrors.project
+                        ? 'border-red-500 dark:border-red-600 focus:ring-red-500 dark:focus:ring-red-600'
+                        : 'border-gray-300 dark:border-gray-600 focus:ring-blue-500 dark:focus:ring-blue-600'
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCustomProject(false);
+                      setProjectId('');
+                    }}
+                    disabled={disabled}
+                    className="px-2 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                    title="Switch back to dropdown"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <SearchableSelect
+                    options={projectOptions}
+                    value={projectId}
+                    onChange={handleProjectChange}
+                    placeholder={showLabels ? "Select Project" : "Select Project *"}
+                    disabled={disabled || !selectedClient}
+                    required
+                    error={showErrors.project}
+                    className="flex-1"
+                  />
+                  {selectedClient === '*New' && (
+                    <button
+                      type="button"
+                      onClick={handleCustomProjectToggle}
+                      disabled={disabled || !selectedClient}
+                      className="px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 border border-blue-300 dark:border-blue-700 rounded hover:bg-blue-100 dark:hover:bg-blue-900/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                      title="Enter custom project name"
+                    >
+                      New
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           </div>
           {showErrors.project && (

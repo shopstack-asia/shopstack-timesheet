@@ -107,6 +107,80 @@ export class GoogleSheetsService {
   }
 
   /**
+   * Get the next Project ID (running number)
+   * Reads all projects and finds the highest numeric Project ID, then returns the next one
+   */
+  async getNextProjectId(): Promise<string> {
+    try {
+      const projects = await this.getProjects();
+      
+      // Find the highest numeric Project ID
+      let maxId = 0;
+      projects.forEach((project) => {
+        const projectIdNum = parseInt(project.ProjectID, 10);
+        if (!isNaN(projectIdNum) && projectIdNum > maxId) {
+          maxId = projectIdNum;
+        }
+      });
+      
+      // Return the next Project ID as a string
+      return String(maxId + 1);
+    } catch (error: any) {
+      console.error('[Google Sheets] Error getting next Project ID:', error);
+      throw new Error(`Failed to get next Project ID: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create a new project in Projects sheet
+   * @param projectName - The name of the new project
+   * @returns The newly created Project object with the generated Project ID
+   */
+  async createProject(projectName: string): Promise<Project> {
+    try {
+      // Get the next Project ID
+      const projectId = await this.getNextProjectId();
+      
+      // Create project data
+      const projectCode = `NEW-${projectName}`;
+      const projectData: Project = {
+        ProjectID: projectId,
+        ProjectClient: '*New',
+        ProjectName: projectName,
+        ProjectCode: projectCode,
+      };
+      
+      // Append new row to Projects sheet
+      const row = [
+        projectData.ProjectID,
+        projectData.ProjectClient,
+        projectData.ProjectName,
+        projectData.ProjectCode,
+      ];
+      
+      await this.sheets.spreadsheets.values.append({
+        spreadsheetId: this.spreadsheetId,
+        range: 'Projects!A:D',
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [row],
+        },
+      });
+      
+      // Clear cache to ensure fresh data on next read
+      clearSheetsCache();
+      
+      // console.log(`[Google Sheets] Created new project: ${projectData.ProjectID} - ${projectData.ProjectName}`);
+      
+      return projectData;
+    } catch (error: any) {
+      console.error('[Google Sheets] Error creating project:', error);
+      throw new Error(`Failed to create project in Google Sheets: ${error.message}`);
+    }
+  }
+
+  /**
    * Get all tasks from Roles and Tasks sheet
    */
   async getTasks(): Promise<Task[]> {

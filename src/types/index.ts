@@ -36,7 +36,7 @@ export interface Task {
 // Time Entry (UI representation)
 export interface TimeEntry {
   id: string;
-  projectId: string;
+  projectId: string; // Can be either a valid project ID or a custom project name (text)
   taskId: string;
   hours: number;
 }

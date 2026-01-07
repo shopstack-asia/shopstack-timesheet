@@ -405,7 +405,8 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
         // Check if entry has all required fields
         // Note: We can't check client here as it's not stored in entry
         // Client validation is handled in TimeEntryForm component
-        return !entry.projectId || !entry.taskId || entry.hours <= 0;
+        // projectId can be either a valid project ID or a custom project name (text from textbox)
+        return !entry.projectId || entry.projectId.trim() === '' || !entry.taskId || entry.hours <= 0;
       });
       if (invalidEntries.length > 0) {
         const dayName = format(parseISO(day.date), 'EEEE');
