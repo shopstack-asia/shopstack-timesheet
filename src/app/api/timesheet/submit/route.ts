@@ -117,7 +117,6 @@ export async function POST(request: NextRequest) {
 
     // Prepare time log rows for entries to add/update
     // First, handle custom projects (create them in Projects sheet)
-    const projectCreationPromises: Promise<void>[] = [];
     const projectIdMap = new Map<string, string>(); // Maps custom project name to created Project ID
     
     for (const entry of entries) {
@@ -126,21 +125,17 @@ export async function POST(request: NextRequest) {
       if (!project) {
         // Check if we've already created this project in this batch
         if (!projectIdMap.has(entry.projectId)) {
-          // Create new project in Projects sheet
-          const createPromise = sheetsService.createProject(entry.projectId).then((newProject) => {
-            projectIdMap.set(entry.projectId, newProject.ProjectID);
-            // Update projectMap with the new project
-            projectMap.set(newProject.ProjectID, newProject);
-          });
-          projectCreationPromises.push(createPromise);
+          // Create new project in Projects sheet (one at a time)
+          const newProject = await sheetsService.createProject(entry.projectId);
+          projectIdMap.set(entry.projectId, newProject.ProjectID);
+          // Update projectMap with the new project
+          projectMap.set(newProject.ProjectID, newProject);
         }
       }
     }
     
-    // Wait for all project creations to complete
-    if (projectCreationPromises.length > 0) {
-      await Promise.all(projectCreationPromises);
-      // Refresh projects list after creating new projects
+    // Refresh projects list after creating new projects
+    if (projectIdMap.size > 0) {
       const updatedProjects = await getCachedProjects();
       updatedProjects.forEach((p) => {
         if (!projectMap.has(p.ProjectID)) {
