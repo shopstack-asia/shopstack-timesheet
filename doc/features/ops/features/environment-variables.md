@@ -95,6 +95,17 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | Legacy aliases (still accepted) |
 | `TIMESHEET_AGENT_TIMEZONE` | Agent date resolution (default `Asia/Bangkok`) |
 
+**Business API (CS-Core foundation)**:
+
+| Variable | Purpose |
+|----------|---------|
+| `BUSINESS_API_BASE_URL` | **Required** when Business API enabled (startup validates if set) |
+| `BUSINESS_API_KEY` | Bearer token secret (never log) |
+| `BUSINESS_API_TIMEOUT_MS` | Per-request timeout (default `15000`) |
+| `BUSINESS_API_RETRY` | Max retries for timeout/network/429/503/504 (default `2`) |
+| `BUSINESS_API_LOGGING` | Structured request logs without secrets (default `true`) |
+| `BUSINESS_API_VALIDATE_ON_STARTUP` | `true` = always validate Business API env at process start |
+
 ##### Local development (Slack)
 
 1. `cp .env.example .env`
