@@ -42,6 +42,16 @@ export async function GET(request: NextRequest) {
 
     const employeeId = session.staffProfile.EmployeeID;
 
+    const { enforceRateLimit } = await import('@/lib/rate-limit');
+    const limited = await enforceRateLimit(request, {
+      bucket: 'staff-leave',
+      limit: 60,
+      windowSeconds: 60,
+      userKey: employeeId,
+      failOpen: false,
+    });
+    if (!limited.ok) return limited.response;
+
     // Get date range from query params or default to 3 months range
     const searchParams = request.nextUrl.searchParams;
     const fromDate = searchParams.get('from') || format(subMonths(new Date(), 3), 'yyyy-MM-dd');

@@ -1,6 +1,7 @@
 import { google } from 'googleapis';
 import { createHash } from 'crypto';
 import { Project, Task, TimeLogRow } from '@/types';
+import { sanitizeSheetRow } from '@/lib/sheets-sanitize';
 
 export class GoogleSheetsService {
   /**
@@ -161,10 +162,10 @@ export class GoogleSheetsService {
       await this.sheets.spreadsheets.values.append({
         spreadsheetId: this.spreadsheetId,
         range: 'Projects!A:D',
-        valueInputOption: 'USER_ENTERED',
+        valueInputOption: 'RAW',
         insertDataOption: 'INSERT_ROWS',
         requestBody: {
-          values: [row],
+          values: [sanitizeSheetRow(row)],
         },
       });
       
@@ -313,9 +314,9 @@ export class GoogleSheetsService {
       await this.sheets.spreadsheets.values.update({
         spreadsheetId: this.spreadsheetId,
         range: `Time Log!A${rowNumber}:M${rowNumber}`,
-        valueInputOption: 'USER_ENTERED',
+        valueInputOption: 'RAW',
         requestBody: {
-          values: [row],
+          values: [sanitizeSheetRow(row)],
         },
       });
 
@@ -378,26 +379,28 @@ export class GoogleSheetsService {
 
       // Perform appends for new entries
       if (entriesToAppend.length > 0) {
-        const rows = entriesToAppend.map((entry) => [
-          entry['Time Log ID'],
-          entry.Date,
-          entry['Staff ID'],
-          entry['Staff First Name'],
-          entry['Staff Last Name'],
-          entry['Staff Position'],
-          entry['Project ID'],
-          entry['Project Client'],
-          entry['Project Name'],
-          entry['Project Code'],
-          entry['Task ID'],
-          entry.Task,
-          entry.Hours,
-        ]);
+        const rows = entriesToAppend.map((entry) =>
+          sanitizeSheetRow([
+            entry['Time Log ID'],
+            entry.Date,
+            entry['Staff ID'],
+            entry['Staff First Name'],
+            entry['Staff Last Name'],
+            entry['Staff Position'],
+            entry['Project ID'],
+            entry['Project Client'],
+            entry['Project Name'],
+            entry['Project Code'],
+            entry['Task ID'],
+            entry.Task,
+            entry.Hours,
+          ])
+        );
 
         await this.sheets.spreadsheets.values.append({
           spreadsheetId: this.spreadsheetId,
           range: 'Time Log!A:M',
-          valueInputOption: 'USER_ENTERED',
+          valueInputOption: 'RAW',
           insertDataOption: 'INSERT_ROWS',
           requestBody: {
             values: rows,

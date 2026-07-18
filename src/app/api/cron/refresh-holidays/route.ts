@@ -1,46 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { refreshHolidayCache } from '@/lib/holiday-cache';
 import { ApiResponse } from '@/types';
+import { assertCronAuth } from '@/lib/cron-auth';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
-// Verify cron secret (set in environment variables)
-const CRON_SECRET = process.env.CRON_SECRET || '';
+async function runRefresh(request: NextRequest) {
+  const denied = assertCronAuth(request);
+  if (denied) return denied;
 
-export async function POST(request: NextRequest) {
+  const limited = await enforceRateLimit(request, {
+    bucket: 'cron-refresh-holidays',
+    limit: 10,
+    windowSeconds: 60,
+    failOpen: false,
+  });
+  if (!limited.ok) return limited.response;
+
   try {
-    // Verify cron secret
-    const authHeader = request.headers.get('authorization');
-    if (authHeader !== `Bearer ${CRON_SECRET}`) {
-      return NextResponse.json<ApiResponse<void>>(
-        {
-          success: false,
-          error: 'Unauthorized',
-        },
-        { status: 401 }
-      );
-    }
-
-    // Refresh holiday cache
     await refreshHolidayCache();
-
-    return NextResponse.json<ApiResponse<void>>({
-      success: true,
-    });
+    return NextResponse.json<ApiResponse<void>>({ success: true });
   } catch (error) {
     console.error('Error refreshing holiday cache:', error);
     return NextResponse.json<ApiResponse<void>>(
-      {
-        success: false,
-        error: error instanceof Error ? error.message : 'Failed to refresh holiday cache',
-      },
+      { success: false, error: 'Failed to refresh holiday cache' },
       { status: 500 }
     );
   }
 }
 
-// Also support GET for manual testing
-export async function GET(request: NextRequest) {
-  return POST(request);
+export async function POST(request: NextRequest) {
+  return runRefresh(request);
 }
 
+/**
+ * Vercel Cron invokes GET. Side effects require valid CRON_SECRET (fail closed).
+ */
+export async function GET(request: NextRequest) {
+  return runRefresh(request);
+}

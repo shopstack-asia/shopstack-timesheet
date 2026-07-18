@@ -10,6 +10,16 @@ export interface RedisAdapter {
   /** SET key value EX ttl NX — returns true if the key was set */
   setNx(key: string, value: string, ttlSeconds: number): Promise<boolean>;
   del(key: string): Promise<void>;
+  /** Atomic INCR; returns the new value */
+  incr(key: string): Promise<number>;
+  /** Set TTL in seconds (does not change value) */
+  expire(key: string, seconds: number): Promise<void>;
+  /** Run a Lua script atomically (EVAL) */
+  evalScript<T = unknown>(
+    script: string,
+    keys: string[],
+    args: (string | number)[]
+  ): Promise<T>;
 }
 
 // Upstash Redis adapter
@@ -32,6 +42,22 @@ class UpstashRedisAdapter implements RedisAdapter {
 
   async del(key: string): Promise<void> {
     await this.client.del(key);
+  }
+
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.client.expire(key, seconds);
+  }
+
+  async evalScript<T = unknown>(
+    script: string,
+    keys: string[],
+    args: (string | number)[]
+  ): Promise<T> {
+    return this.client.eval<unknown[], T>(script, keys, args);
   }
 }
 
@@ -63,6 +89,28 @@ class LocalRedisAdapter implements RedisAdapter {
 
   async del(key: string): Promise<void> {
     await this.client.del(key);
+  }
+
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.client.expire(key, seconds);
+  }
+
+  async evalScript<T = unknown>(
+    script: string,
+    keys: string[],
+    args: (string | number)[]
+  ): Promise<T> {
+    const result = await this.client.eval(
+      script,
+      keys.length,
+      ...keys,
+      ...args.map(String)
+    );
+    return result as T;
   }
 }
 

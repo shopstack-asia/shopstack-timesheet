@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackSignature } from '@/lib/slack/client';
 import { processSlackEvent } from '@/lib/slack/event-handler';
 import { waitUntil } from '@vercel/functions';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -15,6 +16,14 @@ export async function POST(request: NextRequest) {
   if (!verifySlackSignature(signingSecret, signature, timestamp, rawBody)) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
+
+  const limited = await enforceRateLimit(request, {
+    bucket: 'slack-events',
+    limit: 300,
+    windowSeconds: 60,
+    failOpen: false,
+  });
+  if (!limited.ok) return limited.response;
 
   let body: {
     type?: string;

@@ -42,6 +42,16 @@ export async function GET(request: NextRequest) {
 
     const employeeId = session.staffProfile.EmployeeID;
 
+    const { enforceRateLimit } = await import('@/lib/rate-limit');
+    const limited = await enforceRateLimit(request, {
+      bucket: 'staff-leave-monthly',
+      limit: 60,
+      windowSeconds: 60,
+      userKey: employeeId,
+      failOpen: false,
+    });
+    if (!limited.ok) return limited.response;
+
     // Get year and month from query params
     const searchParams = request.nextUrl.searchParams;
     const yearParam = searchParams.get('year');

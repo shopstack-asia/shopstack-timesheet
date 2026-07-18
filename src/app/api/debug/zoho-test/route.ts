@@ -1,38 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { assertDebugAccess } from '@/lib/debug-auth';
 import { getZohoPeopleService } from '@/lib/zoho-people';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   const denied = assertDebugAccess(request);
   if (denied) return denied;
-  const searchParams = request.nextUrl.searchParams;
-  const email = searchParams.get('email');
+
+  const limited = await enforceRateLimit(request, {
+    bucket: 'debug-zoho',
+    limit: 20,
+    windowSeconds: 60,
+    failOpen: false,
+  });
+  if (!limited.ok) return limited.response;
+
+  const email = request.nextUrl.searchParams.get('email');
 
   try {
-    if (!email) {
-      return NextResponse.json({
-        error: 'Please provide email parameter: ?email=test@shopstack.asia',
-      }, { status: 400 });
+    if (!email || !email.toLowerCase().endsWith('@shopstack.asia')) {
+      return NextResponse.json(
+        { success: false, error: 'Provide a @shopstack.asia email query parameter' },
+        { status: 400 }
+      );
     }
 
-    // Test Zoho connection
     const zohoService = getZohoPeopleService();
     const staffProfile = await zohoService.getEmployeeByEmail(email);
 
     if (!staffProfile) {
       return NextResponse.json({
         success: false,
-        message: `Employee not found in Zoho People for email: ${email}`,
-        email: email,
-        isShopstackDomain: email.endsWith('@shopstack.asia'),
+        message: 'Employee not found',
       });
     }
 
     return NextResponse.json({
       success: true,
-      message: 'Employee found in Zoho People',
+      message: 'Employee found',
       profile: {
         EmployeeID: staffProfile.EmployeeID,
         FirstName: staffProfile.FirstName,
@@ -41,38 +48,11 @@ export async function GET(request: NextRequest) {
         Position: staffProfile.Position,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Zoho test error:', error);
-    
-    let errorMessage = 'Unknown error';
-    let errorDetails: any = {};
-    
-    if (error instanceof Error) {
-      errorMessage = error.message;
-      errorDetails = {
-        message: error.message,
-        stack: error.stack,
-      };
-    }
-    
-    if (error.response) {
-      errorDetails.response = {
-        status: error.response.status,
-        statusText: error.response.statusText,
-        data: error.response.data,
-      };
-    }
-    
-    return NextResponse.json({
-      success: false,
-      error: errorMessage,
-      details: errorDetails,
-      troubleshooting: {
-        checkCredentials: 'Verify ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, and ZOHO_REFRESH_TOKEN in .env',
-        checkDomain: `Current ZOHO_API_DOMAIN: ${process.env.ZOHO_API_DOMAIN || 'https://people.zoho.com'}`,
-        checkEmail: email ? `Email tested: ${email}` : 'No email parameter provided',
-      },
-    }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'Zoho lookup failed' },
+      { status: 500 }
+    );
   }
 }
-

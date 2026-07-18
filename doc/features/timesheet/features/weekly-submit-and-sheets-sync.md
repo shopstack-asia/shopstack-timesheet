@@ -48,9 +48,10 @@ Persist accurate weekly time against projects/tasks for reporting.
 
 | Layer | Rules |
 |-------|--------|
-| Client | ≥1 entry in week; each entry project/task non-empty; hours > 0 |
-| API Zod | date `YYYY-MM-DD`; hours 0–24; projectId/taskId min length 1 |
-| API | Invalid task ID → 400; unauthorized → 401; lock/Redis failure → 503 |
+| Client | ≥1 entry in week; each entry project/task non-empty; hours > 0; sends leave/holiday/future/over-24 ack flags when applicable |
+| API Zod | date `YYYY-MM-DD`; hours 0–24; projectId/taskId min length 1; optional ack booleans |
+| API policy | Server enforces leave (OVERRIDE ack), holiday ack, future ack, day total > 24 ack, hours > 0 for non-empty days; holiday/leave dependency unavailable → 503 (fail closed; never treat miss as empty holidays) |
+| API | Invalid task ID → 400; policy reject → 400; unauthorized → 401; rate limit → 429; rate-limit Redis down → 503 (`failOpen: false`); lock/Redis failure → 503; holiday cache unavailable → 503 |
 
 ### Edge Cases
 

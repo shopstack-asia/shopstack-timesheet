@@ -424,7 +424,6 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     setSubmitting(true);
 
     try {
-      // One click: POST each day with entries sequentially (avoids self-race on Sheets rows)
       const results = await submitWeekDaysSequentially(
         timesheet.map((day) => ({
           date: day.date,
@@ -433,6 +432,7 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
             taskId: entry.taskId,
             hours: entry.hours,
           })),
+          // No automatic acknowledgments — server returns policyCode; we confirm explicitly.
         })),
         async (day) => {
           const response = await fetch('/api/timesheet/submit', {
@@ -443,11 +443,34 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
             body: JSON.stringify({
               date: day.date,
               entries: day.entries,
+              leaveOverride: day.leaveOverride,
+              holidayAcknowledged: day.holidayAcknowledged,
+              futureAcknowledged: day.futureAcknowledged,
+              over24Acknowledged: day.over24Acknowledged,
             }),
           });
 
           const result = await response.json();
-          return { success: result.success, error: result.error };
+          return {
+            success: result.success,
+            error: result.error,
+            policyCode: result.policyCode,
+          };
+        },
+        async (date, policyCode, message) => {
+          const label =
+            policyCode === 'LEAVE_OVERRIDE_REQUIRED'
+              ? 'full-day leave'
+              : policyCode === 'HOLIDAY_ACK_REQUIRED'
+                ? 'holiday'
+                : policyCode === 'FUTURE_ACK_REQUIRED'
+                  ? 'future date'
+                  : policyCode === 'OVER_24_ACK_REQUIRED'
+                    ? 'more than 24 hours'
+                    : policyCode;
+          return window.confirm(
+            `${message}\n\nDate: ${date}\nCondition: ${label}\n\nClick OK to acknowledge and retry this day, or Cancel to skip.`
+          );
         }
       );
       const failedDays = results.filter((r) => !r.success);

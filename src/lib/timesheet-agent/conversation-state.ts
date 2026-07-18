@@ -33,6 +33,20 @@ export type PendingWrite = {
   summaryText: string;
   status: 'pending' | 'executing' | 'completed' | 'cancelled';
   requireKeyword?: 'YES' | 'CLEAR';
+  /**
+   * Policy codes presented to the user for this pending write.
+   * YES only acknowledges these codes (plus leaveOverride if set via OVERRIDE).
+   */
+  presentedPolicyCodes?: import('@/lib/timesheet-agent/guardrails').PolicyCode[];
+  /** Acknowledgments already obtained before pending (e.g. leave OVERRIDE) */
+  policyAcks?: {
+    leaveOverride?: boolean;
+    holidayAcknowledged?: boolean;
+    futureAcknowledged?: boolean;
+    over24Acknowledged?: boolean;
+  };
+  /** Fingerprint of payload.entries at pending creation */
+  payloadFingerprint?: string;
 };
 
 export type ConversationState = {
@@ -143,6 +157,8 @@ export async function createPendingWrite(
     expiresAt: now + PENDING_TTL_SECONDS * 1000,
     status: 'pending',
     baseFingerprint: dayFingerprint(input.baseSnapshot),
+    payloadFingerprint:
+      input.payloadFingerprint ?? dayFingerprint(input.payload.entries),
   };
 
   const tKey = makeThreadKey(input.channelId, input.threadTs);

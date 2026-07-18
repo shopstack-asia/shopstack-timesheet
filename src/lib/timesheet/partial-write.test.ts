@@ -52,6 +52,12 @@ describe('partial-write failure handling', () => {
         code = 'LOCK_TIMEOUT';
       },
     }));
+    vi.doMock('@/lib/timesheet/submit-policy', () => ({
+      assertSubmitBusinessRules: async () => undefined,
+      SubmitPolicyError: class extends Error {
+        statusCode = 400;
+      },
+    }));
 
     const { submitDayTimesheetForStaff } = await import(
       '@/lib/timesheet/timesheet-service'
@@ -162,6 +168,12 @@ describe('partial-write failure handling', () => {
         code = 'LOCK_TIMEOUT';
       },
     }));
+    vi.doMock('@/lib/timesheet/submit-policy', () => ({
+      assertSubmitBusinessRules: async () => undefined,
+      SubmitPolicyError: class extends Error {
+        statusCode = 400;
+      },
+    }));
 
     const { submitDayTimesheetForStaff } = await import(
       '@/lib/timesheet/timesheet-service'
@@ -242,6 +254,12 @@ describe('partial-write failure handling', () => {
       withTimeLogWriteLock: async (fn: () => Promise<unknown>) => fn(),
       SheetsWriteLockError: class extends Error {
         code = 'LOCK_TIMEOUT';
+      },
+    }));
+    vi.doMock('@/lib/timesheet/submit-policy', () => ({
+      assertSubmitBusinessRules: async () => undefined,
+      SubmitPolicyError: class extends Error {
+        statusCode = 400;
       },
     }));
 

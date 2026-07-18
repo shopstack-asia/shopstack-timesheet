@@ -27,6 +27,7 @@ import {
 import {
   evaluateClearGuards,
   evaluateWriteGuards,
+  PolicyCode,
 } from '@/lib/timesheet-agent/guardrails';
 import {
   claimPendingWrite,
@@ -694,58 +695,98 @@ async function buildPendingSubmit(
   targetEntry: DayEntry
 ): Promise<AgentResponse> {
   const { leave, holidays } = await loadLeaveHolidays(req.auth, date);
+  if (leave === null || holidays === null) {
+    return {
+      text: 'Leave or holiday data is temporarily unavailable. Please try again later.',
+    };
+  }
+
   const tz = getAgentTimeZone();
   const today = zonedYmd(tz);
   const isFuture = date > today;
 
-  const guard = evaluateWriteGuards({
+  const leaveOverride = state.flags?.leaveOverride === true;
+  const trialAcks = {
+    leaveOverride,
+    holidayAcknowledged: false,
+    futureAcknowledged: false,
+    over24Acknowledged: false,
+  };
+  const presentedPolicyCodes: PolicyCode[] = [];
+
+  // Collect all YES-ack policy codes for this payload (without treating them as already granted)
+  for (let i = 0; i < 8; i++) {
+    const guard = evaluateWriteGuards({
+      date,
+      daySet,
+      leave,
+      holidays,
+      isFuture,
+      createCustomProject: false,
+      ...trialAcks,
+    });
+
+    if (guard.ok) {
+      break;
+    }
+
+    if (guard.requireKeyword === 'OVERRIDE') {
+      state.awaitingLeaveOverride = true;
+      state.draft = {
+        ...state.draft,
+        date,
+        projectId: targetEntry.projectId,
+        taskId: targetEntry.taskId,
+        hours: targetEntry.hours,
+        intent: operationType === 'update' ? 'update_entry' : 'add_entry',
+      };
+      await saveConversation(state);
+      return {
+        text: `${guard.blockMessage}\n\nType *OVERRIDE* exactly (you will still need *YES* before anything is saved). Or *CANCEL*.`,
+      };
+    }
+
+    if (guard.requireKeyword === 'YES' && guard.policyCode) {
+      presentedPolicyCodes.push(guard.policyCode);
+      if (guard.policyCode === 'HOLIDAY_ACK_REQUIRED') {
+        trialAcks.holidayAcknowledged = true;
+      } else if (guard.policyCode === 'FUTURE_ACK_REQUIRED') {
+        trialAcks.futureAcknowledged = true;
+      } else if (guard.policyCode === 'OVER_24_ACK_REQUIRED') {
+        trialAcks.over24Acknowledged = true;
+      } else {
+        return { text: guard.blockMessage || 'Cannot proceed.' };
+      }
+      continue;
+    }
+
+    return { text: guard.blockMessage || 'Cannot proceed.' };
+  }
+
+  const finalGuard = evaluateWriteGuards({
     date,
     daySet,
     leave,
     holidays,
     isFuture,
     createCustomProject: false,
-    leaveOverride: state.flags?.leaveOverride,
-    holidayAcknowledged: state.flags?.holidayAcknowledged,
-    futureAcknowledged: state.flags?.futureAcknowledged,
-    over24Acknowledged: state.flags?.over24Acknowledged,
+    leaveOverride,
+    holidayAcknowledged: trialAcks.holidayAcknowledged,
+    futureAcknowledged: trialAcks.futureAcknowledged,
+    over24Acknowledged: trialAcks.over24Acknowledged,
   });
-
-  if (!guard.ok && guard.requireKeyword === 'OVERRIDE') {
-    state.awaitingLeaveOverride = true;
-    state.draft = {
-      ...state.draft,
-      date,
-      projectId: targetEntry.projectId,
-      taskId: targetEntry.taskId,
-      hours: targetEntry.hours,
-      intent: operationType === 'update' ? 'update_entry' : 'add_entry',
-    };
-    await saveConversation(state);
-    return {
-      text: `${guard.blockMessage}\n\nType *OVERRIDE* exactly (you will still need *YES* before anything is saved). Or *CANCEL*.`,
-    };
-  }
-
-  if (!guard.ok && guard.requireKeyword === 'YES') {
-    state.flags = {
-      ...state.flags,
-      holidayAcknowledged: true,
-      futureAcknowledged: true,
-      over24Acknowledged: true,
-    };
-  }
-
-  if (!guard.ok && !guard.requireKeyword) {
-    return { text: guard.blockMessage || 'Cannot proceed.' };
-  }
 
   const entries = daySetToEntries(daySet);
   const { projects } = await timesheetTools.list_projects();
   const tasks = await timesheetTools.list_tasks();
   const warnBlock =
-    guard.warnings.length > 0
-      ? `\nWarnings:\n${guard.warnings.map((w) => `• ${w}`).join('\n')}`
+    finalGuard.warnings.length > 0 || presentedPolicyCodes.length > 0
+      ? `\nWarnings:\n${[
+          ...finalGuard.warnings,
+          ...presentedPolicyCodes.map((c) => `• Requires confirmation: ${c}`),
+        ]
+          .map((w) => (w.startsWith('•') ? w : `• ${w}`))
+          .join('\n')}`
       : '';
   const summary =
     `Confirm save for *${date}?*\n\n` +
@@ -764,9 +805,11 @@ async function buildPendingSubmit(
     targetEntry,
     baseSnapshot,
     payload: { date, entries },
-    warnings: guard.warnings,
+    warnings: finalGuard.warnings,
     summaryText: summary,
     requireKeyword: 'YES',
+    presentedPolicyCodes,
+    policyAcks: { leaveOverride: leaveOverride || undefined },
   });
   state.pendingWriteId = pending.id;
   state.draft = undefined;
@@ -857,13 +900,35 @@ async function executePending(
     }
 
     // Execute
+    const payloadFp = dayFingerprint(claimed.payload.entries);
+    if (
+      claimed.payloadFingerprint &&
+      payloadFp !== claimed.payloadFingerprint
+    ) {
+      await completePendingWrite(pendingId, 'cancelled');
+      state = await clearPendingFromConversation(state);
+      await saveConversation(state);
+      return {
+        text: 'Pending entries changed since confirmation was prepared. Please start again.',
+      };
+    }
+
+    const presented = claimed.presentedPolicyCodes || [];
+    const policyAcks = {
+      leaveOverride: claimed.policyAcks?.leaveOverride === true,
+      holidayAcknowledged: presented.includes('HOLIDAY_ACK_REQUIRED'),
+      futureAcknowledged: presented.includes('FUTURE_ACK_REQUIRED'),
+      over24Acknowledged: presented.includes('OVER_24_ACK_REQUIRED'),
+    };
+
     if (claimed.operation === 'clear_day_timesheet' || claimed.payload.entries.length === 0) {
       await timesheetTools.clear_day_timesheet(req.auth, claimed.payload.date);
     } else {
       await timesheetTools.submit_day_timesheet(
         req.auth,
         claimed.payload.date,
-        claimed.payload.entries
+        claimed.payload.entries,
+        policyAcks
       );
     }
 
