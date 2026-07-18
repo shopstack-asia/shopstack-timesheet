@@ -27,6 +27,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | `ai` | [features/ai/](./features/ai/) | [README.md](./features/ai/README.md) | [feature-logic-summary.md](./features/ai/feature-logic-summary.md) |
 | `tools` | [features/tools/](./features/tools/) | [README.md](./features/tools/README.md) | [feature-logic-summary.md](./features/tools/feature-logic-summary.md) |
 | `business` | [features/business/](./features/business/) | [README.md](./features/business/README.md) | [feature-logic-summary.md](./features/business/feature-logic-summary.md) |
+| `business-tools` | [features/business-tools/](./features/business-tools/) | [README.md](./features/business-tools/README.md) | [feature-logic-summary.md](./features/business-tools/feature-logic-summary.md) |
 
 ## Cross-feature concerns
 
@@ -41,6 +42,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | Slack Timesheet AI Agent | `slack`, `timesheet` | Events foundation: `src/lib/slack/*`, `src/app/api/slack/events`; AI agent (later wiring): `src/lib/timesheet-agent`; docs: `doc/features/slack/`, `docs/ai-implementation/` |
 | Tool Execution Foundation | `tools`, `ai`, `slack` | Vendor-agnostic tools: `src/lib/tools/*`; Conversation tool loop: `src/lib/ai/conversation.ts`; docs: `doc/features/tools/` |
 | Business API Foundation | `business`, `tools` | CS-Core HTTP client: `src/lib/business/*`; docs: `doc/features/business/` |
+| Business Tools (read-only) | `business-tools`, `tools`, `ai` | `get_work_context`, `get_today_timesheet`, `get_week_timesheet`; `src/lib/tools/business/*` |
 
 ### Source Code References
 

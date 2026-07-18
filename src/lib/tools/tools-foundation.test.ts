@@ -47,8 +47,15 @@ describe('ToolRegistry', () => {
   it('createDefaultToolRegistry includes demonstration tools only', () => {
     const registry = createDefaultToolRegistry();
     const names = registry.list().map((t) => t.name).sort();
-    expect(names).toEqual(['current_date', 'current_time', 'ping']);
-    expect(registry.toLlmToolDefinitions()).toHaveLength(3);
+    expect(names).toEqual([
+      'current_date',
+      'current_time',
+      'get_today_timesheet',
+      'get_week_timesheet',
+      'get_work_context',
+      'ping',
+    ]);
+    expect(registry.toLlmToolDefinitions()).toHaveLength(6);
   });
 
   it('isolates registries (no global mutable state)', () => {
