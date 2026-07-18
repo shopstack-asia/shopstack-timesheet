@@ -48,13 +48,16 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `ZOHO_DEFAULT_LOCATION` | Server default location |
 | `NEXT_PUBLIC_ZOHO_HOLIDAY_LOCATION` / `NEXT_PUBLIC_DEFAULT_LOCATION` | Client/server fallbacks |
 
-#### Optional — Slack (Friday reminder)
+#### Optional — Slack (Friday reminder + Timesheet AI)
 
 | Variable | Purpose |
 |----------|---------|
-| `SLACK_BOT_TOKEN` | Bot token (`chat:write`) |
-| `SLACK_CHANNEL_ID` | Single channel |
+| `SLACK_BOT_TOKEN` | Bot token (`chat:write`, AI bot, reminders) |
+| `SLACK_SIGNING_SECRET` | Verify `/api/slack/events` and `/api/slack/interactions` |
+| `SLACK_CHANNEL_ID` | Single channel (reminders) |
 | `SLACK_CHANNEL_IDS` | Comma-separated channels (preferred for multi) |
+| `TIMESHEET_AGENT_TIMEZONE` | Agent date resolution (default `Asia/Bangkok`) |
+| `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | Optional OpenAI-compatible intent model |
 
 #### Optional — SMTP (Friday reminder)
 
@@ -65,7 +68,7 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 
 #### Redis (leave/holiday cache + timesheet Time Log write lock)
 
-Required for **timesheet submit** (fail-closed `503` if lock cannot be acquired). Also used for leave and holiday caching.
+Required for **timesheet submit** (fail-closed `503` if lock cannot be acquired). Also used for leave and holiday caching, and **Slack AI conversation / pending-write state**.
 
 | Variable | Purpose |
 |----------|---------|
@@ -81,6 +84,8 @@ Lock key: `timesheet:sheets:timelog:write` (see `src/lib/sheets-write-lock.ts`).
 
 - Never commit `.env` (gitignored). Use `.env.example` as template only.
 - In production, set vars in the host (e.g. Vercel) dashboard.
+- `/api/debug/*` requires `Authorization: Bearer ${CRON_SECRET}` when `NODE_ENV=production`.
+- Slack AI docs: [`docs/ai-implementation/`](../../../../docs/ai-implementation/).
 
 ### Related feature docs
 

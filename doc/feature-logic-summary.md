@@ -34,6 +34,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | NextAuth + middleware | `auth`, `layout` | Matcher: `/timesheet`, `/api/timesheet`, `/api/master`, `/api/staff` |
 | Cron bearer secret | `reminders`, `holidays` | `Authorization: Bearer ${CRON_SECRET}` |
 | Theme / view prefs | `layout` | `localStorage` keys `theme`, `timesheetViewMode` |
+| Slack Timesheet AI Agent | `ops` / `timesheet` | `src/lib/timesheet-agent`, `src/app/api/slack/*`; identity via Slack email → Zoho; docs in `docs/ai-implementation/` |
 
 ### Source Code References
 

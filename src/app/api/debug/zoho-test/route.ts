@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { assertDebugAccess } from '@/lib/debug-auth';
 import { getZohoPeopleService } from '@/lib/zoho-people';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const denied = assertDebugAccess(request);
+  if (denied) return denied;
   const searchParams = request.nextUrl.searchParams;
   const email = searchParams.get('email');
 
