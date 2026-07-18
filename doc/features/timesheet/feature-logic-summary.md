@@ -17,3 +17,5 @@
 - `src/app/api/timesheet/get/route.ts`
 - `src/app/api/timesheet/submit/route.ts`
 - `src/lib/google-sheets.ts`
+- `src/lib/sheets-write-lock.ts`
+- `src/lib/submit-week-days.ts`

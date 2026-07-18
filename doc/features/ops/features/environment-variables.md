@@ -63,7 +63,9 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | Mail transport |
 | `FROM_EMAIL` | From address |
 
-#### Optional — Redis (leave + holiday cache)
+#### Redis (leave/holiday cache + timesheet Time Log write lock)
+
+Required for **timesheet submit** (fail-closed `503` if lock cannot be acquired). Also used for leave and holiday caching.
 
 | Variable | Purpose |
 |----------|---------|
@@ -72,6 +74,8 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `KV_REST_API_READ_ONLY_TOKEN` | Read-only REST token if used |
 
 Local Redis: no token. `rediss://` embeds token in URL. `https://` Redis URL needs separate `KV_REST_API_TOKEN`.
+
+Lock key: `timesheet:sheets:timelog:write` (see `src/lib/sheets-write-lock.ts`).
 
 ### Security Notes
 
@@ -89,6 +93,7 @@ Local Redis: no token. `rediss://` embeds token in URL. `https://` Redis URL nee
 
 - `.env.example`
 - `src/lib/redis.ts`
+- `src/lib/sheets-write-lock.ts`
 - `src/lib/auth.ts`
 - `src/lib/google-sheets.ts`
 - `src/lib/zoho-people.ts`

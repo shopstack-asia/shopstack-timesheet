@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getGoogleSheetsService, getCachedProjects, getCachedTasks } from '@/lib/google-sheets';
-import { ApiResponse, TimeLogRow, TimeEntry } from '@/types';
+import {
+  SheetsWriteLockError,
+  withTimeLogWriteLock,
+} from '@/lib/sheets-write-lock';
+import { ApiResponse, TimeLogRow } from '@/types';
 import { z } from 'zod';
 
 export const dynamic = 'force-dynamic';
@@ -51,7 +55,7 @@ export async function POST(request: NextRequest) {
 
     // Note: entries can be empty array to delete all entries for the day
 
-    // Get master data
+    // Get master data (read-only cache; safe outside write lock)
     const [projects, tasks] = await Promise.all([
       getCachedProjects(),
       getCachedTasks(),
@@ -77,133 +81,151 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Get Google Sheets service
-    const sheetsService = getGoogleSheetsService();
-    
-    // Get existing entries for this date and staff from Google Sheets
-    const existingEntries = await sheetsService.getTimeLogEntriesByDateAndStaff(
-      date,
-      session.staffProfile!.EmployeeID
-    );
+    await withTimeLogWriteLock(async () => {
+      // Get Google Sheets service
+      const sheetsService = getGoogleSheetsService();
 
-    // Create a map of existing entries by Project ID + Task ID for comparison
-    const existingEntriesMap = new Map<string, { rowNumber: number; entry: TimeLogRow }>();
-    existingEntries.forEach(({ rowNumber, entry }) => {
-      const key = `${entry['Project ID']}|${entry['Task ID']}`;
-      existingEntriesMap.set(key, { rowNumber, entry });
-    });
-
-    // Create a set of submitted entries by Project ID/Name + Task ID
-    const submittedEntriesSet = new Set<string>();
-    entries.forEach((entry) => {
-      // projectId can be either a valid project ID or a custom project name
-      const key = `${entry.projectId}|${entry.taskId}`;
-      submittedEntriesSet.add(key);
-    });
-
-    // Find entries to delete (exist in Google Sheets but not in submitted entries)
-    const entriesToDelete: number[] = [];
-    existingEntriesMap.forEach(({ rowNumber, entry }, key) => {
-      if (!submittedEntriesSet.has(key)) {
-        entriesToDelete.push(rowNumber);
-      }
-    });
-
-    // Delete entries that were removed
-    if (entriesToDelete.length > 0) {
-      await sheetsService.deleteTimeLogEntries(entriesToDelete);
-      // console.log(`[API] Deleted ${entriesToDelete.length} removed entries for date ${date}`);
-    }
-
-    // Prepare time log rows for entries to add/update
-    // First, handle custom projects (create them in Projects sheet)
-    const projectIdMap = new Map<string, string>(); // Maps custom project name to created Project ID
-    
-    for (const entry of entries) {
-      const project = projectMap.get(entry.projectId);
-      // If projectId is not found in projectMap, it's a custom project name
-      if (!project) {
-        // Check if we've already created this project in this batch
-        if (!projectIdMap.has(entry.projectId)) {
-          // Create new project in Projects sheet (one at a time)
-          const newProject = await sheetsService.createProject(entry.projectId);
-          projectIdMap.set(entry.projectId, newProject.ProjectID);
-          // Update projectMap with the new project
-          projectMap.set(newProject.ProjectID, newProject);
-        }
-      }
-    }
-    
-    // Refresh projects list after creating new projects
-    if (projectIdMap.size > 0) {
-      const updatedProjects = await getCachedProjects();
-      updatedProjects.forEach((p) => {
-        if (!projectMap.has(p.ProjectID)) {
-          projectMap.set(p.ProjectID, p);
-        }
-      });
-    }
-    
-    // Now prepare time log rows
-    const timeLogRows: TimeLogRow[] = entries.map((entry) => {
-      const task = taskMap.get(entry.taskId)!;
-      
-      // Check if projectId is a valid project ID or a custom project name
-      let project = projectMap.get(entry.projectId);
-      
-      // If not found, it might be a custom project name that we just created
-      if (!project && projectIdMap.has(entry.projectId)) {
-        const createdProjectId = projectIdMap.get(entry.projectId)!;
-        project = projectMap.get(createdProjectId);
-      }
-      
-      if (!project) {
-        throw new Error(`Project not found: ${entry.projectId}`);
-      }
-      
-      const projectData = {
-        ProjectID: project.ProjectID,
-        ProjectClient: project.ProjectClient,
-        ProjectName: project.ProjectName,
-        ProjectCode: project.ProjectCode,
-      };
-
-      // Generate Time Log ID from Date + Staff ID + Project ID + Task ID
-      const timeLogId = sheetsService.generateTimeLogId(
+      // Get existing entries for this date and staff from Google Sheets
+      const existingEntries = await sheetsService.getTimeLogEntriesByDateAndStaff(
         date,
-        session.staffProfile!.EmployeeID,
-        projectData.ProjectID,
-        task.TaskID
+        session.staffProfile!.EmployeeID
       );
 
-      return {
-        'Time Log ID': timeLogId,
-        Date: date,
-        'Staff ID': session.staffProfile!.EmployeeID,
-        'Staff First Name': session.staffProfile!.FirstName,
-        'Staff Last Name': session.staffProfile!.LastName,
-        'Staff Position': session.staffProfile!.Position,
-        'Project ID': projectData.ProjectID,
-        'Project Client': projectData.ProjectClient,
-        'Project Name': projectData.ProjectName,
-        'Project Code': projectData.ProjectCode,
-        'Task ID': task.TaskID,
-        Task: task.Task,
-        Hours: entry.hours,
-      };
-    });
+      // Create a map of existing entries by Project ID + Task ID for comparison
+      const existingEntriesMap = new Map<
+        string,
+        { rowNumber: number; entry: TimeLogRow }
+      >();
+      existingEntries.forEach(({ rowNumber, entry }) => {
+        const key = `${entry['Project ID']}|${entry['Task ID']}`;
+        existingEntriesMap.set(key, { rowNumber, entry });
+      });
 
-    // Write to Google Sheets (will update existing or append new)
-    // The appendOrUpdateTimeLogEntries method will check for duplicates and update accordingly
-    if (timeLogRows.length > 0) {
-      await sheetsService.appendOrUpdateTimeLogEntries(timeLogRows);
-    }
+      // Create a set of submitted entries by Project ID/Name + Task ID
+      const submittedEntriesSet = new Set<string>();
+      entries.forEach((entry) => {
+        // projectId can be either a valid project ID or a custom project name
+        const key = `${entry.projectId}|${entry.taskId}`;
+        submittedEntriesSet.add(key);
+      });
+
+      // Find entries to delete (exist in Google Sheets but not in submitted entries)
+      const entriesToDelete: number[] = [];
+      existingEntriesMap.forEach(({ rowNumber }, key) => {
+        if (!submittedEntriesSet.has(key)) {
+          entriesToDelete.push(rowNumber);
+        }
+      });
+
+      // Delete entries that were removed
+      if (entriesToDelete.length > 0) {
+        await sheetsService.deleteTimeLogEntries(entriesToDelete);
+      }
+
+      // Prepare time log rows for entries to add/update
+      // First, handle custom projects (create them in Projects sheet)
+      const projectIdMap = new Map<string, string>(); // Maps custom project name to created Project ID
+
+      for (const entry of entries) {
+        const project = projectMap.get(entry.projectId);
+        // If projectId is not found in projectMap, it's a custom project name
+        if (!project) {
+          // Check if we've already created this project in this batch
+          if (!projectIdMap.has(entry.projectId)) {
+            // Create new project in Projects sheet (one at a time)
+            const newProject = await sheetsService.createProject(entry.projectId);
+            projectIdMap.set(entry.projectId, newProject.ProjectID);
+            // Update projectMap with the new project
+            projectMap.set(newProject.ProjectID, newProject);
+          }
+        }
+      }
+
+      // Refresh projects list after creating new projects
+      if (projectIdMap.size > 0) {
+        const updatedProjects = await getCachedProjects();
+        updatedProjects.forEach((p) => {
+          if (!projectMap.has(p.ProjectID)) {
+            projectMap.set(p.ProjectID, p);
+          }
+        });
+      }
+
+      // Now prepare time log rows
+      const timeLogRows: TimeLogRow[] = entries.map((entry) => {
+        const task = taskMap.get(entry.taskId)!;
+
+        // Check if projectId is a valid project ID or a custom project name
+        let project = projectMap.get(entry.projectId);
+
+        // If not found, it might be a custom project name that we just created
+        if (!project && projectIdMap.has(entry.projectId)) {
+          const createdProjectId = projectIdMap.get(entry.projectId)!;
+          project = projectMap.get(createdProjectId);
+        }
+
+        if (!project) {
+          throw new Error(`Project not found: ${entry.projectId}`);
+        }
+
+        const projectData = {
+          ProjectID: project.ProjectID,
+          ProjectClient: project.ProjectClient,
+          ProjectName: project.ProjectName,
+          ProjectCode: project.ProjectCode,
+        };
+
+        // Generate Time Log ID from Date + Staff ID + Project ID + Task ID
+        const timeLogId = sheetsService.generateTimeLogId(
+          date,
+          session.staffProfile!.EmployeeID,
+          projectData.ProjectID,
+          task.TaskID
+        );
+
+        return {
+          'Time Log ID': timeLogId,
+          Date: date,
+          'Staff ID': session.staffProfile!.EmployeeID,
+          'Staff First Name': session.staffProfile!.FirstName,
+          'Staff Last Name': session.staffProfile!.LastName,
+          'Staff Position': session.staffProfile!.Position,
+          'Project ID': projectData.ProjectID,
+          'Project Client': projectData.ProjectClient,
+          'Project Name': projectData.ProjectName,
+          'Project Code': projectData.ProjectCode,
+          'Task ID': task.TaskID,
+          Task: task.Task,
+          Hours: entry.hours,
+        };
+      });
+
+      // Write to Google Sheets (will update existing or append new)
+      if (timeLogRows.length > 0) {
+        await sheetsService.appendOrUpdateTimeLogEntries(timeLogRows);
+      }
+    });
 
     return NextResponse.json<ApiResponse<void>>({
       success: true,
     });
   } catch (error) {
     console.error('Error submitting timesheet:', error);
+
+    if (error instanceof SheetsWriteLockError) {
+      const message =
+        error.code === 'LOCK_TIMEOUT'
+          ? 'Timesheet is busy, please try again'
+          : 'Timesheet write lock unavailable, please try again';
+      return NextResponse.json<ApiResponse<void>>(
+        {
+          success: false,
+          error: message,
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json<ApiResponse<void>>(
       {
         success: false,
@@ -213,4 +235,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

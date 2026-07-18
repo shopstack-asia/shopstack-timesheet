@@ -6,7 +6,7 @@ Internal timesheet app for Shopstack employees (Next.js, TypeScript, Tailwind).
 
 - Google SSO (`@shopstack.asia`) + Zoho People staff profile
 - Weekly Mon–Sun timesheet; Google Sheets Time Log
-- Leave / holiday awareness; optional Redis cache
+- Leave / holiday awareness; Redis cache + timesheet write lock
 - Friday Slack / email reminders (cron)
 
 **Canonical behavior docs:** [`doc/features/`](./doc/features/) — start at [`doc/feature-logic-summary.md`](./doc/feature-logic-summary.md).  
@@ -39,6 +39,7 @@ Setup details by area:
 | `npm run dev` | Development server |
 | `npm run build` / `npm start` | Production build & serve |
 | `npm run lint` | ESLint (`next lint`) |
+| `npm test` | Vitest unit tests |
 
 ## License
 

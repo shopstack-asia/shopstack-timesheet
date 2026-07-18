@@ -4,9 +4,11 @@ import Redis from 'ioredis';
 type RedisClient = UpstashRedis | Redis;
 
 // Wrapper interface to make both clients compatible
-interface RedisAdapter {
+export interface RedisAdapter {
   get<T>(key: string): Promise<T | null>;
   setex(key: string, seconds: number, value: string): Promise<void>;
+  /** SET key value EX ttl NX — returns true if the key was set */
+  setNx(key: string, value: string, ttlSeconds: number): Promise<boolean>;
   del(key: string): Promise<void>;
 }
 
@@ -21,6 +23,11 @@ class UpstashRedisAdapter implements RedisAdapter {
 
   async setex(key: string, seconds: number, value: string): Promise<void> {
     await this.client.setex(key, seconds, value);
+  }
+
+  async setNx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.client.set(key, value, { nx: true, ex: ttlSeconds });
+    return result === 'OK';
   }
 
   async del(key: string): Promise<void> {
@@ -47,6 +54,11 @@ class LocalRedisAdapter implements RedisAdapter {
   async setex(key: string, seconds: number, value: string): Promise<void> {
     // value is already a string (JSON.stringify'd by caller)
     await this.client.setex(key, seconds, value);
+  }
+
+  async setNx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+    const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+    return result === 'OK';
   }
 
   async del(key: string): Promise<void> {

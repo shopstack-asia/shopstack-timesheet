@@ -19,15 +19,17 @@ Persist accurate weekly time against projects/tasks for reporting.
 1. **Client (Submit Week):**
    - Require at least one entry in the week.
    - Every entry: non-empty `projectId`, `taskId`, `hours > 0`.
-   - For each day with `entries.length > 0`, `POST /api/timesheet/submit` with `{ date, entries }`.
-   - On success, reload week via get API.
+   - User clicks **Submit Week once**; the client POSTs each day with `entries.length > 0` **sequentially** (await one day, then the next) via `submitWeekDaysSequentially`.
+   - On full success, reload week via get API.
 2. **Server:**
    - Zod validate; allow empty `entries` (delete-all semantics).
    - Load cached projects/tasks; require every `taskId` in task map.
+   - Acquire Redis **Time Log write lock** (`timesheet:sheets:timelog:write`) before any Sheets mutate.
    - Load existing Sheets rows for staff+date.
    - Delete rows whose `Project ID|Task ID` not in submit set.
    - Create custom projects if needed (see custom-project doc).
    - Upsert remaining rows (Time Log ID = SHA-256 first 16 of `date|staffId|projectId|taskId`).
+   - Release lock (token-safe delete). Lock wait timeout / Redis failure → **503**.
 
 ### Use Cases
 
@@ -40,6 +42,7 @@ Persist accurate weekly time against projects/tasks for reporting.
 - Sync key: `` `${projectId}|${taskId}` `` (custom name uses the name as project key until created).
 - Empty submit array → delete all existing rows for staff/date.
 - Staff identity from `session.staffProfile` (EmployeeID, names, position).
+- Concurrent submits across users/instances are serialized by the Redis write lock so `rowNumber`-based deletes/updates do not race.
 
 ### Validation Rules
 
@@ -47,12 +50,13 @@ Persist accurate weekly time against projects/tasks for reporting.
 |-------|--------|
 | Client | ≥1 entry in week; each entry project/task non-empty; hours > 0 |
 | API Zod | date `YYYY-MM-DD`; hours 0–24; projectId/taskId min length 1 |
-| API | Invalid task ID → 400; unauthorized → 401 |
+| API | Invalid task ID → 400; unauthorized → 401; lock/Redis failure → 503 |
 
 ### Edge Cases
 
 - UI never POSTs empty days → deleting all entries on a day in the UI **does not remove Sheets rows** until that day is submitted with entries or empty payload via API.
 - Hours `0` accepted by API but blocked by UI submit validation.
+- Mid-week day failure: remaining days are still attempted; UI reports failed dates.
 
 ### API and Integration Behavior
 
@@ -66,7 +70,7 @@ Persist accurate weekly time against projects/tasks for reporting.
 ```
 
 - Response: `ApiResponse`
-- Upstream: Google Sheets (service account)
+- Upstream: Google Sheets (service account); Redis required for write lock
 
 ### Data Model Summary
 
@@ -86,18 +90,22 @@ Sheet structure setup: [master-data/projects-and-tasks-from-sheets.md](../../mas
 ### Known Limitations
 
 - UI ↔ API gap on clearing days (documented above).
-- Sequential submit per day (not a single week transaction).
+- Week submit is sequential per-day POSTs (not a single week transaction).
+- Submit requires Redis; without it the API returns 503 rather than writing unlocked.
 
 ### Source Code References
 
 - `src/components/WeeklyTimesheet.tsx` (submit handler)
+- `src/lib/submit-week-days.ts` (one-click sequential POSTs)
 - `src/app/api/timesheet/submit/route.ts`
+- `src/lib/sheets-write-lock.ts` (Redis Time Log write lock)
 - `src/lib/google-sheets.ts` (`generateTimeLogId`, upsert/delete helpers)
 
 ### Required tests
 
+- `src/lib/sheets-write-lock.test.ts` — acquire/release; wait then acquire; lock timeout; token-safe release; Redis errors
+- `src/lib/submit-week-days.test.ts` — sequential order; skip empty days; continue after mid failure
 - Zod rejects bad date / hours > 24
 - Invalid task → 400
 - Empty entries deletes existing rows (mocked Sheets)
 - Upsert uses stable Time Log ID hash
-- UI filter only submits days with entries

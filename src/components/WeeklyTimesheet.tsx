@@ -6,6 +6,7 @@ import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import DailyCard from './DailyCard';
 import { Project, Task, TimeEntry, DailyTimesheet, LeaveDayEntry, Holiday } from '@/types';
 import { getLeaveEntry, isFullLeave, isHalfLeave } from '@/lib/leave-utils';
+import { submitWeekDaysSequentially } from '@/lib/submit-week-days';
 
 type ViewMode = 'column' | 'tab';
 
@@ -423,10 +424,17 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     setSubmitting(true);
 
     try {
-      // Submit all days that have entries
-      const submitPromises = timesheet
-        .filter((day) => day.entries.length > 0)
-        .map(async (day) => {
+      // One click: POST each day with entries sequentially (avoids self-race on Sheets rows)
+      const results = await submitWeekDaysSequentially(
+        timesheet.map((day) => ({
+          date: day.date,
+          entries: day.entries.map((entry) => ({
+            projectId: entry.projectId,
+            taskId: entry.taskId,
+            hours: entry.hours,
+          })),
+        })),
+        async (day) => {
           const response = await fetch('/api/timesheet/submit', {
             method: 'POST',
             headers: {
@@ -434,19 +442,14 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
             },
             body: JSON.stringify({
               date: day.date,
-              entries: day.entries.map((entry) => ({
-                projectId: entry.projectId,
-                taskId: entry.taskId,
-                hours: entry.hours,
-              })),
+              entries: day.entries,
             }),
           });
 
           const result = await response.json();
-          return { date: day.date, success: result.success, error: result.error };
-        });
-
-      const results = await Promise.all(submitPromises);
+          return { success: result.success, error: result.error };
+        }
+      );
       const failedDays = results.filter((r) => !r.success);
 
       if (failedDays.length === 0) {
