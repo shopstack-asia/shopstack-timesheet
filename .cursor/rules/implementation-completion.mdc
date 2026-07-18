@@ -1,0 +1,37 @@
+---
+description: Mandatory doc/ + quality gate — requires reading doc/rules and updating feature docs
+alwaysApply: true
+---
+
+# Implementation completion gate (mandatory)
+
+Every implementation task is **incomplete** until **`doc/`** standards are followed and quality checks ship with the code.
+
+## Before any implementation
+
+You MUST read and follow:
+
+1. [`doc/ai-agent-instruction.md`](../../doc/ai-agent-instruction.md)
+2. Mandatory files under [`doc/rules/`](../../doc/rules/) (as listed in that instruction)
+3. Owning area under [`doc/features/<feature-area>/`](../../doc/features/) (via [`doc/feature-logic-summary.md`](../../doc/feature-logic-summary.md))
+
+Canonical checklist: [`doc/rules/implementation_completion.md`](../../doc/rules/implementation_completion.md).
+
+## Before claiming done
+
+1. **Feature docs** — When behavior, validation, flows, or API contracts change, update `doc/features/<feature-area>/` per `doc/rules/documentation.md` (detailed `features/*.md`, area `feature-logic-summary.md`, `domain-features.md` as needed).
+2. **Setup docs** — When env vars or integration setup change, update owning `doc/features/...` setup docs, `.env.example`, and root `README.md` as needed.
+3. **Types** — Keep `src/types/` aligned with API payloads and Sheets/Zoho shapes you change.
+4. **Quality** — Run `npx tsc --noEmit` and `npm run lint`; fix new issues (`doc/rules/lint.md`).
+5. **Tests** — Follow `doc/rules/testing.md` (no runner yet: extract testable helpers + document Required tests; run tests when a runner exists).
+
+## Not complete if
+
+- You changed code without reading the mandatory `doc/` files above
+- Behavior or API contracts changed but `doc/features/...` were left stale
+- New TypeScript or ESLint failures were introduced and left unfixed
+- Final report omits files changed, logic summary, doc paths, or tsc/lint results
+
+## Final report must include
+
+Files changed · logic summary · **doc paths updated** (or “none—no doc impact”) · test note · tsc/lint results — per `doc/ai-agent-instruction.md` §10.

@@ -1,0 +1,86 @@
+---
+description: Core AI agent rules for Shopstack Timesheet — must read doc/ first
+alwaysApply: true
+---
+
+# AI agent rules — shopstack-timesheet
+
+This repository is **Shopstack Timesheet**: a **Next.js (App Router)** internal timesheet app (TypeScript, Tailwind CSS). Employees sign in with **Google SSO** (`@shopstack.asia` only via NextAuth), load staff/leave/holiday data from **Zoho People**, and read/write time logs via **Google Sheets**. Optional **Redis** caching, **Slack** / **email** Friday reminders, and **cron** Route Handlers.
+
+## 0. Mandatory: read `doc/` before any implementation
+
+**Do not write or change application code until you have done this.** Skipping is not allowed.
+
+1. Read **[`doc/ai-agent-instruction.md`](../../doc/ai-agent-instruction.md)** in full.
+2. Read **every mandatory rule** listed there under `doc/rules/`:
+   - `coding.md`, `testing.md`, `lint.md`, `documentation.md`
+   - `implementation_completion.md`, `feature-area-documentation.md`
+   - `manual_documentation_template.md`
+3. Identify the feature area via **[`doc/feature-logic-summary.md`](../../doc/feature-logic-summary.md)**.
+4. Read that area under `doc/features/<feature-area>/` in order:
+   `README.md` → `domain-features.md` → `feature-logic-summary.md` → relevant `features/*.md`.
+5. If those docs are missing for an area you will change, **create the minimum set** per `doc/rules/feature-area-documentation.md` before substantive code changes.
+
+Canonical standards live in **`doc/`**. This Cursor rule enforces that workflow; it does not replace `doc/`.
+
+Team principles: [`doc/README.md`](../../doc/README.md#team-implementation-principles). Session hint: [`doc/prompt.md`](../../doc/prompt.md).
+
+## 1. Core principles
+
+- The AI is an **executor**, not a product owner. Do not invent requirements, business rules, or API contracts.
+- Prefer **evidence from feature docs + repo code** (`src/types/`, handlers, lib clients) over assumptions.
+- If code and docs disagree, **fix the code or update the docs** explicitly—never leave silent drift.
+
+## 2. Before writing any code
+
+1. Complete **section 0** (read `doc/`).
+2. Inspect related **pages** (`src/app/`), **components** (`src/components/`), **API routes** (`src/app/api/`), **lib** (`src/lib/`), and **types** (`src/types/`).
+3. Follow **existing patterns** in the same area (Zod validation, `ApiResponse<T>`, `getServerSession(authOptions)`, cached Sheets/Zoho helpers).
+4. If behavior changes, update `doc/features/<feature-area>/` (and root setup guides when env/setup changes).
+
+## 3. BFF / server boundary (mandatory)
+
+- **All calls to external APIs** (Zoho People, Google Sheets, Slack, SMTP) MUST run on the **server**: Route Handlers under `src/app/api/*` or modules under `src/lib/*` used only from the server.
+- **Never** call those external APIs from React components or other browser-executed code.
+- Client code may call **`/api/*`** (same-origin) only.
+- **Secrets and tokens** MUST stay server-side—never in client bundles.
+
+## 4. Architecture boundaries
+
+| Layer | Location | Responsibility |
+|--------|-----------|----------------|
+| Pages | `src/app/` | Routing and composition (`/`, `/timesheet`, `/auth/*`). |
+| Components | `src/components/` | Timesheet UI and local state. Call `/api/*` only. |
+| API routes | `src/app/api/` | Auth-gated handlers, cron jobs, debug probes; validate; shape `ApiResponse`. |
+| Lib | `src/lib/` | Server integrations and helpers. |
+| Contexts | `src/contexts/` | Global client state (e.g. `ThemeContext`). |
+| Types | `src/types/` | Shared domain and API types. |
+| Middleware | `src/middleware.ts` | NextAuth protection for `/timesheet` and selected `/api/*`. |
+
+## 5. Domain constraints (do not invent)
+
+- Google sign-in is restricted to **`@shopstack.asia`**; staff profile comes from Zoho People during auth.
+- Master data: **Projects** / **Roles and Tasks** sheets; submissions write **Time Log** rows.
+- Weekly UI is **Mon–Fri**; leave/holidays affect entry availability via staff/holiday APIs.
+- Cron routes must honor **`CRON_SECRET`**.
+
+Details: owning feature docs under `doc/features/` — do not invent beyond those docs + code.
+
+## 6. Quality
+
+- Follow `doc/rules/lint.md` and `doc/rules/testing.md`.
+- Run **`npx tsc --noEmit`** and **`npm run lint`**; fix new failures before claiming done.
+- Completion gate: `doc/rules/implementation_completion.md` and `.cursor/rules/implementation-completion.mdc`.
+
+## 7. Forbidden
+
+- Implementing without reading `doc/ai-agent-instruction.md` and the mandatory `doc/rules/*` files.
+- Inventing Zoho/Sheets/Slack contracts without doc or code evidence.
+- Calling external APIs from the client or embedding secrets in client code.
+- Drive-by large refactors unrelated to the task.
+- Completing work while ignoring **new** TypeScript or ESLint failures.
+- Treating Hertz/e-comm patterns (CMS, i18n `t()`, PWA, storefront SEO) as if they apply here.
+
+## 8. Final principle
+
+Behave as a **deterministic executor**: read `doc/` → read feature docs → read code → implement minimally → verify types/lint → update docs → report outcomes per `doc/ai-agent-instruction.md` §10.
