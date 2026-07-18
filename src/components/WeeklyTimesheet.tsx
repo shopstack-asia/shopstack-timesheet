@@ -424,28 +424,16 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     setSubmitting(true);
 
     try {
-      const todayStr = format(new Date(), 'yyyy-MM-dd');
       const results = await submitWeekDaysSequentially(
-        timesheet.map((day) => {
-          const dayHours = day.entries.reduce((s, e) => s + e.hours, 0);
-          const onFullLeave = isFullLeave(day.date, leaveData);
-          const onHoliday = holidays.some(
-            (h) => h.date === day.date && (h.is_holiday ?? true)
-          );
-          return {
-            date: day.date,
-            entries: day.entries.map((entry) => ({
-              projectId: entry.projectId,
-              taskId: entry.taskId,
-              hours: entry.hours,
-            })),
-            // Submit Week is the user's acknowledgment for web (same role as YES/OVERRIDE in Slack).
-            leaveOverride: onFullLeave,
-            holidayAcknowledged: onHoliday,
-            futureAcknowledged: day.date > todayStr,
-            over24Acknowledged: dayHours > 24,
-          };
-        }),
+        timesheet.map((day) => ({
+          date: day.date,
+          entries: day.entries.map((entry) => ({
+            projectId: entry.projectId,
+            taskId: entry.taskId,
+            hours: entry.hours,
+          })),
+          // No automatic acknowledgments — server returns policyCode; we confirm explicitly.
+        })),
         async (day) => {
           const response = await fetch('/api/timesheet/submit', {
             method: 'POST',
@@ -463,7 +451,26 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
           });
 
           const result = await response.json();
-          return { success: result.success, error: result.error };
+          return {
+            success: result.success,
+            error: result.error,
+            policyCode: result.policyCode,
+          };
+        },
+        async (date, policyCode, message) => {
+          const label =
+            policyCode === 'LEAVE_OVERRIDE_REQUIRED'
+              ? 'full-day leave'
+              : policyCode === 'HOLIDAY_ACK_REQUIRED'
+                ? 'holiday'
+                : policyCode === 'FUTURE_ACK_REQUIRED'
+                  ? 'future date'
+                  : policyCode === 'OVER_24_ACK_REQUIRED'
+                    ? 'more than 24 hours'
+                    : policyCode;
+          return window.confirm(
+            `${message}\n\nDate: ${date}\nCondition: ${label}\n\nClick OK to acknowledge and retry this day, or Cancel to skip.`
+          );
         }
       );
       const failedDays = results.filter((r) => !r.success);

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRedisClient } from '@/lib/redis';
+import { getRedisClient, type RedisAdapter } from '@/lib/redis';
 import { ApiResponse } from '@/types';
 
 export type RateLimitResult =
   | { ok: true }
   | { ok: false; response: NextResponse };
 
-type RateLimitOptions = {
+export type RateLimitOptions = {
   /** Logical bucket, e.g. timesheet-submit */
   bucket: string;
   /** Max requests in the window */
@@ -17,13 +17,17 @@ type RateLimitOptions = {
   userKey?: string | null;
 };
 
+type CounterRedis = Pick<RedisAdapter, 'incr' | 'expire'>;
+
 /**
  * Redis-backed fixed-window rate limit (IP + optional user).
+ * Uses atomic INCR; sets EXPIRE only when the counter is first created.
  * Fail-open on Redis errors so availability is preserved; logs the failure.
  */
 export async function enforceRateLimit(
   request: NextRequest,
-  options: RateLimitOptions
+  options: RateLimitOptions,
+  deps?: { redis?: CounterRedis }
 ): Promise<RateLimitResult> {
   const ip = clientIp(request);
   const keys = [
@@ -34,9 +38,14 @@ export async function enforceRateLimit(
   ].filter(Boolean) as string[];
 
   try {
-    const redis = getRedisClient();
+    const redis = deps?.redis ?? getRedisClient();
     for (const key of keys) {
-      const allowed = await bumpCounter(redis, key, options.limit, options.windowSeconds);
+      const allowed = await bumpCounterAtomic(
+        redis,
+        key,
+        options.limit,
+        options.windowSeconds
+      );
       if (!allowed) {
         return {
           ok: false,
@@ -57,7 +66,7 @@ export async function enforceRateLimit(
   }
 }
 
-function clientIp(request: NextRequest): string {
+export function clientIp(request: NextRequest): string {
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) {
     return forwarded.split(',')[0]?.trim() || 'unknown';
@@ -65,24 +74,19 @@ function clientIp(request: NextRequest): string {
   return request.headers.get('x-real-ip')?.trim() || 'unknown';
 }
 
-async function bumpCounter(
-  redis: ReturnType<typeof getRedisClient>,
+/**
+ * Atomic counter: INCR then EXPIRE only when count === 1.
+ * Returns false when the new count exceeds `limit`.
+ */
+export async function bumpCounterAtomic(
+  redis: CounterRedis,
   key: string,
   limit: number,
   windowSeconds: number
 ): Promise<boolean> {
-  const current = await redis.get<string | number>(key);
-  const n =
-    typeof current === 'number'
-      ? current
-      : current != null
-        ? Number.parseInt(String(current), 10) || 0
-        : 0;
-
-  if (n >= limit) {
-    return false;
+  const n = await redis.incr(key);
+  if (n === 1) {
+    await redis.expire(key, windowSeconds);
   }
-
-  await redis.setex(key, windowSeconds, String(n + 1));
-  return true;
+  return n <= limit;
 }

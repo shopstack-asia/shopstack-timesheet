@@ -2,6 +2,14 @@ import { Holiday, LeaveDayEntry } from '@/types';
 import { DaySet, dayTotal } from '@/lib/timesheet-agent/merge';
 import { getLeaveEntry, isFullLeave, isHalfLeave } from '@/lib/leave-utils';
 
+export type PolicyCode =
+  | 'LEAVE_OVERRIDE_REQUIRED'
+  | 'HOLIDAY_ACK_REQUIRED'
+  | 'FUTURE_ACK_REQUIRED'
+  | 'OVER_24_ACK_REQUIRED'
+  | 'HOURS_INVALID'
+  | 'CUSTOM_PROJECT_BLOCKED';
+
 export type WriteGuardContext = {
   date: string;
   daySet: DaySet;
@@ -21,6 +29,7 @@ export type GuardResult = {
   blockMessage?: string;
   warnings: string[];
   requireKeyword?: 'OVERRIDE' | 'CLEAR' | 'YES';
+  policyCode?: PolicyCode;
 };
 
 export function validateEntryHours(hours: number): string | null {
@@ -35,7 +44,12 @@ export function evaluateWriteGuards(ctx: WriteGuardContext): GuardResult {
   for (const e of ctx.daySet.values()) {
     const err = validateEntryHours(e.hours);
     if (err) {
-      return { ok: false, blockMessage: err, warnings };
+      return {
+        ok: false,
+        blockMessage: err,
+        warnings,
+        policyCode: 'HOURS_INVALID',
+      };
     }
   }
 
@@ -48,13 +62,14 @@ export function evaluateWriteGuards(ctx: WriteGuardContext): GuardResult {
         blockMessage: `Day total exceeds 24 hours (${total.toFixed(2)}). Confirm you still want to save.`,
         warnings,
         requireKeyword: 'YES',
+        policyCode: 'OVER_24_ACK_REQUIRED',
       };
     }
   }
 
   if (ctx.leave === null) {
+    // Caller must fail closed before invoke when leave is required dependency
     warnings.push('Leave data could not be loaded.');
-    warnings.push('Reply YES on confirmation to proceed without leave context.');
   } else {
     const leave = getLeaveEntry(ctx.date, ctx.leave);
     if (leave && isFullLeave(ctx.date, ctx.leave)) {
@@ -65,6 +80,7 @@ export function evaluateWriteGuards(ctx: WriteGuardContext): GuardResult {
           blockMessage: `${msg} Say OVERRIDE to save hours anyway.`,
           warnings: [...warnings, msg],
           requireKeyword: 'OVERRIDE',
+          policyCode: 'LEAVE_OVERRIDE_REQUIRED',
         };
       }
       warnings.push(`${msg} OVERRIDE accepted.`);
@@ -88,6 +104,7 @@ export function evaluateWriteGuards(ctx: WriteGuardContext): GuardResult {
           blockMessage: `${msg} Confirm to save anyway.`,
           warnings,
           requireKeyword: 'YES',
+          policyCode: 'HOLIDAY_ACK_REQUIRED',
         };
       }
     }
@@ -99,15 +116,16 @@ export function evaluateWriteGuards(ctx: WriteGuardContext): GuardResult {
       blockMessage: `${ctx.date} is a future date. Confirm to save anyway.`,
       warnings: [...warnings, 'Future date'],
       requireKeyword: 'YES',
+      policyCode: 'FUTURE_ACK_REQUIRED',
     };
   }
 
-  // Custom project creation from Slack is disabled — never enable createCustomProject
   if (ctx.createCustomProject) {
     return {
       ok: false,
       blockMessage: 'Custom project creation is not available from Slack.',
       warnings,
+      policyCode: 'CUSTOM_PROJECT_BLOCKED',
     };
   }
 
@@ -123,5 +141,26 @@ export function evaluateClearGuards(hasEntries: boolean): GuardResult {
     blockMessage: 'This deletes ALL entries for that date. Type CLEAR to confirm.',
     warnings: ['Clear day'],
     requireKeyword: 'CLEAR',
+  };
+}
+
+/** Codes that YES (or web ack) can satisfy for a presented pending write */
+export function ackFlagsFromPresentedCodes(
+  codes: PolicyCode[],
+  base?: {
+    leaveOverride?: boolean;
+  }
+): {
+  leaveOverride?: boolean;
+  holidayAcknowledged?: boolean;
+  futureAcknowledged?: boolean;
+  over24Acknowledged?: boolean;
+} {
+  return {
+    leaveOverride:
+      base?.leaveOverride || codes.includes('LEAVE_OVERRIDE_REQUIRED') || undefined,
+    holidayAcknowledged: codes.includes('HOLIDAY_ACK_REQUIRED') || undefined,
+    futureAcknowledged: codes.includes('FUTURE_ACK_REQUIRED') || undefined,
+    over24Acknowledged: codes.includes('OVER_24_ACK_REQUIRED') || undefined,
   };
 }

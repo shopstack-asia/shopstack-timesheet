@@ -10,6 +10,10 @@ export interface RedisAdapter {
   /** SET key value EX ttl NX — returns true if the key was set */
   setNx(key: string, value: string, ttlSeconds: number): Promise<boolean>;
   del(key: string): Promise<void>;
+  /** Atomic INCR; returns the new value */
+  incr(key: string): Promise<number>;
+  /** Set TTL in seconds (does not change value) */
+  expire(key: string, seconds: number): Promise<void>;
 }
 
 // Upstash Redis adapter
@@ -32,6 +36,14 @@ class UpstashRedisAdapter implements RedisAdapter {
 
   async del(key: string): Promise<void> {
     await this.client.del(key);
+  }
+
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.client.expire(key, seconds);
   }
 }
 
@@ -63,6 +75,14 @@ class LocalRedisAdapter implements RedisAdapter {
 
   async del(key: string): Promise<void> {
     await this.client.del(key);
+  }
+
+  async incr(key: string): Promise<number> {
+    return this.client.incr(key);
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.client.expire(key, seconds);
   }
 }
 

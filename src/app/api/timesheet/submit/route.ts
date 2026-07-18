@@ -5,7 +5,10 @@ import { ApiResponse } from '@/types';
 import { z } from 'zod';
 import { submitDayTimesheetForStaff } from '@/lib/timesheet/timesheet-service';
 import { SheetsWriteLockError } from '@/lib/sheets-write-lock';
-import { SubmitPolicyError } from '@/lib/timesheet/submit-policy';
+import {
+  SubmitPolicyDependencyError,
+  SubmitPolicyError,
+} from '@/lib/timesheet/submit-policy';
 import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
@@ -82,9 +85,23 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error submitting timesheet:', error);
 
-    if (error instanceof SubmitPolicyError) {
+    if (error instanceof SubmitPolicyDependencyError) {
       return NextResponse.json<ApiResponse<void>>(
-        { success: false, error: error.message },
+        {
+          success: false,
+          error: 'Timesheet policy data is temporarily unavailable. Please try again later.',
+        },
+        { status: 503 }
+      );
+    }
+
+    if (error instanceof SubmitPolicyError) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: error.message,
+          policyCode: error.policyCode,
+        },
         { status: 400 }
       );
     }

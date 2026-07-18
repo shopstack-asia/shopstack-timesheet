@@ -88,6 +88,15 @@ describe('submit service rejects custom project when disabled', () => {
         code = 'LOCK_TIMEOUT';
       },
     }));
+    vi.doMock('@/lib/timesheet/submit-policy', () => ({
+      assertSubmitBusinessRules: async () => undefined,
+      SubmitPolicyError: class extends Error {
+        statusCode = 400;
+      },
+      SubmitPolicyDependencyError: class extends Error {
+        statusCode = 503;
+      },
+    }));
 
     const { submitDayTimesheetForStaff } = await import(
       '@/lib/timesheet/timesheet-service'

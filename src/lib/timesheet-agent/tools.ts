@@ -3,6 +3,7 @@ import {
   clearDayTimesheetForStaff,
   getWeeklyTimesheetForStaff,
   submitDayTimesheetForStaff,
+  type SubmitDayOptions,
 } from '@/lib/timesheet/timesheet-service';
 import {
   getCurrentEmployee,
@@ -41,15 +42,21 @@ export const timesheetTools = {
   async submit_day_timesheet(
     ctx: AgentAuthContext,
     date: string,
-    entries: Array<{ projectId: string; taskId: string; hours: number }>
+    entries: Array<{ projectId: string; taskId: string; hours: number }>,
+    policyAcks: Pick<
+      SubmitDayOptions,
+      | 'leaveOverride'
+      | 'holidayAcknowledged'
+      | 'futureAcknowledged'
+      | 'over24Acknowledged'
+    > = {}
   ) {
-    // Agent conversation already required OVERRIDE / YES acknowledgments.
     return submitDayTimesheetForStaff(ctx, date, entries, {
       allowCustomProject: false,
-      leaveOverride: true,
-      holidayAcknowledged: true,
-      futureAcknowledged: true,
-      over24Acknowledged: true,
+      leaveOverride: policyAcks.leaveOverride === true,
+      holidayAcknowledged: policyAcks.holidayAcknowledged === true,
+      futureAcknowledged: policyAcks.futureAcknowledged === true,
+      over24Acknowledged: policyAcks.over24Acknowledged === true,
     });
   },
   async clear_day_timesheet(ctx: AgentAuthContext, date: string) {

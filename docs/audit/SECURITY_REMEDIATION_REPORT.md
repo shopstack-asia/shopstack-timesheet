@@ -132,6 +132,17 @@ New coverage: `src/lib/security-remediation.test.ts` (cron fail-closed, sanitize
 
 ---
 
+## Sprint 1.1 — PR #3 blocking review fixes
+
+| Issue | Status |
+|-------|--------|
+| Atomic rate limiting (INCR + EXPIRE on first) | Fixed |
+| Submit policy fail-closed on leave/holiday load | Fixed (`SubmitPolicyDependencyError` → 503) |
+| Slack tools no longer hardcode all acks true | Fixed (pending `presentedPolicyCodes` + `policyAcks`) |
+| Web explicit policy confirmation via `policyCode` | Fixed |
+
+See test files: `rate-limit.test.ts`, `submit-policy.test.ts`, `submit-week-days.test.ts`, `pending-acks.test.ts`.
+
 ## Final production readiness assessment
 
 ```text
@@ -139,6 +150,7 @@ New coverage: `src/lib/security-remediation.test.ts` (cron fail-closed, sanitize
 ```
 
 **Code-level Critical and High findings from Sprint 1 are remediated.**
+**PR #3 blocking review findings (atomic rate limit, fail-closed policy deps, Slack/web ack binding) are remediated.**
 
 Before declaring full production readiness, operators must verify:
 
