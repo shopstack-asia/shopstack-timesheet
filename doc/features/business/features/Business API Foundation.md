@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Provide a reusable HTTP client so future AI Business Tools can call CS-Core (and other internal REST APIs) without embedding transport, auth, or retry logic.
+Provide a reusable HTTP client so future AI Business Tools can call Timesheet API (and other internal REST APIs) without embedding transport, auth, or retry logic.
 
 ## Target flow
 
 ```text
 Slack → Conversation → Tool Router → Business Tool
-  → Business API Client → CS-Core REST → Business Response
+  → Business API Client → Timesheet API REST → Business Response
   → OpenAI → Slack
 ```
 

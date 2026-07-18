@@ -1,6 +1,6 @@
 # Business — feature area
 
-Reusable **Business API Client** for AI Business Tools to call internal CS-Core REST APIs.
+Reusable **Business API Client** for AI Business Tools to call internal Timesheet API REST APIs.
 
 ## Scope
 

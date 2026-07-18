@@ -71,10 +71,10 @@ describe('loadBusinessApiConfig', () => {
 
   it('loads defaults', () => {
     const cfg = loadBusinessApiConfig({
-      BUSINESS_API_BASE_URL: 'https://cs-core.example/',
+      BUSINESS_API_BASE_URL: 'https://timesheet-api.example/',
       BUSINESS_API_KEY: 'k',
     });
-    expect(cfg.baseUrl).toBe('https://cs-core.example');
+    expect(cfg.baseUrl).toBe('https://timesheet-api.example');
     expect(cfg.timeoutMs).toBe(15_000);
     expect(cfg.maxRetries).toBe(2);
     expect(cfg.logging).toBe(true);

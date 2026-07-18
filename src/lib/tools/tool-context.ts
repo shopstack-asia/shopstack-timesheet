@@ -5,6 +5,7 @@ export type CreateToolContextInput = {
   eventId?: string;
   userId?: string;
   slackChannel?: string;
+  conversationId?: string;
   metadata?: Record<string, string | undefined>;
   signal?: AbortSignal;
 };
@@ -18,6 +19,7 @@ export function createToolContext(
     eventId: input.eventId,
     userId: input.userId,
     slackChannel: input.slackChannel,
+    conversationId: input.conversationId,
     metadata: input.metadata ? { ...input.metadata } : undefined,
     signal: input.signal,
   };

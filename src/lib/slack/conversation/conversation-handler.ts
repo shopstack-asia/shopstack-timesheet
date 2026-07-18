@@ -1,4 +1,5 @@
 import { runConversation, type RunConversationDeps } from '@/lib/ai/conversation';
+import { buildConversationId } from '@/lib/conversation/context';
 import type { EventHandlerContext } from '@/lib/slack/events/handler-utils';
 import { shouldIgnoreSlackMessage } from '@/lib/slack/events/handler-utils';
 import { createSlackRequestLogger } from '@/lib/slack/logger';
@@ -62,16 +63,26 @@ export async function handleSlackConversation(
 
   log.info('message dispatched');
 
+  const threadTs =
+    mode === 'app_mention' ? event.thread_ts || event.ts : undefined;
+  const conversationId = buildConversationId({
+    channel,
+    threadTs,
+    slackUserId: userId,
+  });
+
   try {
     const result = await runConversation(
       {
         userMessage,
         requestId: ctx.requestId,
         eventId: ctx.envelope.event_id,
+        conversationId,
         metadata: {
           slackUserId: userId,
           channel,
           mode,
+          conversationId,
         },
       },
       { generate: deps?.generate }
@@ -82,9 +93,6 @@ export async function handleSlackConversation(
       eventId: ctx.envelope.event_id,
       client: deps?.slackClient,
     };
-
-    const threadTs =
-      mode === 'app_mention' ? event.thread_ts || event.ts : undefined;
 
     if (threadTs) {
       await sendThreadReply(channel, threadTs, result.text, sendOpts);

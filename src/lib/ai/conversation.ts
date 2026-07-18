@@ -108,6 +108,8 @@ export async function runConversation(
     eventId: input.eventId,
     userId: input.metadata?.slackUserId,
     slackChannel: input.metadata?.channel,
+    conversationId:
+      input.conversationId || input.metadata?.conversationId,
     metadata: input.metadata,
   });
 
