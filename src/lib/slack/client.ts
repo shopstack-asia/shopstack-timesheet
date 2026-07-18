@@ -16,16 +16,22 @@ export function getSlackClient(): WebClient {
   return client;
 }
 
+/** @deprecated Prefer sendMessage / sendThreadReply from `@/lib/slack/responses`. */
 export async function postSlackMessage(params: {
   channel: string;
   text: string;
   threadTs?: string;
 }): Promise<void> {
-  const slack = getSlackClient();
-  await slack.chat.postMessage({
-    channel: params.channel,
-    text: params.text,
-    thread_ts: params.threadTs,
-    mrkdwn: true,
-  });
+  // Dynamic import avoids circular init with responses.ts
+  const { sendMessage, sendThreadReply } = await import('@/lib/slack/responses');
+  if (params.threadTs) {
+    await sendThreadReply(params.channel, params.threadTs, params.text);
+    return;
+  }
+  await sendMessage(params.channel, params.text);
+}
+
+/** Reset cached WebClient (tests only). */
+export function resetSlackClientCache(): void {
+  client = null;
 }
