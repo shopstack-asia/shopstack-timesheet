@@ -95,6 +95,7 @@ describe('builtin tools', () => {
 describe('ToolExecutor', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
@@ -112,31 +113,295 @@ describe('ToolExecutor', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('maps timeout', async () => {
+  it('timeout aborts execution via context.signal', async () => {
+    let sawAbort = false;
     const slow: Tool = {
-      name: 'slow',
-      description: 'slow tool',
+      name: 'slow_abort',
+      description: 'cooperative slow',
       version: '1.0.0',
-      async execute() {
-        await new Promise((r) => setTimeout(r, 200));
+      idempotent: true,
+      async execute(_input, context) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(), 5_000);
+          context.signal?.addEventListener(
+            'abort',
+            () => {
+              sawAbort = true;
+              clearTimeout(timer);
+              reject(new ToolError('aborted', 'cancelled'));
+            },
+            { once: true }
+          );
+        });
         return {
           success: true,
-          tool: 'slow',
-          durationMs: 200,
+          tool: 'slow_abort',
+          durationMs: 0,
           result: {},
         };
       },
     };
+
     const result = await executeTool(
       slow,
       {},
-      createToolContext(),
-      { timeoutMs: 20, maxRetries: 0 }
+      createToolContext({ requestId: 'r1', eventId: 'e1' }),
+      { timeoutMs: 30, maxRetries: 0 }
     );
+    expect(sawAbort).toBe(true);
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.errorCode).toBe('timeout');
     }
+  });
+
+  it('cancelled tool never continues after abort', async () => {
+    let continuedAfterAbort = false;
+    const tool: Tool = {
+      name: 'watch_abort',
+      description: 'tracks post-abort work',
+      version: '1.0.0',
+      async execute(_input, context) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(), 5_000);
+          context.signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              reject(new ToolError('aborted', 'cancelled'));
+            },
+            { once: true }
+          );
+        });
+        continuedAfterAbort = true;
+        return {
+          success: true,
+          tool: 'watch_abort',
+          durationMs: 0,
+          result: {},
+        };
+      },
+    };
+
+    const result = await executeTool(tool, {}, createToolContext(), {
+      timeoutMs: 25,
+      maxRetries: 0,
+    });
+    expect(continuedAfterAbort).toBe(false);
+    expect(result.success).toBe(false);
+  });
+
+  it('idempotent tool retries after timeout', async () => {
+    let attempts = 0;
+    const tool: Tool = {
+      name: 'flaky_idempotent',
+      description: 'fails once then ok',
+      version: '1.0.0',
+      idempotent: true,
+      async execute(_input, context) {
+        attempts += 1;
+        if (attempts === 1) {
+          await new Promise<void>((_resolve, reject) => {
+            const timer = setTimeout(() => _resolve(), 5_000);
+            context.signal?.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                reject(new ToolError('aborted', 'cancelled'));
+              },
+              { once: true }
+            );
+          });
+        }
+        return {
+          success: true,
+          tool: 'flaky_idempotent',
+          durationMs: 1,
+          result: { attempts },
+        };
+      },
+    };
+
+    const result = await executeTool(tool, {}, createToolContext(), {
+      timeoutMs: 30,
+      maxRetries: 1,
+    });
+    expect(result.success).toBe(true);
+    expect(attempts).toBe(2);
+  });
+
+  it('non-idempotent tool does not retry after timeout', async () => {
+    let attempts = 0;
+    const tool: Tool = {
+      name: 'write_once',
+      description: 'non-idempotent',
+      version: '1.0.0',
+      // idempotent defaults to false
+      async execute(_input, context) {
+        attempts += 1;
+        await new Promise<void>((_resolve, reject) => {
+          const timer = setTimeout(() => _resolve(), 5_000);
+          context.signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timer);
+              reject(new ToolError('aborted', 'cancelled'));
+            },
+            { once: true }
+          );
+        });
+        return {
+          success: true,
+          tool: 'write_once',
+          durationMs: 1,
+          result: {},
+        };
+      },
+    };
+
+    const result = await executeTool(tool, {}, createToolContext(), {
+      timeoutMs: 30,
+      maxRetries: 3,
+    });
+    expect(attempts).toBe(1);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorCode).toBe('timeout');
+    }
+  });
+
+  it('parent abort propagates to tool signal', async () => {
+    const parent = new AbortController();
+    let toolSawAbort = false;
+    const tool: Tool = {
+      name: 'parent_abort',
+      description: 'parent abort',
+      version: '1.0.0',
+      async execute(_input, context) {
+        await new Promise<void>((_resolve, reject) => {
+          context.signal?.addEventListener(
+            'abort',
+            () => {
+              toolSawAbort = true;
+              reject(new ToolError('aborted', 'cancelled'));
+            },
+            { once: true }
+          );
+        });
+        return {
+          success: true,
+          tool: 'parent_abort',
+          durationMs: 0,
+          result: {},
+        };
+      },
+    };
+
+    const promise = executeTool(
+      tool,
+      {},
+      createToolContext({ signal: parent.signal }),
+      { timeoutMs: 5_000, maxRetries: 0 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    parent.abort();
+    const result = await promise;
+    expect(toolSawAbort).toBe(true);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorCode).toBe('cancelled');
+    }
+  });
+
+  it('timeout propagates as timeout errorCode', async () => {
+    const tool: Tool = {
+      name: 'timeout_prop',
+      description: 'timeout',
+      version: '1.0.0',
+      async execute(_input, context) {
+        await new Promise<void>((_resolve, reject) => {
+          context.signal?.addEventListener(
+            'abort',
+            () => reject(new ToolError('aborted', 'cancelled')),
+            { once: true }
+          );
+        });
+        return {
+          success: true,
+          tool: 'timeout_prop',
+          durationMs: 0,
+          result: {},
+        };
+      },
+    };
+    const result = await executeTool(tool, {}, createToolContext(), {
+      timeoutMs: 20,
+      maxRetries: 0,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorCode).toBe('timeout');
+    }
+  });
+
+  it('prevents duplicate concurrent executions across retries', async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    let attempts = 0;
+    const tool: Tool = {
+      name: 'no_dup',
+      description: 'tracks concurrency',
+      version: '1.0.0',
+      idempotent: true,
+      async execute(_input, context) {
+        attempts += 1;
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        try {
+          if (attempts === 1) {
+            await new Promise<void>((_resolve, reject) => {
+              const timer = setTimeout(() => _resolve(), 5_000);
+              context.signal?.addEventListener(
+                'abort',
+                () => {
+                  clearTimeout(timer);
+                  reject(new ToolError('aborted', 'cancelled'));
+                },
+                { once: true }
+              );
+            });
+          }
+          return {
+            success: true,
+            tool: 'no_dup',
+            durationMs: 1,
+            result: {},
+          };
+        } finally {
+          concurrent -= 1;
+        }
+      },
+    };
+
+    const result = await executeTool(tool, {}, createToolContext(), {
+      timeoutMs: 30,
+      maxRetries: 1,
+    });
+    expect(result.success).toBe(true);
+    expect(maxConcurrent).toBe(1);
+    expect(attempts).toBe(2);
+  });
+
+  it('executor cleanup clears timeout after success', async () => {
+    const result = await executeTool(
+      pingTool,
+      {},
+      createToolContext(),
+      { timeoutMs: 5_000 }
+    );
+    expect(result.success).toBe(true);
+    // No hanging timers should fire abort logs after completion
+    await new Promise((r) => setTimeout(r, 20));
   });
 
   it('maps unexpected exceptions', async () => {
@@ -155,34 +420,51 @@ describe('ToolExecutor', () => {
     }
   });
 
-  it('supports cancellation via AbortSignal', async () => {
-    const ac = new AbortController();
-    const slow: Tool = {
-      name: 'cancelme',
-      description: 'slow',
+  it('does not retry parent cancellation even when idempotent', async () => {
+    let attempts = 0;
+    const parent = new AbortController();
+    const tool: Tool = {
+      name: 'no_retry_cancel',
+      description: 'idempotent but parent cancelled',
       version: '1.0.0',
-      async execute() {
-        await new Promise((r) => setTimeout(r, 500));
+      idempotent: true,
+      async execute(_input, context) {
+        attempts += 1;
+        await new Promise<void>((_resolve, reject) => {
+          context.signal?.addEventListener(
+            'abort',
+            () => reject(new ToolError('aborted', 'cancelled')),
+            { once: true }
+          );
+        });
         return {
           success: true,
-          tool: 'cancelme',
-          durationMs: 500,
+          tool: 'no_retry_cancel',
+          durationMs: 0,
           result: {},
         };
       },
     };
     const promise = executeTool(
-      slow,
+      tool,
       {},
-      createToolContext({ signal: ac.signal }),
-      { timeoutMs: 5_000 }
+      createToolContext({ signal: parent.signal }),
+      { timeoutMs: 5_000, maxRetries: 2 }
     );
-    ac.abort();
+    await new Promise((r) => setTimeout(r, 10));
+    parent.abort();
     const result = await promise;
+    expect(attempts).toBe(1);
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.errorCode).toBe('cancelled');
     }
+  });
+
+  it('builtin demo tools are marked idempotent', () => {
+    expect(pingTool.idempotent).toBe(true);
+    expect(currentTimeTool.idempotent).toBe(true);
+    expect(currentDateTool.idempotent).toBe(true);
   });
 });
 

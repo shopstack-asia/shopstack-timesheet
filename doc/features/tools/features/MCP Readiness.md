@@ -16,13 +16,23 @@ Conversation Service depends only on `ToolRouter` + `ToolRegistry`, not on MCP o
 
 ```text
 MCP Server tools
-  → map MCP tool list → Tool[] (name, description, inputSchema)
+  → map MCP tool list → Tool[] (name, description, inputSchema, idempotent?)
   → register into ToolRegistry
-  → execute() proxies to MCP call_tool
+  → execute() proxies to MCP call_tool with AbortSignal
   → map MCP content → ToolResult
 ```
 
+Adapters MUST forward `context.signal` into MCP / HTTP clients so timeout abort cancels upstream work.
+
+`idempotent` must be set deliberately for remote tools; default remains `false` (no executor retry).
+
 No Conversation Service changes required beyond registering an alternate registry/router.
+
+## Execution contract for remote tools
+
+- Cooperative cancellation via AbortSignal (no orphan HTTP after timeout)
+- No concurrent retry of the same invocation
+- Non-idempotent remote writes must not set `idempotent: true`
 
 ## Non-goals this phase
 
@@ -34,3 +44,4 @@ No Conversation Service changes required beyond registering an alternate registr
 
 - `src/lib/tools/types.ts` — `LlmToolDefinition`, `Tool`, `ToolResult`
 - `src/lib/tools/registry.ts` — `toLlmToolDefinitions()`
+- `src/lib/tools/executor.ts` — cancel / retry guarantees

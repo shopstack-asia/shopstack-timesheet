@@ -50,8 +50,16 @@ export interface Tool {
   name: string;
   description: string;
   version: string;
+  /**
+   * When true, the executor may retry after a settled timeout / transient failure.
+   * Default: false (business tools must opt in after review).
+   */
+  readonly idempotent?: boolean;
   /** JSON Schema for arguments (OpenAI / MCP compatible shape) */
   inputSchema?: ToolInputSchema;
+  /**
+   * Execute the tool. Implementations MUST honor `context.signal` (cooperative cancel).
+   */
   execute(
     input: Record<string, unknown>,
     context: ToolContext

@@ -53,7 +53,7 @@ sequenceDiagram
 | `errors.ts` | Typed ToolError codes |
 | `tool-context.ts` | Context factory |
 | `registry.ts` | DI registry |
-| `executor.ts` | Timeout / retry / logging / duration |
+| `executor.ts` | AbortController timeout, cooperative cancel, idempotent-only retry, logging / duration |
 | `router.ts` | Validate → find → execute |
 | `builtins.ts` | Demo tools only |
 
@@ -64,6 +64,14 @@ sequenceDiagram
 - No dynamic code execution, eval, shell, or filesystem write in the foundation
 - Demo tools perform no network I/O
 - Never log secrets
+- Executor aborts timed-out attempts and never retries non-idempotent tools (prevents duplicate business writes)
+
+## Execution safety (Phase 9 readiness)
+
+- `Tool.idempotent` defaults to `false`
+- Built-in demo tools opt in (`idempotent: true`)
+- Business tools must stay non-idempotent until explicitly reviewed
+- See [Tool Execution Lifecycle.md](./Tool%20Execution%20Lifecycle.md) for cancel / retry guarantees
 
 ## Source Code References
 
