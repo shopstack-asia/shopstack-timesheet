@@ -45,6 +45,13 @@ Timesheet, Leave, Holiday, Employee, Project, Approval — each becomes a thin t
 - Secrets only in env / AuthProvider
 - Logs never include Authorization or API keys
 - Server-side only (`src/lib/business`)
+- Automatic retries require **idempotent** requests (POST/PATCH never retry by default)
+
+## Safe retry (create/update readiness)
+
+- `idempotent` + optional `idempotencyKey` on `BusinessRequestOptions`
+- Prevents duplicate `POST /timesheets` after timeout
+- See [Request Lifecycle.md](./Request%20Lifecycle.md)
 
 ## Source Code References
 

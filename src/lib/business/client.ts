@@ -19,6 +19,7 @@ import type {
   BusinessRequestOptions,
   HttpMethod,
 } from '@/lib/business/types';
+import { resolveRequestIdempotent } from '@/lib/business/types';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -62,14 +63,16 @@ function parseErrorMessage(bodyText: string, status: number): string {
   return bodyText.slice(0, 200);
 }
 
-function parseSuccessData<T>(bodyText: string, status: number, requestId: string): T {
+function parseSuccessData<T>(
+  bodyText: string,
+  status: number,
+  requestId: string
+): T {
   if (!bodyText.trim()) {
-    // 204 / empty success
     return undefined as T;
   }
   try {
     const json = JSON.parse(bodyText) as unknown;
-    // Support either raw payload or { data: ... } / { success, data }
     if (
       json &&
       typeof json === 'object' &&
@@ -112,6 +115,18 @@ async function defaultFetch(args: {
       { cause: error }
     );
   }
+}
+
+/** Retry only when request is idempotent AND error is transport/retryable. */
+export function shouldRetryBusinessRequest(
+  idempotent: boolean,
+  error: unknown,
+  attempt: number,
+  maxRetries: number
+): boolean {
+  if (!idempotent) return false;
+  if (attempt >= maxRetries) return false;
+  return isRetryableBusinessError(error);
 }
 
 export type BusinessApiClient = {
@@ -177,24 +192,34 @@ export function createBusinessApiClient(deps?: {
   async function requestOnce<T>(
     options: BusinessRequestOptions,
     requestId: string,
-    attempt: number
+    attempt: number,
+    idempotent: boolean
   ): Promise<ApiResponse<T>> {
     const method: HttpMethod = options.method ?? 'GET';
     const url = buildUrl(config.baseUrl, options.path, options.query);
-    // Endpoint path only for logs (no query secrets assumed in path)
     const endpoint = options.path.startsWith('/')
       ? options.path
       : `/${options.path}`;
+    const idempotencyKey = options.idempotencyKey?.trim() || undefined;
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
       'X-Request-Id': requestId,
       ...(options.headers ?? {}),
     };
+    if (idempotencyKey && !headers['Idempotency-Key']) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
     await auth.apply(headers);
 
     let body: string | undefined;
-    if (options.body !== undefined && method !== 'GET' && method !== 'DELETE') {
+    if (
+      options.body !== undefined &&
+      method !== 'GET' &&
+      method !== 'HEAD' &&
+      method !== 'OPTIONS' &&
+      method !== 'DELETE'
+    ) {
       body = JSON.stringify(options.body);
       if (!headers['Content-Type']) {
         headers['Content-Type'] = 'application/json';
@@ -221,7 +246,9 @@ export function createBusinessApiClient(deps?: {
       requestId,
       method,
       endpoint,
-      attempt,
+      idempotent,
+      retryAttempt: attempt,
+      idempotencyKey,
     });
 
     try {
@@ -245,7 +272,9 @@ export function createBusinessApiClient(deps?: {
           status,
           durationMs,
           errorCode: err.code,
-          attempt,
+          idempotent,
+          retryAttempt: attempt,
+          idempotencyKey,
         });
         throw err;
       }
@@ -257,7 +286,9 @@ export function createBusinessApiClient(deps?: {
         endpoint,
         status,
         durationMs,
-        attempt,
+        idempotent,
+        retryAttempt: attempt,
+        idempotencyKey,
       });
 
       return {
@@ -281,7 +312,9 @@ export function createBusinessApiClient(deps?: {
             endpoint,
             durationMs,
             errorCode: err.code,
-            attempt,
+            idempotent,
+            retryAttempt: attempt,
+            idempotencyKey,
           });
           throw err;
         }
@@ -294,7 +327,9 @@ export function createBusinessApiClient(deps?: {
           endpoint,
           durationMs,
           errorCode: err.code,
-          attempt,
+          idempotent,
+          retryAttempt: attempt,
+          idempotencyKey,
         });
         throw err;
       }
@@ -313,7 +348,9 @@ export function createBusinessApiClient(deps?: {
         endpoint,
         durationMs,
         errorCode: err.code,
-        attempt,
+        idempotent,
+        retryAttempt: attempt,
+        idempotencyKey,
       });
       throw err;
     } finally {
@@ -328,17 +365,23 @@ export function createBusinessApiClient(deps?: {
     options: BusinessRequestOptions
   ): Promise<ApiResponse<T>> {
     const requestId = options.requestId?.trim() || createRequestId();
+    const method: HttpMethod = options.method ?? 'GET';
+    const idempotent = resolveRequestIdempotent(method, options.idempotent);
     let attempt = 0;
     let lastError: unknown;
 
     while (attempt <= config.maxRetries) {
       try {
-        return await requestOnce<T>(options, requestId, attempt);
+        return await requestOnce<T>(options, requestId, attempt, idempotent);
       } catch (error) {
         lastError = error;
         if (
-          !isRetryableBusinessError(error) ||
-          attempt >= config.maxRetries
+          !shouldRetryBusinessRequest(
+            idempotent,
+            error,
+            attempt,
+            config.maxRetries
+          )
         ) {
           throw error;
         }

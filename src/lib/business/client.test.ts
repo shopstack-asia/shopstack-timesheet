@@ -7,6 +7,7 @@ import {
 import {
   createBusinessApiClient,
   resetBusinessApiClient,
+  shouldRetryBusinessRequest,
 } from '@/lib/business/client';
 import {
   AuthenticationError,
@@ -16,7 +17,10 @@ import {
   TimeoutError,
   ValidationError,
 } from '@/lib/business/errors';
-import type { BusinessApiConfig } from '@/lib/business/types';
+import {
+  resolveRequestIdempotent,
+  type BusinessApiConfig,
+} from '@/lib/business/types';
 
 function testConfig(
   overrides: Partial<BusinessApiConfig> = {}
@@ -30,6 +34,32 @@ function testConfig(
     ...overrides,
   };
 }
+
+describe('resolveRequestIdempotent / shouldRetryBusinessRequest', () => {
+  it('defaults GET true and POST/PATCH false', () => {
+    expect(resolveRequestIdempotent('GET')).toBe(true);
+    expect(resolveRequestIdempotent('HEAD')).toBe(true);
+    expect(resolveRequestIdempotent('OPTIONS')).toBe(true);
+    expect(resolveRequestIdempotent('POST')).toBe(false);
+    expect(resolveRequestIdempotent('PATCH')).toBe(false);
+    expect(resolveRequestIdempotent('PUT')).toBe(false);
+    expect(resolveRequestIdempotent('DELETE')).toBe(false);
+  });
+
+  it('explicit idempotent overrides method default', () => {
+    expect(resolveRequestIdempotent('POST', true)).toBe(true);
+    expect(resolveRequestIdempotent('GET', false)).toBe(false);
+  });
+
+  it('retry policy requires idempotent + retryable error', () => {
+    const timeout = new TimeoutError();
+    expect(shouldRetryBusinessRequest(true, timeout, 0, 2)).toBe(true);
+    expect(shouldRetryBusinessRequest(false, timeout, 0, 2)).toBe(false);
+    expect(
+      shouldRetryBusinessRequest(true, new AuthenticationError(), 0, 2)
+    ).toBe(false);
+  });
+});
 
 describe('loadBusinessApiConfig', () => {
   it('requires base URL and API key', () => {
@@ -222,7 +252,7 @@ describe('BusinessApiClient', () => {
     expect(calls).toBe(2);
   });
 
-  it('retries on 503', async () => {
+  it('GET retries on 503', async () => {
     let calls = 0;
     const client = createBusinessApiClient({
       forceNew: true,
@@ -238,7 +268,135 @@ describe('BusinessApiClient', () => {
     expect(calls).toBe(2);
   });
 
-  it('timeout aborts and is retryable for idempotent transport retries', async () => {
+  it('POST does not retry on timeout or 429', async () => {
+    let calls = 0;
+    const client = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig({ maxRetries: 3 }),
+      fetchImpl: async () => {
+        calls += 1;
+        return { status: 429, bodyText: 'slow' };
+      },
+    });
+    await expect(client.post('/timesheets', { hours: 8 })).rejects.toBeInstanceOf(
+      RateLimitError
+    );
+    expect(calls).toBe(1);
+  });
+
+  it('PATCH does not retry on 503', async () => {
+    let calls = 0;
+    const client = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig({ maxRetries: 3 }),
+      fetchImpl: async () => {
+        calls += 1;
+        return { status: 503, bodyText: 'down' };
+      },
+    });
+    await expect(client.patch('/entries/1', { hours: 4 })).rejects.toMatchObject({
+      retryable: true,
+    });
+    expect(calls).toBe(1);
+  });
+
+  it('PUT is not retried by default; retries when idempotent: true', async () => {
+    let calls = 0;
+    const defaultClient = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig({ maxRetries: 2 }),
+      fetchImpl: async () => {
+        calls += 1;
+        return { status: 429, bodyText: 'slow' };
+      },
+    });
+    await expect(defaultClient.put('/entries/1', { hours: 1 })).rejects.toBeInstanceOf(
+      RateLimitError
+    );
+    expect(calls).toBe(1);
+
+    calls = 0;
+    const idempotentClient = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig({ maxRetries: 1 }),
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) return { status: 429, bodyText: 'slow' };
+        return { status: 200, bodyText: '{"ok":true}' };
+      },
+    });
+    const res = await idempotentClient.put(
+      '/entries/1',
+      { hours: 1 },
+      { idempotent: true }
+    );
+    expect(res.data).toEqual({ ok: true });
+    expect(calls).toBe(2);
+  });
+
+  it('DELETE is not retried by default; retries when idempotent: true', async () => {
+    let calls = 0;
+    const defaultClient = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig({ maxRetries: 2 }),
+      fetchImpl: async () => {
+        calls += 1;
+        return { status: 503, bodyText: 'down' };
+      },
+    });
+    await expect(defaultClient.delete('/entries/1')).rejects.toMatchObject({
+      retryable: true,
+    });
+    expect(calls).toBe(1);
+
+    calls = 0;
+    const idempotentClient = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig({ maxRetries: 1 }),
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) return { status: 503, bodyText: 'down' };
+        return { status: 200, bodyText: '{}' };
+      },
+    });
+    await idempotentClient.delete('/entries/1', { idempotent: true });
+    expect(calls).toBe(2);
+  });
+
+  it('injects Idempotency-Key header when supplied', async () => {
+    const client = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig(),
+      fetchImpl: async ({ headers }) => {
+        expect(headers['Idempotency-Key']).toBe('create-ts-abc');
+        return { status: 201, bodyText: '{"id":"1"}' };
+      },
+    });
+    await client.post(
+      '/timesheets',
+      { hours: 8 },
+      { idempotencyKey: 'create-ts-abc' }
+    );
+  });
+
+  it('logs idempotent and retryAttempt fields', async () => {
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((msg: unknown) => {
+      logs.push(String(msg));
+    });
+    const client = createBusinessApiClient({
+      forceNew: true,
+      config: testConfig({ logging: true }),
+      fetchImpl: async () => ({ status: 200, bodyText: '{}' }),
+    });
+    await client.get('/x', { idempotencyKey: 'ik-1' });
+    const joined = logs.join('\n');
+    expect(joined).toContain('"idempotent":true');
+    expect(joined).toContain('"retryAttempt":0');
+    expect(joined).toContain('"idempotencyKey":"ik-1"');
+  });
+
+  it('timeout aborts and is retryable for idempotent GET', async () => {
     let calls = 0;
     const client = createBusinessApiClient({
       forceNew: true,
