@@ -424,16 +424,28 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     setSubmitting(true);
 
     try {
-      // One click: POST each day with entries sequentially (avoids self-race on Sheets rows)
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
       const results = await submitWeekDaysSequentially(
-        timesheet.map((day) => ({
-          date: day.date,
-          entries: day.entries.map((entry) => ({
-            projectId: entry.projectId,
-            taskId: entry.taskId,
-            hours: entry.hours,
-          })),
-        })),
+        timesheet.map((day) => {
+          const dayHours = day.entries.reduce((s, e) => s + e.hours, 0);
+          const onFullLeave = isFullLeave(day.date, leaveData);
+          const onHoliday = holidays.some(
+            (h) => h.date === day.date && (h.is_holiday ?? true)
+          );
+          return {
+            date: day.date,
+            entries: day.entries.map((entry) => ({
+              projectId: entry.projectId,
+              taskId: entry.taskId,
+              hours: entry.hours,
+            })),
+            // Submit Week is the user's acknowledgment for web (same role as YES/OVERRIDE in Slack).
+            leaveOverride: onFullLeave,
+            holidayAcknowledged: onHoliday,
+            futureAcknowledged: day.date > todayStr,
+            over24Acknowledged: dayHours > 24,
+          };
+        }),
         async (day) => {
           const response = await fetch('/api/timesheet/submit', {
             method: 'POST',
@@ -443,6 +455,10 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
             body: JSON.stringify({
               date: day.date,
               entries: day.entries,
+              leaveOverride: day.leaveOverride,
+              holidayAcknowledged: day.holidayAcknowledged,
+              futureAcknowledged: day.futureAcknowledged,
+              over24Acknowledged: day.over24Acknowledged,
             }),
           });
 

@@ -31,6 +31,15 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const { enforceRateLimit } = await import('@/lib/rate-limit');
+    const limited = await enforceRateLimit(request, {
+      bucket: 'timesheet-holidays',
+      limit: 60,
+      windowSeconds: 60,
+      userKey: session.staffProfile?.EmployeeID,
+    });
+    if (!limited.ok) return limited.response;
+
     const location = resolveLocation(session.staffProfile?.Location);
 
     const searchParams = request.nextUrl.searchParams;

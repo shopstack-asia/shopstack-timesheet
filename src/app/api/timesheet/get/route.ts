@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { ApiResponse, TimeEntry } from '@/types';
 import { getWeeklyTimesheetForStaff } from '@/lib/timesheet/timesheet-service';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +16,14 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const limited = await enforceRateLimit(request, {
+      bucket: 'timesheet-get',
+      limit: 120,
+      windowSeconds: 60,
+      userKey: session.staffProfile.EmployeeID,
+    });
+    if (!limited.ok) return limited.response;
 
     const weekStart = request.nextUrl.searchParams.get('weekStart');
     if (!weekStart) {
@@ -41,8 +50,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json<ApiResponse<TimeEntry[]>>(
       {
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to fetch time log entries',
+        error: 'Failed to fetch time log entries',
       },
       { status: 500 }
     );

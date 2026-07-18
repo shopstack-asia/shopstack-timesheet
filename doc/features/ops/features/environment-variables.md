@@ -33,13 +33,14 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` | Private key with `\n` escapes, quoted |
 | `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET` / `ZOHO_REFRESH_TOKEN` | Zoho OAuth |
 | `ZOHO_API_DOMAIN` | e.g. `https://people.zoho.com` |
-| `CRON_SECRET` | Bearer token for `/api/cron/*` |
+| `CRON_SECRET` | **Required** Bearer token for `/api/cron/*`. Empty/missing → all cron requests rejected (fail closed). |
+| `ENABLE_DEBUG_API` | Set `true` to allow `/api/debug/*` in production (also requires `CRON_SECRET`). Default: disabled in production. |
 
 #### Optional — app URLs (reminders)
 
 | Variable | Purpose |
 |----------|---------|
-| `NEXT_PUBLIC_APP_URL` / `APP_URL` | Preferred timesheet link base for Slack/email |
+| `NEXT_PUBLIC_APP_URL` / `APP_URL` | **Required** absolute base URL for outbound reminder links. Host header is never trusted. |
 
 #### Optional — holidays location fallbacks
 
@@ -84,7 +85,10 @@ Lock key: `timesheet:sheets:timelog:write` (see `src/lib/sheets-write-lock.ts`).
 
 - Never commit `.env` (gitignored). Use `.env.example` as template only.
 - In production, set vars in the host (e.g. Vercel) dashboard.
-- `/api/debug/*` requires `Authorization: Bearer ${CRON_SECRET}` when `NODE_ENV=production`.
+- `/api/cron/*` fails closed if `CRON_SECRET` is missing/empty; comparison is timing-safe.
+- `/api/debug/*` is disabled in production unless `ENABLE_DEBUG_API=true`, and always requires Bearer `CRON_SECRET`.
+- Do not put secrets in `next.config.js` `env` (client bundle risk).
+- Outbound reminder links use configured `NEXT_PUBLIC_APP_URL` / `APP_URL` only (never Host header).
 - Slack AI docs: [`docs/ai-implementation/`](../../../../docs/ai-implementation/).
 
 ### Related feature docs

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackSignature } from '@/lib/slack/client';
 import { processSlackInteraction } from '@/lib/slack/event-handler';
 import { waitUntil } from '@vercel/functions';
+import { enforceRateLimit } from '@/lib/rate-limit';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -16,7 +17,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
   }
 
-  // Slack sends application/x-www-form-urlencoded with payload=
+  const limited = await enforceRateLimit(request, {
+    bucket: 'slack-interactions',
+    limit: 120,
+    windowSeconds: 60,
+  });
+  if (!limited.ok) return limited.response;
+
   const params = new URLSearchParams(rawBody);
   const payloadRaw = params.get('payload');
   if (!payloadRaw) {
@@ -36,6 +43,5 @@ export async function POST(request: NextRequest) {
     })
   );
 
-  // Acknowledge immediately
   return new NextResponse('', { status: 200 });
 }

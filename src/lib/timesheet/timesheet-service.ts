@@ -67,6 +67,10 @@ export type SubmitDayEntryInput = {
 export type SubmitDayOptions = {
   /** When false (Slack agent), unknown projectId is an error — never createProject */
   allowCustomProject?: boolean;
+  leaveOverride?: boolean;
+  holidayAcknowledged?: boolean;
+  futureAcknowledged?: boolean;
+  over24Acknowledged?: boolean;
 };
 
 type SheetsDayMutator = {
@@ -143,6 +147,23 @@ export async function submitDayTimesheetForStaff(
   const parsed = schema.safeParse({ date, entries });
   if (!parsed.success) {
     throw new Error(`Validation error: ${parsed.error.message}`);
+  }
+
+  const { assertSubmitBusinessRules, SubmitPolicyError } = await import(
+    '@/lib/timesheet/submit-policy'
+  );
+  try {
+    await assertSubmitBusinessRules(ctx, parsed.data.date, parsed.data.entries, {
+      leaveOverride: options.leaveOverride,
+      holidayAcknowledged: options.holidayAcknowledged,
+      futureAcknowledged: options.futureAcknowledged,
+      over24Acknowledged: options.over24Acknowledged,
+    });
+  } catch (error) {
+    if (error instanceof SubmitPolicyError) {
+      throw error;
+    }
+    throw error;
   }
 
   // Validate master data BEFORE lock / mutations

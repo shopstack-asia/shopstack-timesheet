@@ -5,6 +5,10 @@ export type WeekDaySubmitInput = {
     taskId: string;
     hours: number;
   }>;
+  leaveOverride?: boolean;
+  holidayAcknowledged?: boolean;
+  futureAcknowledged?: boolean;
+  over24Acknowledged?: boolean;
 };
 
 export type DaySubmitResult = {

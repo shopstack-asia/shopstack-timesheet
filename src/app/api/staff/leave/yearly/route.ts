@@ -42,6 +42,15 @@ export async function GET(request: NextRequest) {
 
     const employeeId = session.staffProfile.EmployeeID;
 
+    const { enforceRateLimit } = await import('@/lib/rate-limit');
+    const limited = await enforceRateLimit(request, {
+      bucket: 'staff-leave-yearly',
+      limit: 60,
+      windowSeconds: 60,
+      userKey: employeeId,
+    });
+    if (!limited.ok) return limited.response;
+
     // Get year from query params or default to current year
     const searchParams = request.nextUrl.searchParams;
     const yearParam = searchParams.get('year');

@@ -43,8 +43,13 @@ export const timesheetTools = {
     date: string,
     entries: Array<{ projectId: string; taskId: string; hours: number }>
   ) {
+    // Agent conversation already required OVERRIDE / YES acknowledgments.
     return submitDayTimesheetForStaff(ctx, date, entries, {
       allowCustomProject: false,
+      leaveOverride: true,
+      holidayAcknowledged: true,
+      futureAcknowledged: true,
+      over24Acknowledged: true,
     });
   },
   async clear_day_timesheet(ctx: AgentAuthContext, date: string) {
