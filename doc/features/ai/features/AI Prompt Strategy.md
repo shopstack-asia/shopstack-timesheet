@@ -20,7 +20,7 @@ The builder always starts with a Tool Calling Reliability prompt that:
 
 Canonical text lives in `src/lib/ai/prompt.ts` (`AI_TIMESHEET_SYSTEM_PROMPT`).
 
-See also [AI Decision Engine.md](./AI%20Decision%20Engine.md) for the deterministic router that enforces tool calls when the model skips them.
+See also [AI Decision Engine.md](./AI%20Decision%20Engine.md) for the deterministic router, explicit ISO range recognition, Bangkok tomorrow resolution, and round-0 enforcement that requires the exact Business Tool (wrong or demonstration tools do not satisfy the gate).
 
 ### Builder API
 

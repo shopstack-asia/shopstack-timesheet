@@ -41,6 +41,11 @@ export function bangkokYesterday(now: Date = new Date()): string {
   return addCalendarDays(formatBangkokDate(now), -1);
 }
 
+/** Next calendar day in Asia/Bangkok (handles month/year boundaries). */
+export function bangkokTomorrow(now: Date = new Date()): string {
+  return addCalendarDays(formatBangkokDate(now), 1);
+}
+
 export function bangkokCurrentWeek(now: Date = new Date()): {
   startDate: string;
   endDate: string;

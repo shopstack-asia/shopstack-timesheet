@@ -243,6 +243,7 @@ describe('AI conversation date → tool calls', () => {
         conversationInput(message, `conv-${tool}-${message.slice(0, 8)}`),
         {
           toolRegistry: registry,
+          decisionNow: FIXED_NOW,
           generate: async (input: GenerateResponseInput) => {
             turn += 1;
             if (turn === 1) {

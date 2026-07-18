@@ -4,9 +4,15 @@ import {
   bangkokLastWeek,
   bangkokThisMonth,
   bangkokToday,
+  bangkokTomorrow,
   bangkokYesterday,
   bangkokMostRecentWeekday,
 } from '@/lib/tools/business/timesheet/bangkok-dates';
+import {
+  inclusiveDayCount,
+  isValidCalendarDate,
+} from '@/lib/tools/business/timesheet/date-input';
+import { MAX_TIMESHEET_RANGE_DAYS } from '@/lib/tools/business/types';
 
 export type BusinessToolDecision =
   | {
@@ -39,10 +45,14 @@ const RANGE_RE =
   /(สัปดาห์|อาทิตย์|เดือน|weekly|monthly|this\s+week|last\s+week|this\s+month|last\s+month|สรุป|summary|ทั้งหมด|ชั่วโมง.*(สัปดาห์|เดือน|อาทิตย์)|hours?\s+(this|last)\s+(week|month))/i;
 
 const DAY_RE =
-  /(วันนี้|เมื่อวาน|tomorrow|today|yesterday|what\s+did\s+i\s+(do|log)|ทำอะไร|ลงอะไร|logged|timesheet|วัน(จันทร์|อังคาร|พุธ|พฤหัส|ศุกร์|เสาร์|อาทิตย์)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i;
+  /(วันนี้|เมื่อวาน|พรุ่งนี้|tomorrow|today|yesterday|what\s+did\s+i\s+(do|log)|ทำอะไร|ลงอะไร|logged|timesheet|วัน(จันทร์|อังคาร|พุธ|พฤหัส|ศุกร์|เสาร์|อาทิตย์)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i;
 
-const ISO_DATE_RE = /\b(\d{4}-\d{2}-\d{2})\b/;
+const ISO_DATE_GLOBAL_RE = /\b(\d{4}-\d{2}-\d{2})\b/g;
 const BARE_DAY_RE = /วันที่\s*(\d{1,2})(?!\s*(เดือน|\/|-|\d))/i;
+
+/** Explicit two-date range (Thai / English / hyphen). */
+const EXPLICIT_RANGE_RE =
+  /(?:จาก|ตั้งแต่|from|between)?\s*(\d{4}-\d{2}-\d{2})\s*(?:ถึง|to|and|-|–|—)\s*(\d{4}-\d{2}-\d{2})/i;
 
 const WEEKDAY_TH: Record<string, number> = {
   อาทิตย์: 0,
@@ -64,6 +74,147 @@ const WEEKDAY_EN: Record<string, number> = {
   saturday: 6,
 };
 
+function extractIsoDates(text: string): string[] {
+  return [...text.matchAll(ISO_DATE_GLOBAL_RE)].map((m) => m[1]!);
+}
+
+function resolveExplicitRange(text: string): BusinessToolDecision | null {
+  const paired = text.match(EXPLICIT_RANGE_RE);
+  if (!paired) return null;
+
+  const startDate = paired[1]!;
+  const endDate = paired[2]!;
+
+  if (!isValidCalendarDate(startDate) || !isValidCalendarDate(endDate)) {
+    return {
+      action: 'clarify',
+      message:
+        'One or both dates are not valid calendar dates. Please use YYYY-MM-DD (for example 2026-07-01 to 2026-07-10).',
+      reason: 'invalid_explicit_range_date',
+    };
+  }
+
+  if (startDate > endDate) {
+    return {
+      action: 'clarify',
+      message:
+        'The start date is after the end date. Please provide a valid range (startDate ≤ endDate).',
+      reason: 'reversed_explicit_range',
+    };
+  }
+
+  const days = inclusiveDayCount(startDate, endDate);
+  if (days > MAX_TIMESHEET_RANGE_DAYS) {
+    return {
+      action: 'clarify',
+      message: `That date range is too long (maximum ${MAX_TIMESHEET_RANGE_DAYS} calendar days). Please choose a shorter range.`,
+      reason: 'explicit_range_too_long',
+    };
+  }
+
+  return {
+    action: 'call_tool',
+    toolName: 'get_timesheet_range',
+    arguments: { startDate, endDate },
+    reason: 'explicit_date_range',
+  };
+}
+
+function resolveSingleDay(
+  text: string,
+  now: Date
+): BusinessToolDecision | null {
+  const isos = extractIsoDates(text);
+  if (isos.length >= 2) {
+    // Should have been handled as an explicit range; do not collapse to single day.
+    return {
+      action: 'clarify',
+      message:
+        'Please provide the date range using a clear format such as 2026-07-01 to 2026-07-10.',
+      reason: 'ambiguous_multi_iso_dates',
+    };
+  }
+
+  if (isos.length === 1) {
+    const date = isos[0]!;
+    if (!isValidCalendarDate(date)) {
+      return {
+        action: 'clarify',
+        message:
+          'That date is not a valid calendar day. Please use YYYY-MM-DD (for example 2026-07-15).',
+        reason: 'invalid_explicit_date',
+      };
+    }
+    return {
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date },
+      reason: 'timesheet_day_intent',
+    };
+  }
+
+  if (/(พรุ่งนี้|tomorrow)/i.test(text)) {
+    return {
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date: bangkokTomorrow(now) },
+      reason: 'timesheet_day_intent',
+    };
+  }
+  if (/(เมื่อวาน|yesterday)/i.test(text)) {
+    return {
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date: bangkokYesterday(now) },
+      reason: 'timesheet_day_intent',
+    };
+  }
+  if (/(วันนี้|today)/i.test(text)) {
+    return {
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date: bangkokToday(now) },
+      reason: 'timesheet_day_intent',
+    };
+  }
+
+  const thDay = Object.keys(WEEKDAY_TH).find((k) =>
+    new RegExp(`วัน${k}`).test(text)
+  );
+  const en = Object.keys(WEEKDAY_EN).find((k) =>
+    new RegExp(`\\b${k}\\b`, 'i').test(text)
+  );
+
+  if (thDay) {
+    return {
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date: bangkokMostRecentWeekday(WEEKDAY_TH[thDay]!, now) },
+      reason: 'timesheet_day_intent',
+    };
+  }
+  if (en) {
+    return {
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date: bangkokMostRecentWeekday(WEEKDAY_EN[en]!, now) },
+      reason: 'timesheet_day_intent',
+    };
+  }
+
+  // Day-ish intent without a resolvable date — never guess "today".
+  if (DAY_RE.test(text)) {
+    return {
+      action: 'clarify',
+      message:
+        'Which date do you mean? Please include an explicit date (YYYY-MM-DD) or a relative day such as today or yesterday.',
+      reason: 'unresolved_date_phrase',
+    };
+  }
+
+  return null;
+}
+
 /**
  * Deterministic business-intent router.
  * Business topics must map to tools; general chit-chat returns none.
@@ -79,13 +230,23 @@ export function decideBusinessTool(
 
   const now = options?.now ?? new Date();
 
-  // General conversation fallback (greeting / thanks / joke / story)
-  if (GENERAL_ONLY_RE.test(text) && !WORK_CONTEXT_RE.test(text) && !DAY_RE.test(text) && !RANGE_RE.test(text)) {
+  if (
+    GENERAL_ONLY_RE.test(text) &&
+    !WORK_CONTEXT_RE.test(text) &&
+    !DAY_RE.test(text) &&
+    !RANGE_RE.test(text) &&
+    !EXPLICIT_RANGE_RE.test(text)
+  ) {
     return { action: 'none', reason: 'general_conversation' };
   }
 
-  // Ambiguous bare calendar day without month/year
-  if (BARE_DAY_RE.test(text) && !ISO_DATE_RE.test(text) && !/(เดือน|ปี|January|February|March|April|May|June|July|August|September|October|November|December)/i.test(text)) {
+  if (
+    BARE_DAY_RE.test(text) &&
+    extractIsoDates(text).length === 0 &&
+    !/(เดือน|ปี|January|February|March|April|May|June|July|August|September|October|November|December)/i.test(
+      text
+    )
+  ) {
     return {
       action: 'clarify',
       message:
@@ -94,7 +255,6 @@ export function decideBusinessTool(
     };
   }
 
-  // Priority 1: work context
   if (WORK_CONTEXT_RE.test(text)) {
     return {
       action: 'call_tool',
@@ -104,7 +264,12 @@ export function decideBusinessTool(
     };
   }
 
-  // Priority 2a: date range
+  // Explicit ISO ranges before single-date / relative range phrases.
+  const explicitRange = resolveExplicitRange(text);
+  if (explicitRange) {
+    return explicitRange;
+  }
+
   if (RANGE_RE.test(text)) {
     let range: { startDate: string; endDate: string };
     if (/(เดือนที่แล้ว|last\s+month)/i.test(text)) {
@@ -124,38 +289,11 @@ export function decideBusinessTool(
     };
   }
 
-  // Priority 2b: single date
-  if (DAY_RE.test(text) || ISO_DATE_RE.test(text)) {
-    const iso = text.match(ISO_DATE_RE)?.[1];
-    let date: string;
-    if (iso) {
-      date = iso;
-    } else if (/(เมื่อวาน|yesterday)/i.test(text)) {
-      date = bangkokYesterday(now);
-    } else if (/(วันนี้|today)/i.test(text)) {
-      date = bangkokToday(now);
-    } else {
-      const th = Object.keys(WEEKDAY_TH).find((k) => text.includes(k));
-      const en = Object.keys(WEEKDAY_EN).find((k) =>
-        new RegExp(`\\b${k}\\b`, 'i').test(text)
-      );
-      if (th) {
-        date = bangkokMostRecentWeekday(WEEKDAY_TH[th]!, now);
-      } else if (en) {
-        date = bangkokMostRecentWeekday(WEEKDAY_EN[en]!, now);
-      } else {
-        date = bangkokToday(now);
-      }
-    }
-    return {
-      action: 'call_tool',
-      toolName: 'get_timesheet',
-      arguments: { date },
-      reason: 'timesheet_day_intent',
-    };
+  const single = resolveSingleDay(text, now);
+  if (single) {
+    return single;
   }
 
-  // Booking / employee work / hours without clearer shape → prefer work context
   if (
     /(booking|employee\s+work|work\s+hour|logged\s+hour|ชั่วโมงทำงาน|งานของฉัน)/i.test(
       text

@@ -6,7 +6,9 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const RELATIVE_DATE_RE =
   /^(today|yesterday|tomorrow|this\s+week|last\s+week|this\s+month|last\s+month|วันนี้|เมื่อวาน|พรุ่งนี้|สัปดาห์นี้|สัปดาห์ที่แล้ว|เดือนนี้|เดือนที่แล้ว)$/i;
 
-function isValidCalendarDate(iso: string): boolean {
+/** True when `iso` is YYYY-MM-DD and a real Gregorian calendar day. */
+export function isValidCalendarDate(iso: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
   const [y, m, d] = iso.split('-').map(Number);
   if (!y || !m || !d) return false;
   const dt = new Date(Date.UTC(y, m - 1, d));
