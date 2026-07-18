@@ -1,9 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  AuthenticationError,
-  TimeoutError,
-  UnexpectedApiError,
-} from '@/lib/business/errors';
 import type { BusinessApiClient } from '@/lib/business/client';
 import { createContextManager } from '@/lib/conversation/context/context-manager';
 import { createContextStore } from '@/lib/conversation/context/context-store';
@@ -14,6 +9,7 @@ import {
   createGetTodayTimesheetTool,
   parseTodayTimesheet,
 } from '@/lib/tools/business/timesheet/get-today-timesheet';
+import { bangkokToday } from '@/lib/tools/business/timesheet/bangkok-dates';
 import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 
 function mockClient(
@@ -55,15 +51,6 @@ function mockClient(
   };
 }
 
-const validToday = {
-  date: '2026-07-18',
-  entries: [{ hours: 3, projectName: 'Portal', description: 'API' }],
-  totalHours: 3,
-  remainingHours: 5,
-  expectedHours: 8,
-  submitted: false,
-};
-
 function makeDeps(client: BusinessApiClient) {
   return {
     client,
@@ -85,15 +72,8 @@ function makeDeps(client: BusinessApiClient) {
   };
 }
 
-function toolCtx() {
-  return createToolContext({
-    userId: 'U1',
-    conversationId: 'conv-today',
-  });
-}
-
-describe('parseTodayTimesheet', () => {
-  it('parses and derives remaining hours', () => {
+describe('parseTodayTimesheet (compat)', () => {
+  it('delegates to daily parser', () => {
     const today = parseTodayTimesheet({
       date: '2026-07-18',
       entries: [{ hours: 2 }, { hours: 1 }],
@@ -101,96 +81,49 @@ describe('parseTodayTimesheet', () => {
     expect(today.totalHours).toBe(3);
     expect(today.remainingHours).toBe(5);
   });
-
-  it('rejects malformed', () => {
-    expect(() => parseTodayTimesheet({})).toThrow(/Malformed/);
-  });
 });
 
-describe('get_today_timesheet tool', () => {
+describe('get_today_timesheet deprecated wrapper', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  it('success with identity from conversation context', async () => {
+  it('calls shared /v1/timesheets?date=Bangkok-today', async () => {
+    const today = bangkokToday();
     const tool = createGetTodayTimesheetTool(
       makeDeps(
         mockClient(async (path, options) => {
-          expect(path).toBe(TIMESHEET_API_PATHS.todayTimesheet);
+          expect(path).toBe(
+            `${TIMESHEET_API_PATHS.timesheets}?date=${encodeURIComponent(today)}`
+          );
           expect(options?.headers?.['X-Employee-Id']).toBe('S1');
           return {
             success: true,
-            data: validToday,
+            data: {
+              date: today,
+              entries: [],
+              totalHours: 0,
+              expectedHours: 8,
+              remainingHours: 8,
+              submitted: false,
+            },
             status: 200,
             requestId: 'r1',
           };
         })
       )
     );
-    const result = await tool.execute({}, toolCtx());
+    const result = await tool.execute(
+      {},
+      createToolContext({ userId: 'U1', conversationId: 'conv-today' })
+    );
     expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.result).toMatchObject({
-        date: '2026-07-18',
-        employeeId: 'S1',
-      });
-    }
   });
 
-  it('authentication failure', async () => {
-    const tool = createGetTodayTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new AuthenticationError();
-        })
-      )
+  it('not registered in AI default registry', () => {
+    expect(createDefaultToolRegistry().exists('get_today_timesheet')).toBe(
+      false
     );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('API failure', async () => {
-    const tool = createGetTodayTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new UnexpectedApiError('fail', { status: 502 });
-        })
-      )
-    );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('timeout', async () => {
-    const tool = createGetTodayTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new TimeoutError();
-        })
-      )
-    );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('malformed response', async () => {
-    const tool = createGetTodayTimesheetTool(
-      makeDeps(
-        mockClient(async () => ({
-          success: true,
-          data: { date: '2026-07-18' },
-          status: 200,
-          requestId: 'r1',
-        }))
-      )
-    );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('registered with OpenAI schema', () => {
-    const registry = createDefaultToolRegistry();
-    expect(registry.exists('get_today_timesheet')).toBe(true);
   });
 });

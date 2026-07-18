@@ -1,7 +1,12 @@
 import { createOpenAIClient } from '@/lib/ai/client';
+import {
+  decideBusinessTool,
+  type BusinessToolDecision,
+} from '@/lib/ai/decision-engine';
 import { AiError, FRIENDLY_AI_FALLBACK } from '@/lib/ai/errors';
 import { buildPrompt } from '@/lib/ai/prompt';
 import type {
+  AssistantToolCall,
   ChatMessage,
   ConversationInput,
   ConversationResult,
@@ -29,6 +34,10 @@ export type RunConversationDeps = {
   toolRouter?: ToolRouter;
   /** Disable tool calling for this run (tests / text-only). */
   enableTools?: boolean;
+  /** Injected decision engine (defaults to decideBusinessTool). */
+  decideTool?: typeof decideBusinessTool;
+  /** Fixed "now" for Bangkok date resolution in the decision engine. */
+  decisionNow?: Date;
 };
 
 function validateResponseText(text: string): string {
@@ -45,9 +54,22 @@ function validateResponseText(text: string): string {
   return trimmed;
 }
 
+function decisionToToolCall(
+  decision: Extract<BusinessToolDecision, { action: 'call_tool' }>
+): AssistantToolCall {
+  return {
+    id: `decision_${decision.toolName}`,
+    type: 'function',
+    function: {
+      name: decision.toolName,
+      arguments: JSON.stringify(decision.arguments),
+    },
+  };
+}
+
 /**
- * Conversation Service — prompt → OpenAI → optional tools → validated plain text.
- * No Slack I/O. No business APIs. Tool framework is vendor-agnostic.
+ * Conversation Service — prompt → decision engine → OpenAI → tools → plain text.
+ * Business intents always execute Business Tools (forced if the model skips them).
  */
 export async function runConversation(
   input: ConversationInput,
@@ -93,10 +115,45 @@ export async function runConversation(
   const registry = deps?.toolRegistry ?? createDefaultToolRegistry();
   const router = deps?.toolRouter ?? createToolRouter(registry);
   const llmTools = enableTools ? registry.toLlmToolDefinitions() : [];
+  const decide = deps?.decideTool ?? decideBusinessTool;
+  const decision = decide(userMessage, { now: deps?.decisionNow });
+
+  if (decision.action === 'clarify') {
+    console.log(
+      JSON.stringify({
+        scope: 'ai',
+        level: 'info',
+        message: 'conversation completed',
+        requestId: input.requestId,
+        eventId: input.eventId,
+        usedFallback: false,
+        reason: decision.reason,
+        toolRounds: 0,
+        durationMs: Date.now() - started,
+        ts: new Date().toISOString(),
+      })
+    );
+    return {
+      text: decision.message,
+      model: 'decision-engine',
+      usedFallback: false,
+      toolRounds: 0,
+    };
+  }
+
+  const decisionHint =
+    decision.action === 'call_tool'
+      ? [
+          `Decision engine requires tool: ${decision.toolName}(${JSON.stringify(decision.arguments)}).`,
+          'You must call this tool (or an equivalent Business Tool) before answering.',
+          'Do not answer from model knowledge.',
+        ].join(' ')
+      : undefined;
 
   const messages: ChatMessage[] = buildPrompt({
     userMessage,
     metadata: input.metadata,
+    extraSystemSegments: decisionHint ? [decisionHint] : undefined,
   });
 
   const generate =
@@ -129,6 +186,7 @@ export async function runConversation(
           messageCount: messages.length,
           toolRound: round,
           toolsEnabled: llmTools.length > 0,
+          decision: decision.action,
           ts: new Date().toISOString(),
         })
       );
@@ -143,7 +201,29 @@ export async function runConversation(
       lastModel = result.model;
       lastUsage = result.usage;
 
-      const toolCalls = result.toolCalls?.filter((c) => c.function?.name) ?? [];
+      let toolCalls = result.toolCalls?.filter((c) => c.function?.name) ?? [];
+
+      // Reliability gate: on the first model round, business intent must call a tool.
+      if (
+        round === 0 &&
+        toolCalls.length === 0 &&
+        enableTools &&
+        decision.action === 'call_tool' &&
+        registry.exists(decision.toolName)
+      ) {
+        console.log(
+          JSON.stringify({
+            scope: 'ai',
+            level: 'info',
+            message: 'forcing business tool from decision engine',
+            requestId: input.requestId,
+            toolName: decision.toolName,
+            reason: decision.reason,
+            ts: new Date().toISOString(),
+          })
+        );
+        toolCalls = [decisionToToolCall(decision)];
+      }
 
       if (toolCalls.length === 0) {
         const text = validateResponseText(result.text);
@@ -223,7 +303,6 @@ export async function runConversation(
       }
     }
 
-    // Unreachable: loop always returns or throws
     return {
       text: FRIENDLY_AI_FALLBACK,
       model: lastModel,
@@ -241,7 +320,6 @@ export async function runConversation(
         requestId: input.requestId,
         eventId: input.eventId,
         errorCode: code,
-        // Never include API key or raw upstream authorization
         error: error instanceof Error ? error.message : 'unknown',
         durationMs: Date.now() - started,
         ts: new Date().toISOString(),
