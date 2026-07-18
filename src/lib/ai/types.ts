@@ -1,10 +1,28 @@
-/** OpenAI conversation foundation types (no tools / memory). */
+/**
+ * OpenAI conversation foundation types (vendor-agnostic tool hooks).
+ */
 
-export type ChatRole = 'system' | 'user' | 'assistant';
+import type { LlmToolDefinition } from '@/lib/tools/types';
+
+export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
+
+export type AssistantToolCall = {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
 
 export interface ChatMessage {
   role: ChatRole;
-  content: string;
+  content: string | null;
+  /** Assistant message tool calls (OpenAI shape; portable enough for adapters). */
+  tool_calls?: AssistantToolCall[];
+  /** Required when role === 'tool' */
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface OpenAIConfig {
@@ -23,11 +41,14 @@ export interface GenerateResponseInput {
   messages: ChatMessage[];
   requestId?: string;
   eventId?: string;
+  /** When set, enables model tool calling for this turn */
+  tools?: LlmToolDefinition[];
 }
 
 export interface GenerateResponseResult {
   text: string;
   model: string;
+  toolCalls?: AssistantToolCall[];
   usage?: {
     promptTokens?: number;
     completionTokens?: number;
@@ -39,7 +60,7 @@ export interface ConversationInput {
   userMessage: string;
   requestId?: string;
   eventId?: string;
-  /** Optional metadata for future prompt extensions (ignored for content today) */
+  /** Optional metadata for prompt / tool context */
   metadata?: Record<string, string | undefined>;
 }
 
@@ -48,6 +69,8 @@ export interface ConversationResult {
   model: string;
   usage?: GenerateResponseResult['usage'];
   usedFallback: boolean;
+  /** Number of tool rounds executed (0 = text only) */
+  toolRounds?: number;
 }
 
 export type GenerateResponseFn = (

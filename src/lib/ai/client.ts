@@ -1,5 +1,6 @@
 import { AiError } from '@/lib/ai/errors';
 import type {
+  AssistantToolCall,
   GenerateResponseInput,
   GenerateResponseResult,
   OpenAIConfig,
@@ -164,9 +165,36 @@ function mapHttpError(status: number, json: unknown): AiError {
   return new AiError(msg, 'unexpected', false);
 }
 
-function extractText(json: unknown): {
+function parseToolCalls(raw: unknown): AssistantToolCall[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  const calls: AssistantToolCall[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const c = item as {
+      id?: string;
+      type?: string;
+      function?: { name?: string; arguments?: string };
+    };
+    if (!c.id || !c.function?.name) continue;
+    calls.push({
+      id: c.id,
+      type: 'function',
+      function: {
+        name: c.function.name,
+        arguments:
+          typeof c.function.arguments === 'string'
+            ? c.function.arguments
+            : '{}',
+      },
+    });
+  }
+  return calls.length > 0 ? calls : undefined;
+}
+
+function extractCompletion(json: unknown): {
   text: string;
   model: string;
+  toolCalls?: AssistantToolCall[];
   usage?: GenerateResponseResult['usage'];
 } {
   if (!json || typeof json !== 'object') {
@@ -174,17 +202,25 @@ function extractText(json: unknown): {
   }
   const body = json as {
     model?: string;
-    choices?: Array<{ message?: { content?: string | null } }>;
+    choices?: Array<{
+      message?: {
+        content?: string | null;
+        tool_calls?: unknown;
+      };
+    }>;
     usage?: {
       prompt_tokens?: number;
       completion_tokens?: number;
       total_tokens?: number;
     };
   };
-  const text = body.choices?.[0]?.message?.content?.trim() || '';
+  const message = body.choices?.[0]?.message;
+  const text = message?.content?.trim() || '';
+  const toolCalls = parseToolCalls(message?.tool_calls);
   return {
     text,
     model: body.model || 'unknown',
+    toolCalls,
     usage: body.usage
       ? {
           promptTokens: body.usage.prompt_tokens,
@@ -231,12 +267,16 @@ export function createOpenAIClient(deps?: {
     getConfig: () => config,
     async generateResponse(input) {
       const url = `${config.baseUrl}/chat/completions`;
-      const body = {
+      const body: Record<string, unknown> = {
         model: config.model,
         messages: input.messages,
         temperature: config.temperature,
         max_tokens: config.maxTokens,
       };
+      if (input.tools && input.tools.length > 0) {
+        body.tools = input.tools;
+        body.tool_choice = 'auto';
+      }
 
       let attempt = 0;
       let lastError: AiError | undefined;
@@ -254,13 +294,16 @@ export function createOpenAIClient(deps?: {
             throw mapHttpError(status, json);
           }
 
-          const extracted = extractText(json);
-          if (!extracted.text) {
+          const extracted = extractCompletion(json);
+          const hasTools =
+            extracted.toolCalls && extracted.toolCalls.length > 0;
+          if (!extracted.text && !hasTools) {
             throw new AiError('Empty OpenAI completion', 'empty_response');
           }
           return {
             text: extracted.text,
             model: extracted.model || config.model,
+            toolCalls: extracted.toolCalls,
             usage: extracted.usage,
           };
         } catch (error) {
