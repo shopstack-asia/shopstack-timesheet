@@ -8,5 +8,5 @@
 - No approval / reporting / other-employee access.
 - Slack email visibility required for identity.
 - Master project/task lists are global (no assignment filter) — same as web APIs.
-- Upsert-before-delete reduces partial-delete risk but is not a multi-row Sheets transaction; compensating restore runs if delete fails after upsert.
-- Claim lock TTL must outlive a stuck `executing` write; a crash can leave a short window where re-claim is blocked until claim TTL expires.
+- Upsert-before-delete with full snapshot restore reduces partial-write risk, but Google Sheets is not a multi-row ACID transaction. If both delete and restore fail, the agent surfaces an explicit inconsistency error (never “Saved.”).
+- Orphaned `executing` pending can be reclaimed only after the claim lock TTL (`CLAIM_TTL_SECONDS`, 120s) expires.

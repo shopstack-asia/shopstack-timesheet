@@ -32,8 +32,10 @@ import {
   completePendingWrite,
   createPendingWrite,
   getPendingWrite,
+  pendingKey,
   wasEventProcessed,
 } from '@/lib/timesheet-agent/conversation-state';
+import { resolveSlackDedupeId } from '@/lib/slack/dedupe';
 
 function basePending(overrides: Partial<Parameters<typeof createPendingWrite>[0]> = {}) {
   return createPendingWrite({
@@ -84,8 +86,51 @@ describe('atomic confirmation claim', () => {
     expect(await getPendingWrite(p.id)).toBeNull();
   });
 
+  it('expired by expiresAt cannot claim', async () => {
+    const p = await basePending();
+    const raw = JSON.parse(store.get(pendingKey(p.id))!) as { expiresAt: number };
+    raw.expiresAt = Date.now() - 1000;
+    store.set(pendingKey(p.id), JSON.stringify(raw));
+    expect(await claimPendingWrite(p.id, 'U1')).toBeNull();
+  });
+
+  it('reclaims orphaned executing after claim lock expires', async () => {
+    const p = await basePending();
+    const first = await claimPendingWrite(p.id, 'U1');
+    expect(first?.status).toBe('executing');
+    // Simulate claim TTL expiry (crash left status=executing)
+    store.delete(`timesheet-agent:pending-claim:${p.id}`);
+    const second = await claimPendingWrite(p.id, 'U1');
+    expect(second).not.toBeNull();
+    expect(second?.status).toBe('executing');
+  });
+
+  it('second claim while lock held returns null', async () => {
+    const p = await basePending();
+    await claimPendingWrite(p.id, 'U1');
+    expect(await claimPendingWrite(p.id, 'U1')).toBeNull();
+  });
+
   it('dedupes slack event_id', async () => {
     expect(await wasEventProcessed('Ev123')).toBe(false);
     expect(await wasEventProcessed('Ev123')).toBe(true);
+  });
+
+  it('prefers envelope event_id over client_msg_id', () => {
+    expect(
+      resolveSlackDedupeId(
+        { client_msg_id: 'c1', event_ts: '1.2', channel: 'C', ts: '1.2', user: 'U' },
+        'EvEnvelope'
+      )
+    ).toBe('EvEnvelope');
+    expect(
+      resolveSlackDedupeId({
+        client_msg_id: 'c1',
+        event_ts: '1.2',
+        channel: 'C',
+        ts: '1.2',
+        user: 'U',
+      })
+    ).toBe('c1');
   });
 });

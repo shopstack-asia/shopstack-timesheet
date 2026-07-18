@@ -168,8 +168,11 @@ export async function getPendingWrite(id: string): Promise<PendingWrite | null> 
 }
 
 /**
- * Atomic claim: SET NX claim lock, then transition pending → executing.
+ * Atomic claim: SET NX claim lock, then transition to executing.
  * Concurrent claims: only one succeeds.
+ *
+ * Crash recovery: if status is already `executing` but the claim lock expired
+ * (previous worker died), acquiring NX means we may safely reclaim.
  */
 export async function claimPendingWrite(
   id: string,
@@ -186,7 +189,16 @@ export async function claimPendingWrite(
 
   try {
     const p = await redis.get<PendingWrite>(pendingKey(id));
-    if (!p || p.status !== 'pending' || p.expiresAt < Date.now()) {
+    if (!p || p.expiresAt < Date.now()) {
+      await redis.del(claimKey);
+      return null;
+    }
+    if (p.status === 'completed' || p.status === 'cancelled') {
+      await redis.del(claimKey);
+      return null;
+    }
+    // pending = normal; executing + acquired NX = orphaned after crash/claim TTL
+    if (p.status !== 'pending' && p.status !== 'executing') {
       await redis.del(claimKey);
       return null;
     }

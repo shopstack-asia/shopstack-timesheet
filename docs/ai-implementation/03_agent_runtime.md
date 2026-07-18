@@ -28,7 +28,9 @@ Phrases like “looks good” / “go ahead” never execute a write even if the
 
 ## Atomic claim
 
-`claimPendingWrite` acquires `timesheet-agent:pending-claim:{id}` with `SET NX` + TTL, then transitions `pending` → `executing`. Concurrent confirmations: exactly one succeeds; others get `null`.
+`claimPendingWrite` acquires `timesheet-agent:pending-claim:{id}` with `SET NX` + TTL, then transitions to `executing`. Concurrent confirmations: exactly one succeeds; others get `null`.
+
+Crash recovery: if status is already `executing` but the claim key expired (previous worker died), a new `SET NX` may reclaim safely. Completed/cancelled/expired pendings never reclaim.
 
 ## Stale snapshot
 
@@ -40,7 +42,7 @@ Before submit, reload the day and compare `dayFingerprint` to `baseFingerprint`.
 
 ## Sheets write order
 
-`submitDayTimesheetForStaff`: validate → resolve projects → prepare rows → **upsert first** → **delete obsolete after**. On delete failure after upsert, attempt snapshot restore. Slack path sets `allowCustomProject: false`.
+`submitDayTimesheetForStaff`: validate → resolve projects → prepare rows → **upsert first** → **delete obsolete after**. On delete failure: full snapshot restore (upsert snapshot + delete extras not in snapshot). If restore also fails: compound error — never silent success. Slack path sets `allowCustomProject: false`.
 
 ## Empty clear
 

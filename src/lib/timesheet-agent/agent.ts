@@ -888,7 +888,21 @@ async function executePending(
       state = await clearPendingFromConversation(state);
       await saveConversation(state);
       return {
-        text: `Verification failed after write: ${verification.reason}\nExpected total: *${verification.expectedTotal.toFixed(2)}* h\nActual total: *${verification.actualTotal.toFixed(2)}* h\nI am *not* claiming success. Please review the web Timesheet.`,
+        text:
+          `Verification failed after write: ${verification.reason}\n` +
+          `Expected total: *${verification.expectedTotal.toFixed(2)}* h\n` +
+          `Actual total: *${verification.actualTotal.toFixed(2)}* h\n` +
+          `Expected:\n${
+            verification.expected
+              .map((e) => `• ${e.projectId}|${e.taskId} = ${e.hours}`)
+              .join('\n') || '_empty_'
+          }\n` +
+          `Actual:\n${
+            verification.actual
+              .map((e) => `• ${e.projectId}|${e.taskId} = ${e.hours}`)
+              .join('\n') || '_empty_'
+          }\n` +
+          `I am *not* claiming success. Please review the web Timesheet.`,
       };
     }
 

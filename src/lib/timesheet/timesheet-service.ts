@@ -69,6 +69,44 @@ export type SubmitDayOptions = {
   allowCustomProject?: boolean;
 };
 
+type SheetsDayMutator = {
+  getTimeLogEntriesByDateAndStaff: (
+    date: string,
+    staffId: string
+  ) => Promise<Array<{ rowNumber: number; entry: TimeLogRow }>>;
+  appendOrUpdateTimeLogEntries: (entries: TimeLogRow[]) => Promise<void>;
+  deleteTimeLogEntries: (rowNumbers: number[]) => Promise<void>;
+};
+
+/**
+ * Restore a staff/date day to an exact row snapshot after a failed mutation.
+ * Upserts snapshot rows, then deletes any keys not present in the snapshot
+ * (including rows added by a prior upsert in the same failed write).
+ */
+async function restoreDayToSnapshot(
+  sheetsService: SheetsDayMutator,
+  date: string,
+  staffId: string,
+  snapshotRows: TimeLogRow[]
+): Promise<void> {
+  if (snapshotRows.length > 0) {
+    await sheetsService.appendOrUpdateTimeLogEntries(snapshotRows);
+  }
+
+  const current = await sheetsService.getTimeLogEntriesByDateAndStaff(date, staffId);
+  const snapshotKeys = new Set(
+    snapshotRows.map((r) => `${r['Project ID']}|${r['Task ID']}`)
+  );
+
+  const extras = current
+    .filter(({ entry }) => !snapshotKeys.has(`${entry['Project ID']}|${entry['Task ID']}`))
+    .map(({ rowNumber }) => rowNumber);
+
+  if (extras.length > 0) {
+    await sheetsService.deleteTimeLogEntries(extras);
+  }
+}
+
 /**
  * Replace all Time Log rows for date + staff (same semantics as POST /api/timesheet/submit).
  * Order: validate → resolve projects → prepare rows → upsert → delete obsolete (inside lock).
@@ -221,22 +259,32 @@ export async function submitDayTimesheetForStaff(
           await sheetsService.deleteTimeLogEntries(entriesToDelete);
         } catch (deleteError) {
           console.error(
-            '[submitDayTimesheetForStaff] Delete after upsert failed; attempting snapshot restore',
+            '[submitDayTimesheetForStaff] Delete after upsert failed; attempting full snapshot restore',
             deleteError
           );
           try {
-            if (snapshotRows.length > 0) {
-              await sheetsService.appendOrUpdateTimeLogEntries(snapshotRows);
-            }
+            await restoreDayToSnapshot(
+              sheetsService,
+              parsed.data.date,
+              ctx.staff.EmployeeID,
+              snapshotRows
+            );
           } catch (restoreError) {
             console.error(
-              '[submitDayTimesheetForStaff] Compensating restore failed',
+              '[submitDayTimesheetForStaff] Compensating restore failed — day may be inconsistent',
               restoreError
             );
+            const deleteMsg =
+              deleteError instanceof Error ? deleteError.message : String(deleteError);
+            const restoreMsg =
+              restoreError instanceof Error ? restoreError.message : String(restoreError);
+            throw new Error(
+              `Write incomplete: delete failed (${deleteMsg}) and restore also failed (${restoreMsg}). Review the day in the web Timesheet before retrying.`
+            );
           }
-          throw deleteError instanceof Error
-            ? deleteError
-            : new Error('Failed to delete obsolete time log rows');
+          throw new Error(
+            'Could not finish updating the day; previous data was restored. Please retry.'
+          );
         }
       }
     });

@@ -2,6 +2,7 @@ import { resolveSlackIdentity } from '@/lib/slack/identity';
 import { postSlackMessage } from '@/lib/slack/client';
 import { handleAgentMessage } from '@/lib/timesheet-agent/agent';
 import { wasEventProcessed } from '@/lib/timesheet-agent/conversation-state';
+import { resolveSlackDedupeId } from '@/lib/slack/dedupe';
 
 function stripMention(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/gi, '').trim();
@@ -33,11 +34,7 @@ export async function processSlackEvent(
     return;
   }
 
-  const dedupeId =
-    envelopeEventId ||
-    event.client_msg_id ||
-    event.event_ts ||
-    `${event.channel}:${event.ts}:${event.user}`;
+  const dedupeId = resolveSlackDedupeId(event, envelopeEventId);
 
   if (await wasEventProcessed(dedupeId)) {
     return;
