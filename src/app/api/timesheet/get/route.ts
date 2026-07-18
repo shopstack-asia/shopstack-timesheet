@@ -34,10 +34,10 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Calculate week end date (Friday, 5 days after Monday)
+    // Calculate week end date (Sunday, 6 days after Monday)
     const startDate = new Date(weekStart);
     const endDate = new Date(startDate);
-    endDate.setDate(startDate.getDate() + 4); // Friday
+    endDate.setDate(startDate.getDate() + 6); // Sunday
 
     const startDateStr = startDate.toISOString().split('T')[0];
     const endDateStr = endDate.toISOString().split('T')[0];

@@ -153,7 +153,7 @@ export default function DailyCard({
             projects={projects}
             clients={clients}
             tasks={tasks}
-            disabled={isFull || isHoliday}
+            disabled={isFull}
             showLabels={showLabels}
             onUpdate={(updates) => onUpdateEntry(entryIndex, updates)}
             onDelete={() => onDeleteEntry(entryIndex)}
@@ -164,22 +164,20 @@ export default function DailyCard({
       <div className="space-y-2">
         <button
           onClick={onAddEntry}
-          disabled={isFull || isHoliday || submitting}
+          disabled={isFull || submitting}
           className={`w-full px-3 py-2 text-sm rounded border ${
-            isHoliday
-              ? 'bg-red-100 dark:bg-red-900/50 text-red-500 dark:text-red-400 border-red-200 dark:border-red-800 cursor-not-allowed'
-              : isFull
+            isFull
               ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-600 cursor-not-allowed'
               : 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 border-blue-200 dark:border-blue-800'
           }`}
         >
-          {isHoliday ? '🎉 Holiday' : isFull ? '🚫 Leave Day' : '+ Add Entry'}
+          {isFull ? '🚫 Leave Day' : '+ Add Entry'}
         </button>
 
-        {dayIndex > 0 && day.entries.length === 0 && !isHoliday && (
+        {dayIndex > 0 && day.entries.length === 0 && !isFull && (
           <button
             onClick={onCopyYesterday}
-            disabled={submitting || isHoliday}
+            disabled={submitting}
             className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-100 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 disabled:bg-gray-100 dark:disabled:bg-gray-700 disabled:cursor-not-allowed"
           >
             Copy Yesterday

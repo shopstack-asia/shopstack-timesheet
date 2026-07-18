@@ -36,17 +36,16 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
   const holidayCacheRef = useRef<Record<string, Holiday[]>>({});
   const leaveDataCacheRef = useRef<Map<string, LeaveDayEntry[]>>(new Map());
 
-  // Initialize days of the week (Monday-Friday)
+  // Initialize days of the week (Monday–Sunday)
   useEffect(() => {
     const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
-    const weekStartStr = format(monday, 'yyyy-MM-dd');
     
     // Reset loaded week ref when week changes to force reload
     loadedWeekRef.current = null;
     
     const days: DailyTimesheet[] = [];
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 7; i++) {
       const date = addDays(monday, i);
       days.push({
         date: format(date, 'yyyy-MM-dd'),
@@ -71,8 +70,8 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     }
 
     const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
-    const friday = addDays(monday, 4);
-    const yearSet = new Set<number>([monday.getFullYear(), friday.getFullYear()]);
+    const sunday = addDays(monday, 6);
+    const yearSet = new Set<number>([monday.getFullYear(), sunday.getFullYear()]);
 
     const fetchHolidays = async () => {
       const missingYears = Array.from(yearSet).filter((year) => {
@@ -204,21 +203,21 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     }
 
     const monday = startOfWeek(weekStart, { weekStartsOn: 1 });
-    const friday = addDays(monday, 4);
+    const sunday = addDays(monday, 6);
     
-    // Get months that contain this week (Monday and Friday might be in different months)
+    // Get months that contain this week (Monday and Sunday might be in different months)
     const mondayMonth = monday.getMonth() + 1; // 1-12
-    const fridayMonth = friday.getMonth() + 1; // 1-12
+    const sundayMonth = sunday.getMonth() + 1; // 1-12
     const mondayYear = monday.getFullYear();
-    const fridayYear = friday.getFullYear();
+    const sundayYear = sunday.getFullYear();
 
     const monthsToLoad: Array<{ year: number; month: number }> = [
       { year: mondayYear, month: mondayMonth },
     ];
 
-    // Add Friday's month if different
-    if (mondayYear !== fridayYear || mondayMonth !== fridayMonth) {
-      monthsToLoad.push({ year: fridayYear, month: fridayMonth });
+    // Add Sunday's month if different
+    if (mondayYear !== sundayYear || mondayMonth !== sundayMonth) {
+      monthsToLoad.push({ year: sundayYear, month: sundayMonth });
     }
 
     // Check in-memory cache first
@@ -727,7 +726,7 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
 
       {/* Column View: Show all days */}
       {viewMode === 'column' && (
-        <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-7">
           {timesheet.map((day, dayIndex) => (
             <DailyCard
               key={day.date}

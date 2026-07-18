@@ -2,7 +2,7 @@
 
 ### Overview
 
-Authenticated staff view a Monday–Friday week, loading existing Time Log entries plus master data, leave, and holidays for display.
+Authenticated staff view a Monday–Sunday week, loading existing Time Log entries plus master data, leave, and holidays for display.
 
 ### Business Purpose
 
@@ -23,8 +23,8 @@ Show the current week’s logged time and context needed to edit accurately.
    - `GET /api/timesheet/get?weekStart=YYYY-MM-DD`
    - `GET /api/staff/leave/monthly?year=&month=` (for months spanned by week)
    - `GET /api/timesheet/holidays?year=` (when location available)
-3. Build 5 `DailyTimesheet` days; merge loaded entries; compute totals.
-4. Render column (5 cards) or tab (day switcher with color cues).
+3. Build 7 `DailyTimesheet` days (Mon–Sun); merge loaded entries; compute totals.
+4. Render column (7 cards) or tab (day switcher with color cues).
 
 ### Screen Behavior
 
@@ -34,8 +34,8 @@ Show the current week’s logged time and context needed to edit accurately.
 
 ### Business Logic
 
-- Week: `weekStartsOn: 1`; days `i = 0..4`.
-- Get API: week end = start + 4 days; filter Sheets rows by `Staff ID`; group by `Date`; dedupe by Time Log ID.
+- Week: `weekStartsOn: 1`; days `i = 0..6` (Monday–Sunday).
+- Get API: week end = start + 6 days; filter Sheets rows by `Staff ID`; group by `Date`; dedupe by Time Log ID.
 - Client holiday/leave caches in refs to avoid refetch thrash.
 
 ### Validation Rules (load API)

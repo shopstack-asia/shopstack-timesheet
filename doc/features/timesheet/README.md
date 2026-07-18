@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Weekly Mon–Fri time entry UI, load existing Time Log rows, submit/sync to Google Sheets, custom projects, copy yesterday, and leave/holiday day UX.
+Weekly Mon–Sun time entry UI, load existing Time Log rows, submit/sync to Google Sheets, custom projects, copy yesterday, and leave/holiday day UX.
 
 ## Scope
 

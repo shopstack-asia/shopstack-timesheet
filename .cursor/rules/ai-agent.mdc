@@ -5,7 +5,7 @@ alwaysApply: true
 
 # AI agent rules — shopstack-timesheet
 
-This repository is **Shopstack Timesheet**: a **Next.js (App Router)** internal timesheet app (TypeScript, Tailwind CSS). Employees sign in with **Google SSO** (`@shopstack.asia` only via NextAuth), load staff/leave/holiday data from **Zoho People**, and read/write time logs via **Google Sheets**. Optional **Redis** caching, **Slack** / **email** Friday reminders, and **cron** Route Handlers.
+This repository is **Shopstack Timesheet**: a **Next.js (App Router)** app (TypeScript, Tailwind CSS).
 
 ## 0. Mandatory: read `doc/` before any implementation
 
@@ -40,7 +40,7 @@ Team principles: [`doc/README.md`](../../doc/README.md#team-implementation-princ
 
 ## 3. BFF / server boundary (mandatory)
 
-- **All calls to external APIs** (Zoho People, Google Sheets, Slack, SMTP) MUST run on the **server**: Route Handlers under `src/app/api/*` or modules under `src/lib/*` used only from the server.
+- **All calls to external APIs** MUST run on the **server**: Route Handlers under `src/app/api/*` or modules under `src/lib/*` used only from the server.
 - **Never** call those external APIs from React components or other browser-executed code.
 - Client code may call **`/api/*`** (same-origin) only.
 - **Secrets and tokens** MUST stay server-side—never in client bundles.
@@ -49,38 +49,29 @@ Team principles: [`doc/README.md`](../../doc/README.md#team-implementation-princ
 
 | Layer | Location | Responsibility |
 |--------|-----------|----------------|
-| Pages | `src/app/` | Routing and composition (`/`, `/timesheet`, `/auth/*`). |
-| Components | `src/components/` | Timesheet UI and local state. Call `/api/*` only. |
-| API routes | `src/app/api/` | Auth-gated handlers, cron jobs, debug probes; validate; shape `ApiResponse`. |
-| Lib | `src/lib/` | Server integrations and helpers. |
-| Contexts | `src/contexts/` | Global client state (e.g. `ThemeContext`). |
-| Types | `src/types/` | Shared domain and API types. |
-| Middleware | `src/middleware.ts` | NextAuth protection for `/timesheet` and selected `/api/*`. |
+| Pages | `src/app/` | Routing and composition |
+| Components | `src/components/` | UI and local state. Call `/api/*` only. |
+| API routes | `src/app/api/` | Auth-gated handlers; validate; shape `ApiResponse` |
+| Lib | `src/lib/` | Server integrations and helpers |
+| Contexts | `src/contexts/` | Global client state |
+| Types | `src/types/` | Shared domain and API types |
+| Middleware | `src/middleware.ts` | Route protection |
 
-## 5. Domain constraints (do not invent)
-
-- Google sign-in is restricted to **`@shopstack.asia`**; staff profile comes from Zoho People during auth.
-- Master data: **Projects** / **Roles and Tasks** sheets; submissions write **Time Log** rows.
-- Weekly UI is **Mon–Fri**; leave/holidays affect entry availability via staff/holiday APIs.
-- Cron routes must honor **`CRON_SECRET`**.
-
-Details: owning feature docs under `doc/features/` — do not invent beyond those docs + code.
-
-## 6. Quality
+## 5. Quality
 
 - Follow `doc/rules/lint.md` and `doc/rules/testing.md`.
 - Run **`npx tsc --noEmit`** and **`npm run lint`**; fix new failures before claiming done.
 - Completion gate: `doc/rules/implementation_completion.md` and `.cursor/rules/implementation-completion.mdc`.
 
-## 7. Forbidden
+## 6. Forbidden
 
 - Implementing without reading `doc/ai-agent-instruction.md` and the mandatory `doc/rules/*` files.
-- Inventing Zoho/Sheets/Slack contracts without doc or code evidence.
+- Inventing contracts or business rules without doc or code evidence.
 - Calling external APIs from the client or embedding secrets in client code.
 - Drive-by large refactors unrelated to the task.
 - Completing work while ignoring **new** TypeScript or ESLint failures.
-- Treating Hertz/e-comm patterns (CMS, i18n `t()`, PWA, storefront SEO) as if they apply here.
+- Copying patterns from other products that do not exist in this repo.
 
-## 8. Final principle
+## 7. Final principle
 
 Behave as a **deterministic executor**: read `doc/` → read feature docs → read code → implement minimally → verify types/lint → update docs → report outcomes per `doc/ai-agent-instruction.md` §10.

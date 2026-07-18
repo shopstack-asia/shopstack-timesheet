@@ -2,13 +2,13 @@
 
 ## Capabilities
 
-1. **Weekly grid** — Monday–Friday only; column or tab view.
-2. **Load week** — `GET /api/timesheet/get?weekStart=` → entries grouped by date for session staff.
+1. **Weekly grid** — Monday–Sunday; column or tab view.
+2. **Load week** — `GET /api/timesheet/get?weekStart=` → entries grouped by date for session staff (Mon–Sun).
 3. **Edit entries** — multiple project/task/hours rows per day; searchable selects; hours step 0.25, max 24.
 4. **Submit week** — POST each day that still has entries; sync Sheets by `ProjectID|TaskID` key.
 5. **Custom projects** — free-text project name under client `*New` flow; server creates Projects row.
-6. **Copy yesterday** — copy previous weekday’s entries into an empty non-holiday day.
-7. **Leave/holiday UX** — FULL leave or holiday disables add/edit; HALF leave still editable.
+6. **Copy yesterday** — copy previous day’s entries into an empty non-FULL-leave day.
+7. **Leave/holiday UX** — FULL leave disables add/edit; holidays and weekends remain editable (visual cues only); HALF leave still editable.
 8. **Week total + Submit Week** button with client validation.
 
 ## Dependencies
