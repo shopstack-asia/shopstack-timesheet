@@ -24,6 +24,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | `reminders` | [features/reminders/](./features/reminders/) | [README.md](./features/reminders/README.md) | [feature-logic-summary.md](./features/reminders/feature-logic-summary.md) |
 | `ops` | [features/ops/](./features/ops/) | [README.md](./features/ops/README.md) | [feature-logic-summary.md](./features/ops/feature-logic-summary.md) |
 | `slack` | [features/slack/](./features/slack/) | [README.md](./features/slack/README.md) | [feature-logic-summary.md](./features/slack/feature-logic-summary.md) |
+| `ai` | [features/ai/](./features/ai/) | [README.md](./features/ai/README.md) | [feature-logic-summary.md](./features/ai/feature-logic-summary.md) |
 
 ## Cross-feature concerns
 

@@ -81,12 +81,19 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `SLACK_CHANNEL_ID` | Single channel |
 | `SLACK_CHANNEL_IDS` | Comma-separated channels (preferred for multi) |
 
-**Timesheet AI agent** (optional model):
+**Timesheet AI agent** / **OpenAI conversation**:
 
 | Variable | Purpose |
 |----------|---------|
+| `OPENAI_API_KEY` | **Required** when conversation AI enabled (startup validates if set) |
+| `OPENAI_MODEL` | Chat model (default `gpt-4o-mini`) |
+| `OPENAI_MAX_TOKENS` | Max completion tokens (default `512`) |
+| `OPENAI_TEMPERATURE` | Sampling temperature (default `0.7`) |
+| `OPENAI_TIMEOUT_MS` | Request timeout (default `30000`) |
+| `OPENAI_BASE_URL` | Optional OpenAI-compatible base URL |
+| `OPENAI_VALIDATE_ON_STARTUP` | `true` = always validate OpenAI env at process start |
+| `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | Legacy aliases (still accepted) |
 | `TIMESHEET_AGENT_TIMEZONE` | Agent date resolution (default `Asia/Bangkok`) |
-| `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | Optional OpenAI-compatible intent model |
 
 ##### Local development (Slack)
 

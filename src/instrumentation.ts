@@ -12,9 +12,19 @@ export async function register(): Promise<void> {
   try {
     assertSlackConfigOnStartup();
   } catch (error) {
-    // Re-throw with message only (no secret values are included in SlackConfigError)
     console.error(
       '[startup] Slack configuration validation failed:',
+      error instanceof Error ? error.message : String(error)
+    );
+    throw error;
+  }
+
+  const { assertOpenAIConfigOnStartup } = await import('@/lib/ai/client');
+  try {
+    assertOpenAIConfigOnStartup();
+  } catch (error) {
+    console.error(
+      '[startup] OpenAI configuration validation failed:',
       error instanceof Error ? error.message : String(error)
     );
     throw error;

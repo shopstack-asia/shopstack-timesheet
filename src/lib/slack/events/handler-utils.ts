@@ -19,17 +19,3 @@ export function shouldIgnoreSlackMessage(event: SlackEvent | undefined): boolean
   if (!event.user) return true;
   return false;
 }
-
-export const FOUNDATION_DM_REPLY = [
-  '👋 Hello!',
-  '',
-  'AI Timesheet is connected successfully.',
-  '',
-  'Slack integration is working.',
-  '',
-  '(Currently running Foundation Mode.)',
-].join('\n');
-
-export function foundationMentionReply(userId: string): string {
-  return [`Hello <@${userId}> 👋`, '', 'Slack integration is working.'].join('\n');
-}

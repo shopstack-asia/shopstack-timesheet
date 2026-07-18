@@ -1,3 +1,4 @@
+import type { GenerateResponseFn } from '@/lib/ai/types';
 import {
   CHANNEL_TYPE_IM,
   EVENT_APP_MENTION,
@@ -20,6 +21,8 @@ export type DispatchOptions = {
   allowedWorkspace?: string;
   /** Injected Slack client for tests */
   client?: SlackPostMessageClient;
+  /** Injected OpenAI generate for tests */
+  generate?: GenerateResponseFn;
 };
 
 function isDirectMessage(envelope: SlackEventEnvelope): boolean {
@@ -73,7 +76,7 @@ export async function dispatchSlackEvent(
   }
 
   const eventType = envelope.event.type;
-  const handlerDeps = { client: options.client };
+  const handlerDeps = { client: options.client, generate: options.generate };
 
   if (eventType === EVENT_APP_MENTION) {
     await handleAppMention(
