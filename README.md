@@ -8,9 +8,11 @@ Internal timesheet app for Shopstack employees (Next.js, TypeScript, Tailwind).
 - Weekly Mon–Sun timesheet; Google Sheets Time Log
 - Leave / holiday awareness; Redis cache + timesheet write lock
 - Friday Slack / email reminders (cron)
+- Slack Timesheet AI Agent (DM / mention) — see [`docs/ai-implementation/`](./docs/ai-implementation/)
 
 **Canonical behavior docs:** [`doc/features/`](./doc/features/) — start at [`doc/feature-logic-summary.md`](./doc/feature-logic-summary.md).  
-**Agent / engineering rules:** [`doc/ai-agent-instruction.md`](./doc/ai-agent-instruction.md).
+**Agent / engineering rules:** [`doc/ai-agent-instruction.md`](./doc/ai-agent-instruction.md).  
+**Slack AI setup:** [`docs/ai-implementation/04_slack_setup.md`](./docs/ai-implementation/04_slack_setup.md).
 
 ## Quick start
 

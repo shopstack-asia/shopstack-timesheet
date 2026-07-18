@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import { ApiResponse } from '@/types';
+import { assertDebugAccess } from '@/lib/debug-auth';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
+  const denied = assertDebugAccess(request);
+  if (denied) return denied;
   try {
     // Check if email is configured
     if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
@@ -121,6 +124,8 @@ export async function POST(request: NextRequest) {
 
 // Also support GET for easy testing (requires query params)
 export async function GET(request: NextRequest) {
+  const denied = assertDebugAccess(request);
+  if (denied) return denied;
   try {
     // Check if email is configured
     if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { assertDebugAccess } from '@/lib/debug-auth';
 import axios from 'axios';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  const denied = assertDebugAccess(request);
+  if (denied) return denied;
   try {
     const clientId = process.env.ZOHO_CLIENT_ID;
     const clientSecret = process.env.ZOHO_CLIENT_SECRET;

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { assertDebugAccess } from '@/lib/debug-auth';
 import { WebClient } from '@slack/web-api';
 import { ApiResponse } from '@/types';
 
@@ -24,6 +25,8 @@ function getTimesheetUrl(request: NextRequest): string {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = assertDebugAccess(request);
+  if (denied) return denied;
   try {
     // Check if Slack is configured
     if (!process.env.SLACK_BOT_TOKEN) {
@@ -154,6 +157,8 @@ export async function POST(request: NextRequest) {
 
 // Also support GET for easy testing
 export async function GET(request: NextRequest) {
+  const denied = assertDebugAccess(request);
+  if (denied) return denied;
   try {
     // Check if Slack is configured
     if (!process.env.SLACK_BOT_TOKEN) {
