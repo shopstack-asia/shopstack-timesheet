@@ -8,8 +8,8 @@
 | Request auth | Verifies `x-slack-signature` + timestamp; rejects missing/invalid/replayed requests with 401 |
 | Rate limit | Fail-closed Redis rate limit on the events route |
 | Event callback | Parses envelope (`team_id`, `event_id`, `event`, …) and dispatches asynchronously |
-| App mention | Foundation reply via `chat.postMessage` (threaded); no AI |
-| Direct message | Foundation connectivity reply via `chat.postMessage`; no AI |
+| Direct message | `message` + IM → Conversation Service → OpenAI → Slack reply |
+| App mention | `@bot` → Conversation Service → OpenAI → threaded Slack reply |
 | Bot loop prevention | Ignore `bot_id`, `bot_message`, other subtypes, missing user |
 | Unknown events | Ignored; still ACK 200 |
 | ACK SLA | Verify → parse → schedule dispatch → return 200 without awaiting heavy work |

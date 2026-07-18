@@ -2,11 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { dispatchSlackEvent } from '@/lib/slack/dispatcher';
 import { handleAppMention } from '@/lib/slack/events/app-mention';
 import { handleDirectMessage } from '@/lib/slack/events/direct-message';
-import {
-  FOUNDATION_DM_REPLY,
-  foundationMentionReply,
-  shouldIgnoreSlackMessage,
-} from '@/lib/slack/events/handler-utils';
+import { shouldIgnoreSlackMessage } from '@/lib/slack/events/handler-utils';
 import {
   sendMessage,
   sendThreadReply,
@@ -14,6 +10,11 @@ import {
   type SlackPostMessageClient,
 } from '@/lib/slack/responses';
 import type { SlackEventEnvelope } from '@/lib/slack/types';
+
+const mockGenerate = async () => ({
+  text: 'Hello! How can I help you today?',
+  model: 'gpt-4o-mini',
+});
 
 function mockClient(overrides?: {
   ok?: boolean;
@@ -171,31 +172,31 @@ describe('DM / app_mention response handlers', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  it('DM receives foundation reply', async () => {
+  it('DM receives AI conversation reply', async () => {
     const { client, postMessage } = mockClient();
     await handleDirectMessage(
       { requestId: 'req', envelope: dmEnvelope() },
-      { client }
+      { client, generate: mockGenerate }
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: 'D1',
-        text: FOUNDATION_DM_REPLY,
+        text: 'Hello! How can I help you today?',
       })
     );
   });
 
-  it('app_mention receives foundation reply', async () => {
+  it('app_mention receives AI conversation reply', async () => {
     const { client, postMessage } = mockClient();
     await handleAppMention(
       { requestId: 'req', envelope: mentionEnvelope() },
-      { client }
+      { client, generate: mockGenerate }
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: 'C1',
         thread_ts: '20.0',
-        text: foundationMentionReply('U9'),
+        text: 'Hello! How can I help you today?',
       })
     );
   });
@@ -224,7 +225,7 @@ describe('DM / app_mention response handlers', () => {
     await expect(
       handleDirectMessage(
         { requestId: 'req', envelope: dmEnvelope() },
-        { client }
+        { client, generate: mockGenerate }
       )
     ).resolves.toBeUndefined();
   });
@@ -234,7 +235,7 @@ describe('DM / app_mention response handlers', () => {
     await expect(
       handleAppMention(
         { requestId: 'req', envelope: mentionEnvelope() },
-        { client }
+        { client, generate: mockGenerate }
       )
     ).resolves.toBeUndefined();
   });
@@ -253,10 +254,12 @@ describe('dispatcher with responses', () => {
     const dm = await dispatchSlackEvent(dmEnvelope(), {
       requestId: 'r1',
       client,
+      generate: mockGenerate,
     });
     const am = await dispatchSlackEvent(mentionEnvelope(), {
       requestId: 'r2',
       client,
+      generate: mockGenerate,
     });
     expect(dm).toEqual({ handled: true, route: 'message.im' });
     expect(am).toEqual({ handled: true, route: 'app_mention' });

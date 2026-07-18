@@ -22,6 +22,18 @@ vi.mock('@/lib/rate-limit', () => ({
   enforceRateLimit: vi.fn(async () => ({ ok: true as const })),
 }));
 
+vi.mock('@/lib/ai/conversation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/ai/conversation')>();
+  return {
+    ...actual,
+    runConversation: vi.fn(async () => ({
+      text: 'Hello! How can I help you today?',
+      model: 'test',
+      usedFallback: false,
+    })),
+  };
+});
+
 vi.mock('@/lib/slack/responses', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/slack/responses')>();
   return {
@@ -38,6 +50,11 @@ function noopClient(): SlackPostMessageClient {
     },
   } as unknown as SlackPostMessageClient;
 }
+
+const noopGenerate = async () => ({
+  text: 'Hello! How can I help you today?',
+  model: 'test',
+});
 
 function signedRequest(body: object, opts?: { ts?: string; secret?: string; sig?: string }) {
   const rawBody = JSON.stringify(body);
@@ -186,7 +203,7 @@ describe('dispatchSlackEvent', () => {
           ts: '1.0',
         },
       },
-      { requestId: 'req-1', client: noopClient() }
+      { requestId: 'req-1', client: noopClient(), generate: noopGenerate }
     );
     expect(result).toEqual({ handled: true, route: 'app_mention' });
   });
@@ -206,7 +223,7 @@ describe('dispatchSlackEvent', () => {
           ts: '2.0',
         },
       },
-      { requestId: 'req-2', client: noopClient() }
+      { requestId: 'req-2', client: noopClient(), generate: noopGenerate }
     );
     expect(result).toEqual({ handled: true, route: 'message.im' });
   });
