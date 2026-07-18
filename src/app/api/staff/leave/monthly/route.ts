@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
       limit: 60,
       windowSeconds: 60,
       userKey: employeeId,
+      failOpen: false,
     });
     if (!limited.ok) return limited.response;
 

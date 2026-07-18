@@ -15,6 +15,12 @@ export type RateLimitOptions = {
   windowSeconds: number;
   /** Optional authenticated user/staff key */
   userKey?: string | null;
+  /**
+   * When Redis/EVAL fails:
+   * - false (default): fail closed → HTTP 503
+   * - true: fail open → allow request (only for explicit low-risk endpoints)
+   */
+  failOpen?: boolean;
 };
 
 type CounterRedis = Pick<RedisAdapter, 'evalScript'>;
@@ -36,13 +42,15 @@ return current
 /**
  * Redis-backed fixed-window rate limit (IP + optional user).
  * Uses a single Lua EVAL so INCR and EXPIRE cannot be separated.
- * Fail-open on Redis errors so availability is preserved; logs the failure.
+ * Defaults to fail-closed on Redis errors (HTTP 503). Opt in to fail-open
+ * only for explicit low-risk endpoints via `failOpen: true`.
  */
 export async function enforceRateLimit(
   request: NextRequest,
   options: RateLimitOptions,
   deps?: { redis?: CounterRedis }
 ): Promise<RateLimitResult> {
+  const failOpen = options.failOpen === true;
   const ip = clientIp(request);
   const keys = [
     `ratelimit:${options.bucket}:ip:${ip}`,
@@ -75,8 +83,21 @@ export async function enforceRateLimit(
     }
     return { ok: true };
   } catch (error) {
-    console.error('[rate-limit] Redis error — allowing request', error);
-    return { ok: true };
+    if (failOpen) {
+      console.error('[rate-limit] Redis error — allowing request (failOpen)', error);
+      return { ok: true };
+    }
+    console.error('[rate-limit] Redis error — rejecting request (fail closed)', error);
+    return {
+      ok: false,
+      response: NextResponse.json<ApiResponse<void>>(
+        {
+          success: false,
+          error: 'Service temporarily unavailable. Please try again later.',
+        },
+        { status: 503 }
+      ),
+    };
   }
 }
 

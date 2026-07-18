@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
       limit: 120,
       windowSeconds: 60,
       userKey: session.staffProfile.EmployeeID,
+      failOpen: false,
     });
     if (!limited.ok) return limited.response;
 

@@ -13,6 +13,7 @@ export async function GET(request: NextRequest) {
     bucket: 'debug-zoho',
     limit: 20,
     windowSeconds: 60,
+    failOpen: false,
   });
   if (!limited.ok) return limited.response;
 

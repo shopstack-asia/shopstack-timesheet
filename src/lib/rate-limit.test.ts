@@ -99,7 +99,7 @@ describe('atomic rate limit (Lua EVAL)', () => {
     expect(redis.getExpireCalls()).toBe(1);
   });
 
-  it('fail-opens when Lua script evaluation fails', async () => {
+  it('fail-closes with 503 when Lua EVAL fails (default failOpen=false)', async () => {
     const redis = memoryRedis({ evalFails: true });
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const req = new NextRequest('http://localhost/api/x', {
@@ -110,9 +110,43 @@ describe('atomic rate limit (Lua EVAL)', () => {
       { bucket: 't', limit: 1, windowSeconds: 60 },
       { redis }
     );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(503);
+    }
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it('fail-opens when failOpen=true and Redis unavailable', async () => {
+    const redis = memoryRedis({ evalFails: true });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const req = new NextRequest('http://localhost/api/x', {
+      headers: { 'x-forwarded-for': '1.2.3.4' },
+    });
+    const result = await enforceRateLimit(
+      req,
+      { bucket: 't', limit: 1, windowSeconds: 60, failOpen: true },
+      { redis }
+    );
     expect(result.ok).toBe(true);
     expect(err).toHaveBeenCalled();
     err.mockRestore();
+  });
+
+  it('fail-closes when failOpen=false explicitly', async () => {
+    const redis = memoryRedis({ evalFails: true });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const req = new NextRequest('http://localhost/api/x');
+    const result = await enforceRateLimit(
+      req,
+      { bucket: 't', limit: 1, windowSeconds: 60, failOpen: false },
+      { redis }
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(503);
+    }
   });
 
   it('separate IP and user buckets', async () => {

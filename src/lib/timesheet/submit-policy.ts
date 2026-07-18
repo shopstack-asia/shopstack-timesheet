@@ -44,6 +44,7 @@ export class SubmitPolicyDependencyError extends Error {
  * Server-side business rules for any timesheet day write (web, Slack, future callers).
  * Empty entries (clear day) skip leave/holiday/hour content rules.
  * Leave and holiday loads fail closed (503), never treated as empty.
+ * Holiday cache miss / Redis error / corruption → HolidayUnavailableError → 503.
  */
 export async function assertSubmitBusinessRules(
   ctx: AgentAuthContext,

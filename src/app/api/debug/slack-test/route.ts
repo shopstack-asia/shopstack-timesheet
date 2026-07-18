@@ -15,6 +15,7 @@ export async function POST(request: NextRequest) {
     bucket: 'debug-slack',
     limit: 10,
     windowSeconds: 60,
+    failOpen: false,
   });
   if (!limited.ok) return limited.response;
 

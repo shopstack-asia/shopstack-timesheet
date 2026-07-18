@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
     bucket: 'slack-interactions',
     limit: 120,
     windowSeconds: 60,
+    failOpen: false,
   });
   if (!limited.ok) return limited.response;
 

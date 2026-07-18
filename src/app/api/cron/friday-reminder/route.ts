@@ -18,6 +18,7 @@ async function runFridayReminder(request: NextRequest) {
     bucket: 'cron-friday-reminder',
     limit: 5,
     windowSeconds: 60,
+    failOpen: false,
   });
   if (!limited.ok) return limited.response;
 

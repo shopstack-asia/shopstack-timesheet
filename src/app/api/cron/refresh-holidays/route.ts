@@ -14,6 +14,7 @@ async function runRefresh(request: NextRequest) {
     bucket: 'cron-refresh-holidays',
     limit: 10,
     windowSeconds: 60,
+    failOpen: false,
   });
   if (!limited.ok) return limited.response;
 

@@ -184,19 +184,66 @@ Public API (`enforceRateLimit`, `bumpCounterAtomic`, options) is unchanged.
 - Concurrent requests (20 parallel) stay within limit  
 - TTL applied once while key already has expiry  
 - Redis restart / missing-TTL simulation (orphan counter healed)  
-- Lua EVAL failure → fail-open (request allowed, error logged)  
+- Lua EVAL failure → fail-closed HTTP 503 by default; `failOpen: true` opt-in only  
 
 Validation: `npm test`, `npx tsc --noEmit`, `npm run lint`, `npm run build`.
 
-## Final production readiness assessment
+---
+
+## Sprint 1.3 — Regression High fixes (holiday + rate-limit fail-closed)
+
+### Holiday fail-open — root cause
+
+`getCachedHolidays` caught Redis errors and returned `[]`. Cache misses (missing keys) also yielded `[]`. `assertSubmitBusinessRules` only 503’d when the holiday loader **threw**, so empty/unknown holiday data was treated as “no holidays” and holiday acknowledgment could be skipped.
+
+### New holiday fail-closed design
+
+| State | Representation |
+|-------|----------------|
+| Success (has holidays) | Redis key present, non-empty `Holiday[]` |
+| Success (no holidays) | Redis key present, trusted `[]` (refresh always writes keys, including empty) |
+| Unavailable | Cache miss, Redis exception, or corrupt payload → `HolidayUnavailableError` → submit/policy **503**; holidays API **503** |
+
+Empty arrays never mean “unavailable”. Policy never evaluates holiday guards on unknown data.
+
+### Rate limiter availability policy
+
+`RateLimitOptions.failOpen` defaults to **`false`**.
+
+| Redis / EVAL outcome | `failOpen: false` (default) | `failOpen: true` |
+|----------------------|-----------------------------|------------------|
+| Success under limit | allow | allow |
+| Success over limit | 429 | 429 |
+| Redis/EVAL error | **503** | allow (logged) |
+
+Only explicit low-risk endpoints may set `failOpen: true` (none in this repo today).
+
+### Endpoint failOpen matrix
+
+| Endpoint | `failOpen` |
+|----------|------------|
+| `POST /api/timesheet/submit` | `false` |
+| `GET /api/timesheet/get` | `false` |
+| `GET /api/timesheet/holidays` | `false` |
+| `GET /api/staff/leave*` | `false` |
+| `POST /api/slack/events` | `false` |
+| `POST /api/slack/interactions` | `false` |
+| `GET/POST /api/cron/*` | `false` |
+| `GET/POST /api/debug/*` | `false` |
+
+### Test evidence
+
+- `src/lib/holiday-cache.test.ts` — miss, Redis exception, corruption, trusted `[]`, policy maps to `SubmitPolicyDependencyError`
+- `src/lib/rate-limit.test.ts` — default fail-closed 503; `failOpen: true` allows
+- `src/lib/rate-limit-endpoints.test.ts` — every API `enforceRateLimit` call sets `failOpen: false`; none set `true`
+
+### Production readiness (post 1.3)
 
 ```text
 ⚠ Production Ready Only After Required Ops Config
 ```
 
-**Code-level Critical and High findings from Sprint 1 are remediated.**
-**PR #3 blocking review findings (fail-closed policy deps, Slack/web ack binding) are remediated.**
-**Rate limiter is fully atomic via Lua EVAL (Sprint 1.2) — INCR and EXPIRE cannot leave permanent counters.**
+Regression High findings (holiday fail-open, rate-limit fail-open on protected routes) are remediated in code. Remaining backlog items are Medium only.
 
 Before declaring full production readiness, operators must verify:
 
@@ -204,6 +251,5 @@ Before declaring full production readiness, operators must verify:
 2. `NEXT_PUBLIC_APP_URL` or `APP_URL` is set to the real absolute origin.
 3. `ENABLE_DEBUG_API` is **not** set (or not `true`) in production unless intentionally needed.
 4. `NEXTAUTH_SECRET` was rotated if it may have been exposed via the old `next.config.js` `env` embedding.
-5. Medium items (interaction dedupe, CSRF tokens, reminder idempotency) remain backlog.
-
-With those env controls in place, the previously blocking Critical/High API security defects addressed in this sprint are closed in code.
+5. Holiday cache has been refreshed after deploy (`POST /api/cron/refresh-holidays`) so location keys exist (including trusted empty lists).
+6. Medium items (interaction dedupe, CSRF tokens, reminder idempotency) remain backlog.

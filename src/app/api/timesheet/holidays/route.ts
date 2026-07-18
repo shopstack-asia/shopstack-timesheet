@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { ApiResponse, Holiday } from '@/types';
-import { getCachedHolidays } from '@/lib/holiday-cache';
+import {
+  getCachedHolidays,
+  HolidayUnavailableError,
+} from '@/lib/holiday-cache';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +40,7 @@ export async function GET(request: NextRequest) {
       limit: 60,
       windowSeconds: 60,
       userKey: session.staffProfile?.EmployeeID,
+      failOpen: false,
     });
     if (!limited.ok) return limited.response;
 
@@ -74,12 +78,21 @@ export async function GET(request: NextRequest) {
       });
     } catch (error) {
       console.error('[Holiday API] Failed to get cached holidays:', error);
+      if (error instanceof HolidayUnavailableError) {
+        return NextResponse.json<ApiResponse<Holiday[]>>(
+          {
+            success: false,
+            error: 'Holiday data is temporarily unavailable. Please try again later.',
+          },
+          { status: 503 }
+        );
+      }
       return NextResponse.json<ApiResponse<Holiday[]>>(
         {
           success: false,
-          error: 'Failed to retrieve holidays from cache. Please contact administrator to refresh holiday cache.',
+          error: 'Holiday data is temporarily unavailable. Please try again later.',
         },
-        { status: 500 }
+        { status: 503 }
       );
     }
   } catch (error) {
