@@ -8,3 +8,5 @@
 ## Related code
 
 - `src/app/api/debug/*/route.ts`
+- `src/lib/slack/config.ts` — typed Slack env + startup validation
+- `src/instrumentation.ts` — calls `assertSlackConfigOnStartup`

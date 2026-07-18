@@ -23,6 +23,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | `holidays` | [features/holidays/](./features/holidays/) | [README.md](./features/holidays/README.md) | [feature-logic-summary.md](./features/holidays/feature-logic-summary.md) |
 | `reminders` | [features/reminders/](./features/reminders/) | [README.md](./features/reminders/README.md) | [feature-logic-summary.md](./features/reminders/feature-logic-summary.md) |
 | `ops` | [features/ops/](./features/ops/) | [README.md](./features/ops/README.md) | [feature-logic-summary.md](./features/ops/feature-logic-summary.md) |
+| `slack` | [features/slack/](./features/slack/) | [README.md](./features/slack/README.md) | [feature-logic-summary.md](./features/slack/feature-logic-summary.md) |
 
 ## Cross-feature concerns
 
@@ -34,7 +35,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | NextAuth + middleware | `auth`, `layout` | Matcher: `/timesheet`, `/api/timesheet`, `/api/master`, `/api/staff` |
 | Cron bearer secret | `reminders`, `holidays` | `Authorization: Bearer ${CRON_SECRET}` |
 | Theme / view prefs | `layout` | `localStorage` keys `theme`, `timesheetViewMode` |
-| Slack Timesheet AI Agent | `ops` / `timesheet` | `src/lib/timesheet-agent`, `src/app/api/slack/*`; identity via Slack email → Zoho; docs in `docs/ai-implementation/` |
+| Slack Timesheet AI Agent | `slack`, `timesheet` | Events foundation: `src/lib/slack/*`, `src/app/api/slack/events`; AI agent (later wiring): `src/lib/timesheet-agent`; docs: `doc/features/slack/`, `docs/ai-implementation/` |
 
 ### Source Code References
 

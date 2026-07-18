@@ -49,16 +49,59 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `ZOHO_DEFAULT_LOCATION` | Server default location |
 | `NEXT_PUBLIC_ZOHO_HOLIDAY_LOCATION` / `NEXT_PUBLIC_DEFAULT_LOCATION` | Client/server fallbacks |
 
-#### Optional — Slack (Friday reminder + Timesheet AI)
+#### Slack App (server-side only — see `src/lib/slack/config.ts`)
+
+**Never** use `NEXT_PUBLIC_*` for Slack credentials. **Never** put Slack secrets in `next.config.js` `env`. `.env` is gitignored; commit only `.env.example`.
+
+| Variable | Required | Purpose | Default |
+|----------|----------|---------|---------|
+| `SLACK_APP_NAME` | Optional | Display name | `AI Timesheet` |
+| `SLACK_BOT_TOKEN` | **Required*** | Bot user OAuth token (`xoxb-…`) | — |
+| `SLACK_SIGNING_SECRET` | **Required*** | Request signature verification | — |
+| `SLACK_CLIENT_ID` | **Required*** | Slack app OAuth client id | — |
+| `SLACK_CLIENT_SECRET` | **Required*** | Slack app OAuth client secret | — |
+| `SLACK_APP_TOKEN` | Optional† | App-level token (`xapp-…`) for Socket Mode | — |
+| `SLACK_VERIFICATION_TOKEN` | Optional | Legacy verification token (prefer signing secret) | — |
+| `SLACK_EVENTS_PATH` | Optional | Events Request URL path | `/api/slack/events` |
+| `SLACK_INTERACTIONS_PATH` | Optional | Interactivity Request URL path | `/api/slack/interactions` |
+| `SLACK_COMMANDS_PATH` | Optional | Slash commands Request URL path | `/api/slack/commands` |
+| `SLACK_ENABLE_SOCKET_MODE` | Optional | `true` / `false` | `false` |
+| `SLACK_ENABLE_APP_HOME` | Optional | `true` / `false` | `true` |
+| `SLACK_ALLOWED_WORKSPACE` | Optional | Restrict to Slack team/workspace id | — |
+| `SLACK_LOG_LEVEL` | Optional | `debug` \| `info` \| `warn` \| `error` | `info` |
+| `SLACK_VALIDATE_ON_STARTUP` | Optional | `true` = always validate Slack env at process start | unset |
+
+\*Required when Slack is configured for the deployment: set all four, or set `SLACK_VALIDATE_ON_STARTUP=true`. Startup (`src/instrumentation.ts`) also fails if **any** of the four is set but others are missing (partial misconfiguration).  
+†Required when `SLACK_ENABLE_SOCKET_MODE=true`.
+
+**Reminder channels** (Friday reminder; not part of `SlackConfig`):
 
 | Variable | Purpose |
 |----------|---------|
-| `SLACK_BOT_TOKEN` | Bot token (`chat:write`, AI bot, reminders) |
-| `SLACK_SIGNING_SECRET` | Verify `/api/slack/events` and `/api/slack/interactions` |
-| `SLACK_CHANNEL_ID` | Single channel (reminders) |
+| `SLACK_CHANNEL_ID` | Single channel |
 | `SLACK_CHANNEL_IDS` | Comma-separated channels (preferred for multi) |
+
+**Timesheet AI agent** (optional model):
+
+| Variable | Purpose |
+|----------|---------|
 | `TIMESHEET_AGENT_TIMEZONE` | Agent date resolution (default `Asia/Bangkok`) |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | Optional OpenAI-compatible intent model |
+
+##### Local development (Slack)
+
+1. `cp .env.example .env`
+2. Create a Slack app; copy Bot Token, Signing Secret, Client ID, Client Secret into `.env` (leave values empty if you are not using Slack locally).
+3. Request URLs (HTTP mode): `{NEXTAUTH_URL}{SLACK_EVENTS_PATH}` etc. Use a tunnel (ngrok) for local Events API.
+4. Optional: `SLACK_VALIDATE_ON_STARTUP=true` to fail fast on missing Slack vars when starting `npm run dev`.
+
+##### UAT / Production (Slack)
+
+1. Set all **Required*** Slack variables in the host secret store (e.g. Vercel Environment Variables) — never in git.
+2. Set `SLACK_VALIDATE_ON_STARTUP=true` on Slack-enabled UAT/Production so cold starts fail closed on missing config.
+3. Point Slack app Request URLs at the environment’s public origin + configured paths.
+4. Keep `SLACK_ENABLE_SOCKET_MODE=false` for standard HTTP Events/Interactivity on Vercel unless Socket Mode is intentionally used (then set `SLACK_APP_TOKEN`).
+5. Rotate tokens if leaked; never log token values (`SlackConfigError` names missing keys only).
 
 #### Optional — SMTP (Friday reminder)
 
@@ -89,6 +132,7 @@ Lock key: `timesheet:sheets:timelog:write` (see `src/lib/sheets-write-lock.ts`).
 - `/api/debug/*` is disabled in production unless `ENABLE_DEBUG_API=true`, and always requires Bearer `CRON_SECRET`.
 - Do not put secrets in `next.config.js` `env` (client bundle risk).
 - Outbound reminder links use configured `NEXT_PUBLIC_APP_URL` / `APP_URL` only (never Host header).
+- **Slack secrets** (`SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_CLIENT_SECRET`, `SLACK_APP_TOKEN`, etc.) are **server-only**. Do not prefix with `NEXT_PUBLIC_`. Do not print them to logs. Load via `src/lib/slack/config.ts` only from server code.
 - Slack AI docs: [`docs/ai-implementation/`](../../../../docs/ai-implementation/).
 
 ### Related feature docs
@@ -101,6 +145,8 @@ Lock key: `timesheet:sheets:timelog:write` (see `src/lib/sheets-write-lock.ts`).
 ### Source Code References
 
 - `.env.example`
+- `src/lib/slack/config.ts`
+- `src/instrumentation.ts` (Slack startup validation)
 - `src/lib/redis.ts`
 - `src/lib/sheets-write-lock.ts`
 - `src/lib/auth.ts`
