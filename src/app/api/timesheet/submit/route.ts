@@ -47,7 +47,8 @@ export async function POST(request: NextRequest) {
     await submitDayTimesheetForStaff(
       { staff: session.staffProfile, source: 'session' },
       date,
-      entries
+      entries,
+      { allowCustomProject: true }
     );
 
     return NextResponse.json<ApiResponse<void>>({ success: true });

@@ -43,9 +43,11 @@ export const timesheetTools = {
     date: string,
     entries: Array<{ projectId: string; taskId: string; hours: number }>
   ) {
-    return submitDayTimesheetForStaff(ctx, date, entries);
+    return submitDayTimesheetForStaff(ctx, date, entries, {
+      allowCustomProject: false,
+    });
   },
   async clear_day_timesheet(ctx: AgentAuthContext, date: string) {
-    return clearDayTimesheetForStaff(ctx, date);
+    return clearDayTimesheetForStaff(ctx, date, { allowCustomProject: false });
   },
 };

@@ -5,9 +5,10 @@ import { getLeaveEntry, isFullLeave, isHalfLeave } from '@/lib/leave-utils';
 export type WriteGuardContext = {
   date: string;
   daySet: DaySet;
-  leave: LeaveDayEntry[] | null; // null = failed to load
+  leave: LeaveDayEntry[] | null;
   holidays: Holiday[] | null;
   isFuture: boolean;
+  /** Unused in Slack MVP — custom projects disabled */
   createCustomProject?: boolean;
   leaveOverride?: boolean;
   holidayAcknowledged?: boolean;
@@ -19,7 +20,7 @@ export type GuardResult = {
   ok: boolean;
   blockMessage?: string;
   warnings: string[];
-  requireKeyword?: 'OVERRIDE' | 'CLEAR' | 'CREATE PROJECT' | 'YES';
+  requireKeyword?: 'OVERRIDE' | 'CLEAR' | 'YES';
 };
 
 export function validateEntryHours(hours: number): string | null {
@@ -53,10 +54,7 @@ export function evaluateWriteGuards(ctx: WriteGuardContext): GuardResult {
 
   if (ctx.leave === null) {
     warnings.push('Leave data could not be loaded.');
-    if (!ctx.leaveOverride && !ctx.holidayAcknowledged) {
-      // require explicit continue via confirmation warnings
-      warnings.push('Reply YES on confirmation to proceed without leave context.');
-    }
+    warnings.push('Reply YES on confirmation to proceed without leave context.');
   } else {
     const leave = getLeaveEntry(ctx.date, ctx.leave);
     if (leave && isFullLeave(ctx.date, ctx.leave)) {
@@ -104,13 +102,12 @@ export function evaluateWriteGuards(ctx: WriteGuardContext): GuardResult {
     };
   }
 
+  // Custom project creation from Slack is disabled — never enable createCustomProject
   if (ctx.createCustomProject) {
     return {
       ok: false,
-      blockMessage:
-        'This will CREATE a shared *New project in Google Sheets. Type CREATE PROJECT to continue.',
-      warnings: [...warnings, 'Custom project creation'],
-      requireKeyword: 'CREATE PROJECT',
+      blockMessage: 'Custom project creation is not available from Slack.',
+      warnings,
     };
   }
 

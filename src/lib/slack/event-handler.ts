@@ -7,34 +7,38 @@ function stripMention(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/gi, '').trim();
 }
 
-export async function processSlackEvent(event: {
-  type?: string;
-  user?: string;
-  text?: string;
-  channel?: string;
-  channel_type?: string;
-  ts?: string;
-  thread_ts?: string;
-  bot_id?: string;
-  subtype?: string;
-  event_ts?: string;
-  client_msg_id?: string;
-}): Promise<void> {
+export async function processSlackEvent(
+  event: {
+    type?: string;
+    user?: string;
+    text?: string;
+    channel?: string;
+    channel_type?: string;
+    ts?: string;
+    thread_ts?: string;
+    bot_id?: string;
+    subtype?: string;
+    event_ts?: string;
+    client_msg_id?: string;
+  },
+  envelopeEventId?: string
+): Promise<void> {
   if (!event || event.bot_id || event.subtype === 'bot_message') {
     return;
   }
   if (event.type !== 'message' && event.type !== 'app_mention') {
     return;
   }
-  // Ignore message edits / joins
   if (event.subtype && event.subtype !== 'file_share') {
     return;
   }
 
   const dedupeId =
+    envelopeEventId ||
     event.client_msg_id ||
     event.event_ts ||
     `${event.channel}:${event.ts}:${event.user}`;
+
   if (await wasEventProcessed(dedupeId)) {
     return;
   }
@@ -46,7 +50,6 @@ export async function processSlackEvent(event: {
     return;
   }
 
-  // Thread: use existing thread or start one from message ts
   const threadTs = event.thread_ts || event.ts;
   if (!threadTs) return;
 
@@ -90,7 +93,6 @@ export async function processSlackInteraction(payload: {
   message?: { ts?: string; thread_ts?: string };
   container?: { thread_ts?: string; message_ts?: string };
   actions?: Array<{ action_id?: string; value?: string }>;
-  trigger_id?: string;
 }): Promise<void> {
   const userId = payload.user?.id;
   const channel = payload.channel?.id;

@@ -32,57 +32,60 @@ import {
   completePendingWrite,
   createPendingWrite,
   getPendingWrite,
+  wasEventProcessed,
 } from '@/lib/timesheet-agent/conversation-state';
 
-describe('confirmation pending write', () => {
+function basePending(overrides: Partial<Parameters<typeof createPendingWrite>[0]> = {}) {
+  return createPendingWrite({
+    employeeId: 'S1',
+    slackUserId: 'U1',
+    channelId: 'C1',
+    threadTs: '123.456',
+    operation: 'submit_day_timesheet',
+    operationType: 'add',
+    targetEntryKey: '1|1',
+    targetEntry: { projectId: '1', taskId: '1', hours: 2 },
+    baseSnapshot: [],
+    payload: { date: '2026-07-14', entries: [{ projectId: '1', taskId: '1', hours: 2 }] },
+    warnings: [],
+    summaryText: 'sum',
+    requireKeyword: 'YES',
+    ...overrides,
+  });
+}
+
+describe('atomic confirmation claim', () => {
   beforeEach(() => {
     store.clear();
   });
 
-  it('confirm once then second claim fails', async () => {
-    const p = await createPendingWrite({
-      employeeId: 'S1',
-      slackUserId: 'U1',
-      channelId: 'C1',
-      threadTs: '123.456',
-      operation: 'submit_day_timesheet',
-      payload: { date: '2026-07-14', entries: [{ projectId: '1', taskId: '1', hours: 2 }] },
-      warnings: [],
-      summaryText: 'sum',
-    });
-    const first = await claimPendingWrite(p.id, 'U1');
-    expect(first?.status).toBe('executing');
-    const second = await claimPendingWrite(p.id, 'U1');
-    expect(second).toBeNull();
+  it('concurrent claims: exactly one succeeds', async () => {
+    const p = await basePending();
+    const results = await Promise.all([
+      claimPendingWrite(p.id, 'U1'),
+      claimPendingWrite(p.id, 'U1'),
+      claimPendingWrite(p.id, 'U1'),
+    ]);
+    const successes = results.filter((r) => r !== null);
+    expect(successes).toHaveLength(1);
+    expect(successes[0]?.status).toBe('executing');
   });
 
-  it('wrong user cannot claim', async () => {
-    const p = await createPendingWrite({
-      employeeId: 'S1',
-      slackUserId: 'U1',
-      channelId: 'C1',
-      threadTs: '123.456',
-      operation: 'clear_day_timesheet',
-      payload: { date: '2026-07-14', entries: [] },
-      warnings: [],
-      summaryText: 'sum',
-    });
+  it('wrong user confirmation', async () => {
+    const p = await basePending();
     await expect(claimPendingWrite(p.id, 'U2')).rejects.toThrow('WRONG_USER');
   });
 
-  it('cancel completes', async () => {
-    const p = await createPendingWrite({
-      employeeId: 'S1',
-      slackUserId: 'U1',
-      channelId: 'C1',
-      threadTs: '123.457',
-      operation: 'submit_day_timesheet',
-      payload: { date: '2026-07-14', entries: [{ projectId: '1', taskId: '1', hours: 1 }] },
-      warnings: [],
-      summaryText: 'sum',
-    });
+  it('expired / completed pending cannot claim', async () => {
+    const p = await basePending();
     await completePendingWrite(p.id, 'cancelled');
-    const got = await getPendingWrite(p.id);
-    expect(got).toBeNull();
+    const again = await claimPendingWrite(p.id, 'U1');
+    expect(again).toBeNull();
+    expect(await getPendingWrite(p.id)).toBeNull();
+  });
+
+  it('dedupes slack event_id', async () => {
+    expect(await wasEventProcessed('Ev123')).toBe(false);
+    expect(await wasEventProcessed('Ev123')).toBe(true);
   });
 });

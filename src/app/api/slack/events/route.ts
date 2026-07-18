@@ -34,8 +34,9 @@ export async function POST(request: NextRequest) {
 
   if (body.type === 'event_callback' && body.event) {
     const event = body.event;
+    const eventId = body.event_id;
     waitUntil(
-      processSlackEvent(event).catch((err) => {
+      processSlackEvent(event, eventId).catch((err) => {
         console.error('[api/slack/events]', err);
       })
     );

@@ -82,7 +82,7 @@ describe('guardrails', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('custom project requires CREATE PROJECT', () => {
+  it('custom project disabled', () => {
     const r = evaluateWriteGuards({
       date: '2026-07-14',
       daySet: entriesToDaySet([{ projectId: 'NewThing', taskId: '1', hours: 1 }]),
@@ -91,7 +91,8 @@ describe('guardrails', () => {
       isFuture: false,
       createCustomProject: true,
     });
-    expect(r.requireKeyword).toBe('CREATE PROJECT');
+    expect(r.ok).toBe(false);
+    expect(r.blockMessage).toMatch(/not available/i);
   });
 
   it('clear requires CLEAR', () => {

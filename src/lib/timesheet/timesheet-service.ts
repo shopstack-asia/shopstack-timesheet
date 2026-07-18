@@ -64,14 +64,23 @@ export type SubmitDayEntryInput = {
   hours: number;
 };
 
+export type SubmitDayOptions = {
+  /** When false (Slack agent), unknown projectId is an error — never createProject */
+  allowCustomProject?: boolean;
+};
+
 /**
  * Replace all Time Log rows for date + staff (same semantics as POST /api/timesheet/submit).
+ * Order: validate → resolve projects → prepare rows → upsert → delete obsolete (inside lock).
  */
 export async function submitDayTimesheetForStaff(
   ctx: AgentAuthContext,
   date: string,
-  entries: SubmitDayEntryInput[]
+  entries: SubmitDayEntryInput[],
+  options: SubmitDayOptions = {}
 ): Promise<void> {
+  const allowCustomProject = options.allowCustomProject !== false;
+
   const { withTimeLogWriteLock, SheetsWriteLockError } = await import(
     '@/lib/sheets-write-lock'
   );
@@ -98,21 +107,82 @@ export async function submitDayTimesheetForStaff(
     throw new Error(`Validation error: ${parsed.error.message}`);
   }
 
+  // Validate master data BEFORE lock / mutations
   const [projects, tasks] = await Promise.all([getCachedProjects(), getCachedTasks()]);
   const projectMap = new Map(projects.map((p) => [p.ProjectID, p]));
   const taskMap = new Map(tasks.map((t) => [t.TaskID, t]));
 
-  if (parsed.data.entries.length > 0) {
-    for (const entry of parsed.data.entries) {
-      if (!taskMap.has(entry.taskId)) {
-        throw new Error(`Invalid task ID: ${entry.taskId}`);
-      }
+  for (const entry of parsed.data.entries) {
+    if (!taskMap.has(entry.taskId)) {
+      throw new Error(`Invalid task ID: ${entry.taskId}`);
+    }
+    if (!allowCustomProject && !projectMap.has(entry.projectId)) {
+      throw new Error(
+        `Unknown project ID: ${entry.projectId}. Custom project creation is not allowed via this path.`
+      );
     }
   }
 
   try {
     await withTimeLogWriteLock(async () => {
       const sheetsService = getGoogleSheetsService();
+
+      // Resolve / create custom projects first (web only), before any deletes
+      const projectIdMap = new Map<string, string>();
+      if (allowCustomProject) {
+        for (const entry of parsed.data.entries) {
+          if (!projectMap.has(entry.projectId) && !projectIdMap.has(entry.projectId)) {
+            const newProject = await sheetsService.createProject(entry.projectId);
+            projectIdMap.set(entry.projectId, newProject.ProjectID);
+            projectMap.set(newProject.ProjectID, newProject);
+          }
+        }
+        if (projectIdMap.size > 0) {
+          const updatedProjects = await getCachedProjects();
+          updatedProjects.forEach((p) => {
+            if (!projectMap.has(p.ProjectID)) {
+              projectMap.set(p.ProjectID, p);
+            }
+          });
+        }
+      }
+
+      // Build final TimeLogRow set (fail before deletes if anything missing)
+      const timeLogRows: TimeLogRow[] = parsed.data.entries.map((entry) => {
+        const task = taskMap.get(entry.taskId)!;
+        let project = projectMap.get(entry.projectId);
+        if (!project && projectIdMap.has(entry.projectId)) {
+          project = projectMap.get(projectIdMap.get(entry.projectId)!);
+        }
+        if (!project) {
+          throw new Error(`Project not found: ${entry.projectId}`);
+        }
+
+        const resolvedProjectId = project.ProjectID;
+        const timeLogId = sheetsService.generateTimeLogId(
+          parsed.data.date,
+          ctx.staff.EmployeeID,
+          resolvedProjectId,
+          task.TaskID
+        );
+
+        return {
+          'Time Log ID': timeLogId,
+          Date: parsed.data.date,
+          'Staff ID': ctx.staff.EmployeeID,
+          'Staff First Name': ctx.staff.FirstName,
+          'Staff Last Name': ctx.staff.LastName,
+          'Staff Position': ctx.staff.Position,
+          'Project ID': resolvedProjectId,
+          'Project Client': project.ProjectClient,
+          'Project Name': project.ProjectName,
+          'Project Code': project.ProjectCode,
+          'Task ID': task.TaskID,
+          Task: task.Task,
+          Hours: entry.hours,
+        };
+      });
+
       const existingEntries = await sheetsService.getTimeLogEntriesByDateAndStaff(
         parsed.data.date,
         ctx.staff.EmployeeID
@@ -127,81 +197,47 @@ export async function submitDayTimesheetForStaff(
         existingEntriesMap.set(key, { rowNumber, entry });
       });
 
-      const submittedEntriesSet = new Set<string>();
-      parsed.data.entries.forEach((entry) => {
-        submittedEntriesSet.add(`${entry.projectId}|${entry.taskId}`);
-      });
+      const submittedKeys = new Set(
+        timeLogRows.map((r) => `${r['Project ID']}|${r['Task ID']}`)
+      );
 
+      const snapshotRows = existingEntries.map(({ entry }) => ({ ...entry }));
+
+      // Upsert first — preserves data if this fails
+      if (timeLogRows.length > 0) {
+        await sheetsService.appendOrUpdateTimeLogEntries(timeLogRows);
+      }
+
+      // Delete obsolete only after upsert succeeds (or clear-all when empty payload)
       const entriesToDelete: number[] = [];
       existingEntriesMap.forEach(({ rowNumber }, key) => {
-        if (!submittedEntriesSet.has(key)) {
+        if (timeLogRows.length === 0 || !submittedKeys.has(key)) {
           entriesToDelete.push(rowNumber);
         }
       });
 
       if (entriesToDelete.length > 0) {
-        await sheetsService.deleteTimeLogEntries(entriesToDelete);
-      }
-
-      const projectIdMap = new Map<string, string>();
-
-      for (const entry of parsed.data.entries) {
-        const project = projectMap.get(entry.projectId);
-        if (!project) {
-          if (!projectIdMap.has(entry.projectId)) {
-            const newProject = await sheetsService.createProject(entry.projectId);
-            projectIdMap.set(entry.projectId, newProject.ProjectID);
-            projectMap.set(newProject.ProjectID, newProject);
+        try {
+          await sheetsService.deleteTimeLogEntries(entriesToDelete);
+        } catch (deleteError) {
+          console.error(
+            '[submitDayTimesheetForStaff] Delete after upsert failed; attempting snapshot restore',
+            deleteError
+          );
+          try {
+            if (snapshotRows.length > 0) {
+              await sheetsService.appendOrUpdateTimeLogEntries(snapshotRows);
+            }
+          } catch (restoreError) {
+            console.error(
+              '[submitDayTimesheetForStaff] Compensating restore failed',
+              restoreError
+            );
           }
+          throw deleteError instanceof Error
+            ? deleteError
+            : new Error('Failed to delete obsolete time log rows');
         }
-      }
-
-      if (projectIdMap.size > 0) {
-        const { getCachedProjects: refresh } = await import('@/lib/google-sheets');
-        const updatedProjects = await refresh();
-        updatedProjects.forEach((p) => {
-          if (!projectMap.has(p.ProjectID)) {
-            projectMap.set(p.ProjectID, p);
-          }
-        });
-      }
-
-      const timeLogRows: TimeLogRow[] = parsed.data.entries.map((entry) => {
-        const task = taskMap.get(entry.taskId)!;
-        let project = projectMap.get(entry.projectId);
-        if (!project && projectIdMap.has(entry.projectId)) {
-          project = projectMap.get(projectIdMap.get(entry.projectId)!);
-        }
-        if (!project) {
-          throw new Error(`Project not found: ${entry.projectId}`);
-        }
-
-        const timeLogId = sheetsService.generateTimeLogId(
-          parsed.data.date,
-          ctx.staff.EmployeeID,
-          project.ProjectID,
-          task.TaskID
-        );
-
-        return {
-          'Time Log ID': timeLogId,
-          Date: parsed.data.date,
-          'Staff ID': ctx.staff.EmployeeID,
-          'Staff First Name': ctx.staff.FirstName,
-          'Staff Last Name': ctx.staff.LastName,
-          'Staff Position': ctx.staff.Position,
-          'Project ID': project.ProjectID,
-          'Project Client': project.ProjectClient,
-          'Project Name': project.ProjectName,
-          'Project Code': project.ProjectCode,
-          'Task ID': task.TaskID,
-          Task: task.Task,
-          Hours: entry.hours,
-        };
-      });
-
-      if (timeLogRows.length > 0) {
-        await sheetsService.appendOrUpdateTimeLogEntries(timeLogRows);
       }
     });
   } catch (error) {
@@ -221,7 +257,8 @@ export async function submitDayTimesheetForStaff(
 
 export async function clearDayTimesheetForStaff(
   ctx: AgentAuthContext,
-  date: string
+  date: string,
+  options?: SubmitDayOptions
 ): Promise<void> {
-  return submitDayTimesheetForStaff(ctx, date, []);
+  return submitDayTimesheetForStaff(ctx, date, [], options);
 }

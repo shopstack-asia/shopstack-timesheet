@@ -21,3 +21,7 @@ Slack (DM / app_mention / interactions)
 | `src/app/api/slack/*` | HTTP entrypoints |
 
 Browser `POST /api/timesheet/submit` and `GET /api/timesheet/get` call the same timesheet services with `source: 'session'`.
+
+Slack agent tools always call submit with `allowCustomProject: false`. Web submit keeps default `allowCustomProject: true` (existing create-on-unknown behavior).
+
+Slack event dedupe prefers envelope `event_id` (passed from `/api/slack/events`), then `client_msg_id` / `event_ts`.
