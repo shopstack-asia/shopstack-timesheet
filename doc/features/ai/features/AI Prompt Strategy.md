@@ -20,7 +20,13 @@ The builder always starts with a Tool Calling Reliability prompt that:
 
 Canonical text lives in `src/lib/ai/prompt.ts` (`AI_TIMESHEET_SYSTEM_PROMPT`).
 
-See also [AI Decision Engine.md](./AI%20Decision%20Engine.md) for fail-closed potential-business-intent detection (personal-data vs conceptual questions), explicit ISO ranges, Bangkok tomorrow resolution, unresolved timesheet-period clarification, and round-0 enforcement that requires the exact Business Tool.
+See also [AI Decision Engine.md](./AI%20Decision%20Engine.md) for:
+
+- general-intent override before business/date routing (conceptual, instructional How do I, news/weather, programming)
+- standalone relative-day → `get_timesheet` (never `get_work_context`)
+- why isolated `summary` / `สรุป` does not imply the current week
+- employee-specific vs conceptual questions
+- missing-period clarification and exact-tool enforcement
 
 ### Builder API
 

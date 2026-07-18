@@ -786,7 +786,10 @@ describe('general conversation regressions', () => {
     'How do I write TypeScript?',
     'เล่าเรื่องการทำงานของโปรแกรมให้ฟัง',
   ])('stays none: %s', (msg) => {
-    expect(decideBusinessTool(msg, { now: FIXED_NOW }).action).toBe('none');
+    expect(decideBusinessTool(msg, { now: FIXED_NOW })).toMatchObject({
+      action: 'none',
+      reason: 'general_conversation',
+    });
   });
 
   it('date range with project word still uses get_timesheet_range', () => {
@@ -799,5 +802,207 @@ describe('general conversation regressions', () => {
       toolName: 'get_timesheet_range',
       arguments: { startDate: '2026-07-01', endDate: '2026-07-10' },
     });
+  });
+});
+
+describe('standalone relative dates → get_timesheet', () => {
+  it.each([
+    ['today', '2026-07-19'],
+    ['วันนี้', '2026-07-19'],
+    ['yesterday', '2026-07-18'],
+    ['เมื่อวาน', '2026-07-18'],
+    ['tomorrow', '2026-07-20'],
+    ['พรุ่งนี้', '2026-07-20'],
+  ] as const)('%s → get_timesheet(%s)', (msg, date) => {
+    const d = decideBusinessTool(msg, { now: FIXED_NOW });
+    expect(d).toMatchObject({
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date },
+    });
+    expect(d).not.toMatchObject({ toolName: 'get_work_context' });
+  });
+
+  it('month / year boundaries for tomorrow', () => {
+    const jan31 = new Date('2026-01-31T05:00:00.000Z');
+    expect(decideBusinessTool('today', { now: jan31 })).toMatchObject({
+      arguments: { date: '2026-01-31' },
+    });
+    expect(decideBusinessTool('tomorrow', { now: jan31 })).toMatchObject({
+      arguments: { date: '2026-02-01' },
+    });
+    const dec31 = new Date('2026-12-31T05:00:00.000Z');
+    expect(decideBusinessTool('พรุ่งนี้', { now: dec31 })).toMatchObject({
+      arguments: { date: '2027-01-01' },
+    });
+  });
+});
+
+describe('general project/work questions stay none', () => {
+  it.each([
+    'How do I manage a software project?',
+    'Compare project management methodologies',
+    'Tell me about project management',
+    'Explain project management',
+    'What is project management?',
+    'What does a project manager do?',
+    'What is a client account?',
+    'What is a role in project management?',
+    'How does a timesheet system work?',
+    'What is an employee timesheet?',
+  ])('%s', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW })).toMatchObject({
+      action: 'none',
+      reason: 'general_conversation',
+    });
+  });
+});
+
+describe('general date/news/weather questions stay none', () => {
+  it.each([
+    "Tell me about yesterday's news",
+    "Summarize today's news",
+    'What happened yesterday?',
+    'What is the weather today?',
+    'Will it rain tomorrow?',
+    "Summarize this week's technology news",
+    'What events are happening today?',
+    'What day is today?',
+    'สรุปข่าววันนี้',
+    'เมื่อวานมีข่าวอะไรบ้าง',
+    'พรุ่งนี้ฝนตกไหม',
+    'อากาศวันนี้เป็นอย่างไร',
+    'สรุปข่าวเทคโนโลยีสัปดาห์นี้',
+    'วันนี้มีเหตุการณ์อะไร',
+    'เดือนนี้มีวันหยุดอะไรบ้าง',
+  ])('%s', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW })).toMatchObject({
+      action: 'none',
+      reason: 'general_conversation',
+    });
+  });
+});
+
+describe('general programming with business vocabulary stays none', () => {
+  it.each([
+    'How do I design a project API?',
+    'Show me a timesheet database schema',
+    'Write code to calculate working hours',
+    'How should a project service be structured?',
+    'Explain timesheet architecture',
+    'How do I test a client API?',
+    'ช่วยออกแบบ Timesheet Database Schema',
+    'เขียนโค้ดคำนวณชั่วโมงทำงาน',
+    'ออกแบบ Project API อย่างไร',
+    'อธิบาย Timesheet Architecture',
+  ])('%s', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW }).action).toBe('none');
+  });
+});
+
+describe('range keyword regressions', () => {
+  it.each([
+    'Summarize this',
+    'สรุปให้หน่อย',
+    "Summarize today's news",
+    'สรุปข่าววันนี้',
+  ])('unqualified/news summary → none: %s', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW }).action).toBe('none');
+  });
+
+  it.each([
+    ['Summary for this week', bangkokCurrentWeek(FIXED_NOW)],
+    ['สรุป Timesheet สัปดาห์นี้', bangkokCurrentWeek(FIXED_NOW)],
+  ] as const)('qualified timesheet summary → range: %s', (msg, range) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW })).toMatchObject({
+      action: 'call_tool',
+      toolName: 'get_timesheet_range',
+      arguments: range,
+    });
+  });
+});
+
+describe('employee timesheet phrasing', () => {
+  it.each([
+    ['Show my timesheet today', bangkokToday(FIXED_NOW)],
+    ['What did I log yesterday?', bangkokYesterday(FIXED_NOW)],
+    ['วันนี้ฉันทำอะไร', bangkokToday(FIXED_NOW)],
+    ['เมื่อวานฉันลงอะไร', bangkokYesterday(FIXED_NOW)],
+  ] as const)('%s → get_timesheet', (msg, date) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW })).toMatchObject({
+      action: 'call_tool',
+      toolName: 'get_timesheet',
+      arguments: { date },
+    });
+  });
+
+  it('สัปดาห์นี้ฉันลงไปกี่ชั่วโมง → get_timesheet_range', () => {
+    expect(
+      decideBusinessTool('สัปดาห์นี้ฉันลงไปกี่ชั่วโมง', { now: FIXED_NOW })
+    ).toMatchObject({
+      action: 'call_tool',
+      toolName: 'get_timesheet_range',
+      arguments: bangkokCurrentWeek(FIXED_NOW),
+    });
+  });
+});
+
+describe('runConversation general requests never hit tools', () => {
+  it.each([
+    'How do I manage a software project?',
+    'Explain microservice architecture',
+    "Tell me about yesterday's news",
+    'สรุปข่าววันนี้',
+    'Will it rain tomorrow?',
+  ])('%s → no Business Tool', async (msg) => {
+    const route = vi.fn();
+    const result = await runConversation(input(msg, `conv-gen-${msg.slice(0, 12)}`), {
+      decisionNow: FIXED_NOW,
+      toolRegistry: createToolRegistry(),
+      toolRouter: { route } as never,
+      generate: async () => ({
+        text: 'Here is a general answer.',
+        model: 'm',
+      }),
+    });
+    expect(route).not.toHaveBeenCalled();
+    expect(result.toolRounds).toBe(0);
+    expect(result.text).toContain('general answer');
+  });
+});
+
+describe('runConversation standalone today forces get_timesheet', () => {
+  it.each([
+    ['today', bangkokToday(FIXED_NOW)],
+    ['วันนี้', bangkokToday(FIXED_NOW)],
+  ] as const)('%s', async (msg, date) => {
+    const client = mockClient({ timesheets: dayPayload(date) });
+    const registry = makeRegistry(client);
+    const executed: string[] = [];
+    let turn = 0;
+
+    const result = await runConversation(input(msg, `conv-today-${msg}`), {
+      toolRegistry: registry,
+      decisionNow: FIXED_NOW,
+      generate: async (req: GenerateResponseInput) => {
+        turn += 1;
+        if (turn === 1) {
+          return {
+            text: 'I cannot access your timesheet.',
+            model: 'm',
+          };
+        }
+        const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+        expect(toolMsgs).toHaveLength(1);
+        expect(toolMsgs[0]?.name).toBe('get_timesheet');
+        expect(toolMsgs[0]?.content).toContain(date);
+        executed.push(toolMsgs[0]!.name!);
+        return { text: `Logged hours for ${date}.`, model: 'm' };
+      },
+    });
+
+    expect(executed).toEqual(['get_timesheet']);
+    expect(result.text).toContain(date);
+    expect(result.text).not.toMatch(/cannot access/i);
   });
 });

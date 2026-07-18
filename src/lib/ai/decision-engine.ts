@@ -1,3 +1,23 @@
+/**
+ * Deterministic Decision Engine for Timesheet AI.
+ *
+ * Precedence (do not reorder lightly):
+ * 1. Empty → none
+ * 2. Clearly general conversation → none
+ * 3. Ambiguous / invalid date → clarify
+ * 4. Explicit ISO date range → get_timesheet_range
+ * 5. Relative timesheet range → get_timesheet_range
+ * 6. Explicit or relative single timesheet date → get_timesheet
+ * 7. Explicit employee work-context request → get_work_context
+ * 8. Timesheet request missing date/range → clarify
+ * 9. Potential employee-business request → get_work_context / clarify
+ * 10. Non-business → none
+ *
+ * Recognized and potential employee-business requests must route to a Business Tool
+ * or clarification. Clearly general, conceptual, instructional, programming, news,
+ * weather, and external-topic questions remain direct-answer requests.
+ */
+
 import {
   bangkokCurrentWeek,
   bangkokLastMonth,
@@ -42,35 +62,22 @@ const BARE_DAY_RE = /วันที่\s*(\d{1,2})(?!\s*(เดือน|\/|-|\
 const EXPLICIT_RANGE_RE =
   /(?:จาก|ตั้งแต่|from|between)?\s*(\d{4}-\d{2}-\d{2})\s*(?:ถึง|to|and|-|–|—)\s*(\d{4}-\d{2}-\d{2})/i;
 
-const RANGE_RE =
-  /(สัปดาห์|อาทิตย์|เดือน|weekly|monthly|this\s+week|last\s+week|this\s+month|last\s+month|สรุป|summary|ชั่วโมง.*(สัปดาห์|เดือน|อาทิตย์)|hours?\s+(this|last)\s+(week|month))/i;
-
-/** Personal-data signals (employee talking about their own work). */
-const PERSONAL_RE =
-  /\b(i|me|my|mine|am\s+i|do\s+i|did\s+i|i'?m|i\s+am)\b|ฉัน|ผม|ของฉัน|ของผม|ของตัวเอง|ได้รับมอบหมาย|รับผิดชอบ/i;
-
-/** Explicit work-context / assignment phrasing (broad). */
-const WORK_CONTEXT_RE =
-  /\b(project|projects|client|clients|role|roles|assignment|assignments|assigned|responsibility|responsibilities|responsible\s+for|account|accounts|customer|customers|engagement|allocated\s+to|allocation|staffed\s+on|involved\s+in|working\s+on|work\s+on|current\s+work|my\s+work|my\s+team|work\s+context|เลือก\s*(project|client|role)|เปลี่ยน\s*(project|client|role)|which\s+(projects?|clients?|accounts?|roles?)|what\s+am\s+i\s+(currently\s+)?(working\s+on|assigned\s+to|responsible\s+for)|show\s+my\s+assignments|what\s+work\s+am\s+i)\b|ฉันมี\s*project|project\s*ที่|client\s*ของ|role\s*ของ|โปรเจกต์|โปรเจค|ลูกค้า|บทบาท|งานที่ได้รับมอบหมาย|ได้รับมอบหมาย|รับผิดชอบ|งานที่รับผิดชอบ|งานของฉัน|งานของผม|ตอนนี้ทำงานอะไร|กำลังทำงานอะไร|ดูแลงาน|ดูแลลูกค้า|อยู่โปรเจกต์ไหน|อยู่โปรเจคไหน|อยู่\s*account\s*ไหน|งานที่ทำอยู่|งานปัจจุบัน|ตอนนี้ฉันรับผิดชอบ|ฉันได้รับมอบหมาย|ตอนนี้ฉันทำงาน|ฉันดูแลงาน|ฉันอยู่\s*account/i;
-
-const WORK_DOMAIN_RE =
-  /\b(project|projects|client|clients|role|roles|assignment|assignments|assigned|responsibility|account|accounts|customer|engagement|allocation|staffed|working\s+on|my\s+work|booking)\b|โปรเจกต์|โปรเจค|ลูกค้า|บทบาท|มอบหมาย|รับผิดชอบ|ดูแลงาน|งานของ|account|งานปัจจุบัน/i;
-
-/** Timesheet / hours domain (needs a period when no date is present). */
-const TIMESHEET_DOMAIN_RE =
-  /\b(timesheet|time\s*sheet|logged\s+hours?|hours?\s+did\s+i\s+log|how\s+many\s+hours|working\s+hours?|work\s+hours?|show\s+my\s+timesheet|my\s+timesheet)\b|ลงเวลา|timesheet|กี่ชั่วโมง|ดู\s*timesheet/i;
-
 /**
- * Conceptual / educational questions — not the employee's data.
+ * Relative timesheet ranges — requires an actual week/month phrase.
+ * Isolated "summary" / "สรุป" alone is NOT sufficient.
  */
-const CONCEPTUAL_RE =
-  /^(what\s+is\s+(a|an|the)\s+|what\s+does\s+(a|an|the)\s+|explain\s+|how\s+do\s+i\s+(write|code|program|implement|build)|how\s+does\s+(a|an|the)\s+|tell\s+me\s+about\s+(a|an|the)\s+|เล่าเรื่อง)/i;
-
-/** "What is project management?" style definitions without an article. */
-const CONCEPTUAL_WHAT_IS_RE = /^what\s+is\s+[a-z][\w\s-]{0,60}\??$/i;
+const RELATIVE_RANGE_RE =
+  /\b(this\s+week|last\s+week|this\s+month|last\s+month|weekly\s+timesheet|monthly\s+timesheet|hours?\s+this\s+week|hours?\s+last\s+week|summary\s+for\s+this\s+(week|month)|summarize\s+my\s+timesheet|weekly|monthly)\b|(สัปดาห์นี้|สัปดาห์ที่แล้ว|อาทิตย์นี้|อาทิตย์ที่แล้ว|อาทิตย์ก่อน|เดือนนี้|เดือนที่แล้ว|ชั่วโมงสัปดาห์นี้|สรุป\s*timesheet|สรุปเวลาของฉัน|สรุปสัปดาห์นี้)/i;
 
 const GREETING_THANKS_RE =
   /^(ขอบคุณ|thanks|thank\s*you|hello|hi|hey|สวัสดี|หวัดดี|good\s*(morning|afternoon|evening)|how\s+are\s+you)[\s!.?]*$/i;
+
+/** External / non-work subject matter (takes priority over bare date words). */
+const EXTERNAL_TOPIC_RE =
+  /\b(news|weather|rain|temperature|event|events|holiday|holidays|technology\s+news|market\s+news|sports?|match|game|calendar|current\s+affairs)\b|ข่าว|สภาพอากาศ|อากาศ|ฝน|อุณหภูมิ|เหตุการณ์|วันหยุด|กีฬา|การแข่งขัน|ปฏิทิน/i;
+
+const PROGRAMMING_RE =
+  /\b(code|coding|program|programming|implement|implementation|function|class|api|schema|database|sql|typescript|javascript|python|architecture|microservice|microservices|algorithm|unit\s+test|integration\s+test)\b/i;
 
 const WEEKDAY_TH: Record<string, number> = {
   อาทิตย์: 0,
@@ -96,42 +103,117 @@ function extractIsoDates(text: string): string[] {
   return [...text.matchAll(ISO_DATE_GLOBAL_RE)].map((m) => m[1]!);
 }
 
-function hasPersonalDataSignal(text: string): boolean {
-  return PERSONAL_RE.test(text);
+function normalize(text: string): string {
+  return text.trim();
 }
 
-/**
- * Greetings, thanks, jokes/stories, programming help, and conceptual definitions.
- */
-export function isClearlyGeneralConversation(text: string): boolean {
-  const t = text.trim();
-  if (!t) return false;
+/** Strong employee-specific work-context / assignment request structure. */
+export function isWorkContextRequest(text: string): boolean {
+  const t = normalize(text);
+  return (
+    /\b(which\s+(projects?|clients?|accounts?|roles?)\s+(am\s+i|do\s+i)|show\s+my\s+(assignments?|clients?|projects?|role|current\s+work|work\s+context)|who\s+are\s+my\s+clients|what\s+(is\s+)?my\s+role|what\s+am\s+i\s+(currently\s+)?(working\s+on|assigned\s+to|responsible\s+for)|what\s+work\s+am\s+i\s+responsible\s+for|which\s+accounts?\s+(do\s+i|am\s+i)|am\s+i\s+assigned|my\s+(projects?|clients?|assignments?|role|current\s+work)|เลือก\s*(project|client|role)|เปลี่ยน\s*(project|client|role))\b/i.test(
+      t
+    ) ||
+    /(ฉันมี\s*(โปรเจกต์|โปรเจค|project)|ผมอยู่โปรเจค|ฉันอยู่\s*(โปรเจกต์|โปรเจค|account)|ฉันได้รับมอบหมาย|ผมได้รับมอบหมาย|ฉันรับผิดชอบ|ผมรับผิดชอบ|ฉันดูแล(งาน|ลูกค้า)|งานของฉัน|งานของผม|โปรเจกต์ของฉัน|โปรเจคของผม|ลูกค้าของฉัน|client\s*ของฉัน|role\s*ของฉัน|ตอนนี้ฉัน(รับผิดชอบ|ทำงาน)|ฉันดูแลงาน|เลือก\s*(project|client)|ฉันมี\s*project)/i.test(
+      t
+    )
+  );
+}
 
-  if (GREETING_THANKS_RE.test(t)) return true;
+/** Employee timesheet / logged-hours request (may still need a period). */
+export function isTimesheetDomainRequest(text: string): boolean {
+  const t = normalize(text);
+  return (
+    /\b(timesheet|time\s*sheet|logged\s+hours?|how\s+many\s+hours\s+did\s+i|hours?\s+did\s+i\s+log|show\s+my\s+timesheet|my\s+timesheet|what\s+did\s+i\s+(do|log)|working\s+hours?\s+did\s+i)\b/i.test(
+      t
+    ) ||
+    /(ลงเวลา|ดู\s*timesheet|timesheet\s*ของฉัน|กี่ชั่วโมง|วันนี้ฉันทำอะไร|เมื่อวานฉัน(ทำ|ลง)|พรุ่งนี้ฉัน)/i.test(
+      t
+    )
+  );
+}
 
-  if (CONCEPTUAL_RE.test(t) || CONCEPTUAL_WHAT_IS_RE.test(t)) {
-    // Personal override: "What am I working on?" / "What is my project?" are not conceptual.
+/** Phrase-level employee-business request (not isolated pronouns). */
+export function isEmployeeBusinessRequest(text: string): boolean {
+  const t = normalize(text);
+  if (isWorkContextRequest(t)) return true;
+  if (isTimesheetDomainRequest(t)) return true;
+  // Strong personal + work structure
+  if (
+    /\b(my\s+(projects?|clients?|role|assignments?|timesheet|logged\s+hours?|current\s+work)|am\s+i\s+assigned|do\s+i\s+manage|did\s+i\s+log|what\s+am\s+i\s+working\s+on|what\s+am\s+i\s+responsible\s+for|which\s+accounts?\s+am\s+i)\b/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  if (
+    /(โปรเจกต์ของฉัน|โปรเจคของผม|ลูกค้าของฉัน|role\s*ของฉัน|งานของฉัน|งานของผม|timesheet\s*ของฉัน|ฉันได้รับมอบหมาย|ผมได้รับมอบหมาย|ฉันรับผิดชอบ|ผมรับผิดชอบ|ฉันลงเวลา|ผมลงเวลา|ฉันอยู่โปรเจกต์ไหน|ผมอยู่\s*account)/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function isGeneralConceptualQuestion(text: string): boolean {
+  const t = normalize(text);
+  // Employee-specific overrides
+  if (
+    /\b(am\s+i|did\s+i|do\s+i\s+(manage|have)|my\s+(project|client|role|assignment|timesheet))\b/i.test(
+      t
+    ) ||
+    /(ฉันมี|ผมอยู่|ของฉัน|ของผม|ฉันได้รับ|ฉันรับผิดชอบ)/i.test(t)
+  ) {
+    // Still allow pure definitions that happen to include "my" incorrectly — only block when clearly employee ask
     if (
-      /\b(am\s+i|do\s+i|did\s+i|my|mine|assigned|ฉัน|ผม)\b/i.test(t)
+      isWorkContextRequest(t) ||
+      isTimesheetDomainRequest(t) ||
+      /\b(what\s+am\s+i|which\s+.+\s+am\s+i|show\s+my)\b/i.test(t)
     ) {
+      return false;
+    }
+  }
+
+  if (
+    /^(what\s+is\s+|what\s+are\s+|what\s+does\s+.+\s+do\b|how\s+does\s+.+\s+work\b|explain\s+|describe\s+|tell\s+me\s+about\s+|define\s+|what\s+is\s+the\s+difference\s+between\s+|what\s+day\s+is\s+today\b)/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+
+  // Thai conceptual
+  if (
+    /(คืออะไร|ทำหน้าที่อะไร|อธิบาย(การทำงาน|เรื่อง)|ความแตกต่างระหว่าง)/i.test(t) &&
+    !/(ฉัน|ผม|ของฉัน|ของผม)/i.test(t)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export function isGeneralInstructionalQuestion(text: string): boolean {
+  const t = normalize(text);
+  // How do I / How should I / How can I — instructional, not employee data
+  if (
+    /^(how\s+do\s+i\s+|how\s+should\s+i\s+|how\s+can\s+i\s+|how\s+to\s+)/i.test(
+      t
+    )
+  ) {
+    // Exception: "How many hours did I log" is timesheet — handled by timesheet detector first in decide order
+    // but this runs inside general check first — "How many hours did I log" must NOT be general
+    if (/\bhow\s+many\s+hours\b/i.test(t) && /\bdid\s+i\s+log\b/i.test(t)) {
       return false;
     }
     return true;
   }
 
   if (
-    /^(เล่าเรื่อง|tell\s+me\s+a\s+(joke|story)|joke\b)/i.test(t) &&
-    !hasPersonalDataSignal(t)
-  ) {
-    return true;
-  }
-
-  if (
-    /\b(typescript|javascript|python|microservice|microservices|architecture|programming)\b/i.test(
+    /(บริหารโครงการอย่างไร|สร้าง\s*timesheet\s*อย่างไร|คำนวณชั่วโมงทำงานอย่างไร|เขียน\s*typescript\s*อย่างไร|สรุปข้อมูลรายสัปดาห์อย่างไร)/i.test(
       t
-    ) &&
-    !hasPersonalDataSignal(t) &&
-    !WORK_CONTEXT_RE.test(t)
+    )
   ) {
     return true;
   }
@@ -139,37 +221,96 @@ export function isClearlyGeneralConversation(text: string): boolean {
   return false;
 }
 
-/**
- * True when the message may ask about the current employee's ShopStack work data.
- * Fail-closed helper — not a mathematical guarantee of every NL phrasing.
- */
-export function isPotentialBusinessIntent(message: string): boolean {
-  const text = message.trim();
-  if (!text) return false;
-  if (isClearlyGeneralConversation(text)) return false;
-
-  if (EXPLICIT_RANGE_RE.test(text) || extractIsoDates(text).length > 0) {
-    return true;
-  }
-  if (RANGE_RE.test(text)) return true;
+export function isGeneralNewsOrExternalTopic(text: string): boolean {
+  const t = normalize(text);
+  if (EXTERNAL_TOPIC_RE.test(t)) return true;
   if (
-    /(วันนี้|เมื่อวาน|พรุ่งนี้|tomorrow|today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|วัน(จันทร์|อังคาร|พุธ|พฤหัส|ศุกร์|เสาร์|อาทิตย์))/i.test(
-      text
+    /\b(what\s+happened\s+yesterday|will\s+it\s+rain|what\s+events\s+are\s+happening)\b/i.test(
+      t
     )
   ) {
     return true;
   }
-  if (BARE_DAY_RE.test(text)) return true;
-  if (TIMESHEET_DOMAIN_RE.test(text)) return true;
-  if (WORK_CONTEXT_RE.test(text)) return true;
-  if (hasPersonalDataSignal(text) && WORK_DOMAIN_RE.test(text)) return true;
+  if (/(เมื่อวานมีข่าว|พรุ่งนี้ฝน|อากาศวันนี้|วันนี้มีเหตุการณ์|เดือนนี้มีวันหยุด)/i.test(t)) {
+    return true;
+  }
+  // Bare summary of news/external without employee timesheet structure
   if (
-    hasPersonalDataSignal(text) &&
-    /(ทำอะไร|ลงอะไร|logged|hours?)/i.test(text)
+    /^(summarize|summary|สรุป)/i.test(t) &&
+    EXTERNAL_TOPIC_RE.test(t)
+  ) {
+    return true;
+  }
+  if (/^สรุปข่าว/i.test(t)) return true;
+  if (/^summarize\s+(today'?s\s+)?news/i.test(t)) return true;
+  if (/^tell\s+me\s+about\s+yesterday'?s\s+news/i.test(t)) return true;
+  return false;
+}
+
+function isGeneralComparisonQuestion(text: string): boolean {
+  const t = normalize(text);
+  return (
+    /^(compare\s+|pros\s+and\s+cons\b|what\s+is\s+the\s+difference\s+between\b)/i.test(
+      t
+    ) ||
+    /(เปรียบเทียบ|ข้อดีข้อเสีย|ต่างกันอย่างไร)/i.test(t)
+  );
+}
+
+function isGeneralProgrammingQuestion(text: string): boolean {
+  const t = normalize(text);
+  if (!PROGRAMMING_RE.test(t) && !/(เขียนโค้ด|ออกแบบ\s*.*api|database\s*schema)/i.test(t)) {
+    return false;
+  }
+  // Employee data ask overrides
+  if (isWorkContextRequest(t) || /\bshow\s+my\b/i.test(t)) return false;
+  return true;
+}
+
+function isBareUnqualifiedSummary(text: string): boolean {
+  const t = normalize(text);
+  if (/^(summarize\s+this|สรุปให้หน่อย)[\s!.?]*$/i.test(t)) return true;
+  // "summary" / "สรุป" alone without week/month/timesheet/employee structure
+  if (
+    /^(summary|summarize|สรุป)([\s!.?]*)$/i.test(t)
   ) {
     return true;
   }
   return false;
+}
+
+/**
+ * General conversation: greetings, conceptual, instructional, news/weather,
+ * programming, comparisons. Runs before date/work routing.
+ */
+export function isClearlyGeneralConversation(text: string): boolean {
+  const t = normalize(text);
+  if (!t) return false;
+
+  if (GREETING_THANKS_RE.test(t)) return true;
+  if (/^(เล่าเรื่อง|tell\s+me\s+a\s+(joke|story)|joke\b)/i.test(t)) {
+    // Stories/jokes — not employee data asks
+    if (!isWorkContextRequest(t) && !isTimesheetDomainRequest(t)) return true;
+  }
+  if (isBareUnqualifiedSummary(t)) return true;
+  if (isGeneralNewsOrExternalTopic(t)) return true;
+  if (isGeneralConceptualQuestion(t)) return true;
+  if (isGeneralInstructionalQuestion(t)) return true;
+  if (isGeneralComparisonQuestion(t)) return true;
+  if (isGeneralProgrammingQuestion(t)) return true;
+
+  return false;
+}
+
+/**
+ * Potential employee-business after more specific detectors failed.
+ * Must not treat bare relative dates or domain keywords alone as work-context.
+ */
+export function isPotentialBusinessIntent(message: string): boolean {
+  const text = normalize(message);
+  if (!text) return false;
+  if (isClearlyGeneralConversation(text)) return false;
+  return isEmployeeBusinessRequest(text);
 }
 
 function resolveExplicitRange(text: string): BusinessToolDecision | null {
@@ -218,16 +359,17 @@ function resolveRelativeRange(
   text: string,
   now: Date
 ): BusinessToolDecision | null {
-  if (!RANGE_RE.test(text)) return null;
+  if (!RELATIVE_RANGE_RE.test(text)) return null;
 
   let range: { startDate: string; endDate: string };
   if (/(เดือนที่แล้ว|last\s+month)/i.test(text)) {
     range = bangkokLastMonth(now);
   } else if (/(เดือนนี้|this\s+month|monthly)/i.test(text)) {
     range = bangkokThisMonth(now);
-  } else if (/(สัปดาห์ที่แล้ว|อาทิตย์ก่อน|last\s+week)/i.test(text)) {
+  } else if (/(สัปดาห์ที่แล้ว|อาทิตย์ก่อน|อาทิตย์ที่แล้ว|last\s+week)/i.test(text)) {
     range = bangkokLastWeek(now);
   } else {
+    // this week / สัปดาห์นี้ / weekly / summary for this week / สรุปสัปดาห์นี้
     range = bangkokCurrentWeek(now);
   }
 
@@ -239,11 +381,17 @@ function resolveRelativeRange(
   };
 }
 
+/**
+ * Single calendar day → get_timesheet.
+ * Standalone today/yesterday/tomorrow (EN/TH) are sufficient after general-check.
+ */
 function resolveSingleDay(
   text: string,
   now: Date
 ): BusinessToolDecision | null {
-  const isos = extractIsoDates(text);
+  const t = normalize(text);
+  const isos = extractIsoDates(t);
+
   if (isos.length >= 2) {
     return {
       action: 'clarify',
@@ -271,7 +419,9 @@ function resolveSingleDay(
     };
   }
 
-  if (/(พรุ่งนี้|tomorrow)/i.test(text)) {
+  // Standalone or embedded relative days (general news/weather already filtered out).
+  // Note: \b does not work reliably with Thai script — match Thai literals directly.
+  if (/\btomorrow\b/i.test(t) || t.includes('พรุ่งนี้')) {
     return {
       action: 'call_tool',
       toolName: 'get_timesheet',
@@ -279,7 +429,8 @@ function resolveSingleDay(
       reason: 'timesheet_day_intent',
     };
   }
-  if (/(เมื่อวาน|yesterday)/i.test(text)) {
+
+  if (/\byesterday\b/i.test(t) || t.includes('เมื่อวาน')) {
     return {
       action: 'call_tool',
       toolName: 'get_timesheet',
@@ -287,11 +438,8 @@ function resolveSingleDay(
       reason: 'timesheet_day_intent',
     };
   }
-  if (
-    /(วันนี้|today)/i.test(text) &&
-    (TIMESHEET_DOMAIN_RE.test(text) ||
-      /ทำอะไร|ลงอะไร|what\s+did\s+i|log/i.test(text))
-  ) {
+
+  if (/\btoday\b/i.test(t) || t.includes('วันนี้')) {
     return {
       action: 'call_tool',
       toolName: 'get_timesheet',
@@ -301,10 +449,10 @@ function resolveSingleDay(
   }
 
   const thDay = Object.keys(WEEKDAY_TH).find((k) =>
-    new RegExp(`วัน${k}`).test(text)
+    new RegExp(`วัน${k}`).test(t)
   );
   const en = Object.keys(WEEKDAY_EN).find((k) =>
-    new RegExp(`\\b${k}\\b`, 'i').test(text)
+    new RegExp(`\\b${k}\\b`, 'i').test(t)
   );
 
   if (thDay) {
@@ -343,28 +491,25 @@ const MISSING_PERIOD_CLARIFY: BusinessToolDecision = {
 };
 
 /**
- * Deterministic business-intent router (fail closed for potential employee-business asks).
- *
- * Recognized and potential employee-business intents are prevented from answering
- * directly and must route to a Business Tool or clarification.
+ * Deterministic business-intent router.
  */
 export function decideBusinessTool(
   userMessage: string,
   options?: DecideBusinessToolOptions
 ): BusinessToolDecision {
-  const text = userMessage.trim();
+  const text = normalize(userMessage);
   if (!text) {
     return { action: 'none', reason: 'empty_message' };
   }
 
   const now = options?.now ?? new Date();
 
-  // Clearly general conversation
+  // 2. Clearly general — before any date / work keyword routing
   if (isClearlyGeneralConversation(text)) {
     return { action: 'none', reason: 'general_conversation' };
   }
 
-  // Ambiguous bare day without month/year
+  // 3. Ambiguous bare day without month/year
   if (
     BARE_DAY_RE.test(text) &&
     extractIsoDates(text).length === 0 &&
@@ -380,46 +525,39 @@ export function decideBusinessTool(
     };
   }
 
-  // Explicit date range wins over project/client words in the same message
+  // 4. Explicit ISO date range (wins over project words)
   const explicitRange = resolveExplicitRange(text);
   if (explicitRange) {
     return explicitRange;
   }
 
-  // Relative range
+  // 5. Relative timesheet range (week/month phrases only)
   const relativeRange = resolveRelativeRange(text, now);
   if (relativeRange) {
     return relativeRange;
   }
 
-  // Explicit or relative single date
+  // 6. Explicit or relative single date (including standalone today / วันนี้)
   const single = resolveSingleDay(text, now);
   if (single) {
     return single;
   }
 
-  // Work context / project / client / role / assignment
-  if (WORK_CONTEXT_RE.test(text)) {
+  // 7. Explicit employee work-context request
+  if (isWorkContextRequest(text)) {
     return workContextDecision('potential_work_context_intent');
   }
 
-  // Potential timesheet intent without a resolvable period → clarify
-  if (TIMESHEET_DOMAIN_RE.test(text)) {
+  // 8. Timesheet domain without a resolvable period → clarify (never default today/week)
+  if (isTimesheetDomainRequest(text)) {
     return MISSING_PERIOD_CLARIFY;
   }
 
-  // Personal logging ask without a date
-  if (
-    hasPersonalDataSignal(text) &&
-    /(what\s+did\s+i\s+(do|log)|ทำอะไร|ลงอะไร|logged)/i.test(text)
-  ) {
-    return MISSING_PERIOD_CLARIFY;
-  }
-
-  // Potential employee-work intent → get_work_context
+  // 9. Potential employee-business request
   if (isPotentialBusinessIntent(text)) {
     return workContextDecision('potential_work_context_intent');
   }
 
+  // 10. Non-business
   return { action: 'none', reason: 'no_business_intent' };
 }
