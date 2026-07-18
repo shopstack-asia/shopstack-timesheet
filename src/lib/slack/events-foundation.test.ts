@@ -8,6 +8,7 @@ import {
 import { parseSlackEventsPayload } from '@/lib/slack/events';
 import { dispatchSlackEvent } from '@/lib/slack/dispatcher';
 import { POST } from '@/app/api/slack/events/route';
+import type { SlackPostMessageClient } from '@/lib/slack/responses';
 
 const SECRET = 'test-signing-secret';
 
@@ -20,6 +21,23 @@ vi.mock('@vercel/functions', () => ({
 vi.mock('@/lib/rate-limit', () => ({
   enforceRateLimit: vi.fn(async () => ({ ok: true as const })),
 }));
+
+vi.mock('@/lib/slack/responses', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/slack/responses')>();
+  return {
+    ...actual,
+    sendMessage: vi.fn(async () => ({ ts: '1.0' })),
+    sendThreadReply: vi.fn(async () => ({ ts: '1.0' })),
+  };
+});
+
+function noopClient(): SlackPostMessageClient {
+  return {
+    chat: {
+      postMessage: vi.fn(async () => ({ ok: true, ts: '1.0' })),
+    },
+  } as unknown as SlackPostMessageClient;
+}
 
 function signedRequest(body: object, opts?: { ts?: string; secret?: string; sig?: string }) {
   const rawBody = JSON.stringify(body);
@@ -168,7 +186,7 @@ describe('dispatchSlackEvent', () => {
           ts: '1.0',
         },
       },
-      { requestId: 'req-1' }
+      { requestId: 'req-1', client: noopClient() }
     );
     expect(result).toEqual({ handled: true, route: 'app_mention' });
   });
@@ -188,7 +206,7 @@ describe('dispatchSlackEvent', () => {
           ts: '2.0',
         },
       },
-      { requestId: 'req-2' }
+      { requestId: 'req-2', client: noopClient() }
     );
     expect(result).toEqual({ handled: true, route: 'message.im' });
   });
@@ -199,7 +217,7 @@ describe('dispatchSlackEvent', () => {
         type: 'event_callback',
         event: { type: 'reaction_added', user: 'U1' },
       },
-      { requestId: 'req-3' }
+      { requestId: 'req-3', client: noopClient() }
     );
     expect(result).toEqual({ handled: false, route: 'ignored' });
   });

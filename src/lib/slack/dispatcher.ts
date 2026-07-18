@@ -5,7 +5,9 @@ import {
 } from '@/lib/slack/constants';
 import { handleAppMention } from '@/lib/slack/events/app-mention';
 import { handleDirectMessage } from '@/lib/slack/events/direct-message';
+import { shouldIgnoreSlackMessage } from '@/lib/slack/events/handler-utils';
 import { createSlackRequestLogger } from '@/lib/slack/logger';
+import type { SlackPostMessageClient } from '@/lib/slack/responses';
 import type { SlackEventEnvelope } from '@/lib/slack/types';
 
 export type DispatchResult =
@@ -16,18 +18,14 @@ export type DispatchOptions = {
   requestId: string;
   /** When set, reject events from other workspaces */
   allowedWorkspace?: string;
+  /** Injected Slack client for tests */
+  client?: SlackPostMessageClient;
 };
-
-function isBotEvent(envelope: SlackEventEnvelope): boolean {
-  const event = envelope.event;
-  return Boolean(event.bot_id || event.subtype === 'bot_message');
-}
 
 function isDirectMessage(envelope: SlackEventEnvelope): boolean {
   const event = envelope.event;
   if (event.type !== EVENT_MESSAGE) return false;
   if (event.channel_type === CHANNEL_TYPE_IM) return true;
-  // Fallback: IM channels start with D
   return Boolean(event.channel?.startsWith('D'));
 }
 
@@ -47,6 +45,11 @@ export async function dispatchSlackEvent(
     team: envelope.team_id,
   });
 
+  log.info('message dispatched', {
+    channel: envelope.event?.channel,
+    user: envelope.event?.user,
+  });
+
   if (
     options.allowedWorkspace &&
     envelope.team_id &&
@@ -64,20 +67,27 @@ export async function dispatchSlackEvent(
     return { handled: false, route: 'ignored' };
   }
 
-  if (isBotEvent(envelope)) {
-    log.debug('bot event — ignored');
+  if (shouldIgnoreSlackMessage(envelope.event)) {
+    log.debug('bot/subtype event — ignored');
     return { handled: false, route: 'bot' };
   }
 
   const eventType = envelope.event.type;
+  const handlerDeps = { client: options.client };
 
   if (eventType === EVENT_APP_MENTION) {
-    await handleAppMention({ requestId: options.requestId, envelope });
+    await handleAppMention(
+      { requestId: options.requestId, envelope },
+      handlerDeps
+    );
     return { handled: true, route: 'app_mention' };
   }
 
   if (isDirectMessage(envelope)) {
-    await handleDirectMessage({ requestId: options.requestId, envelope });
+    await handleDirectMessage(
+      { requestId: options.requestId, envelope },
+      handlerDeps
+    );
     return { handled: true, route: 'message.im' };
   }
 
