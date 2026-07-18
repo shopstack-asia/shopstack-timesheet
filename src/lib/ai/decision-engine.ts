@@ -35,24 +35,42 @@ export type DecideBusinessToolOptions = {
   now?: Date;
 };
 
-const GENERAL_ONLY_RE =
-  /^(ขอบคุณ|thanks|thank\s*you|hello|hi|hey|สวัสดี|หวัดดี|good\s*(morning|afternoon|evening)|how\s+are\s+you|เล่าเรื่อง|joke|tell\s+me\s+a\s+(joke|story)|what\s+is\s+[a-z]|how\s+do\s+i\s+(code|program|write)|programming|javascript|typescript|python)\b/i;
-
-const WORK_CONTEXT_RE =
-  /\b(project|projects|client|clients|role|roles|work\s*context|เลือก\s*(project|client|role)|เปลี่ยน\s*(project|client|role))\b|ฉันมี\s*project|project\s*ที่|client\s*ของ|role\s*ของ|โปรเจกต์|โปรเจค|ลูกค้า|บทบาท/i;
-
-const RANGE_RE =
-  /(สัปดาห์|อาทิตย์|เดือน|weekly|monthly|this\s+week|last\s+week|this\s+month|last\s+month|สรุป|summary|ทั้งหมด|ชั่วโมง.*(สัปดาห์|เดือน|อาทิตย์)|hours?\s+(this|last)\s+(week|month))/i;
-
-const DAY_RE =
-  /(วันนี้|เมื่อวาน|พรุ่งนี้|tomorrow|today|yesterday|what\s+did\s+i\s+(do|log)|ทำอะไร|ลงอะไร|logged|timesheet|วัน(จันทร์|อังคาร|พุธ|พฤหัส|ศุกร์|เสาร์|อาทิตย์)|monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i;
-
 const ISO_DATE_GLOBAL_RE = /\b(\d{4}-\d{2}-\d{2})\b/g;
 const BARE_DAY_RE = /วันที่\s*(\d{1,2})(?!\s*(เดือน|\/|-|\d))/i;
 
 /** Explicit two-date range (Thai / English / hyphen). */
 const EXPLICIT_RANGE_RE =
   /(?:จาก|ตั้งแต่|from|between)?\s*(\d{4}-\d{2}-\d{2})\s*(?:ถึง|to|and|-|–|—)\s*(\d{4}-\d{2}-\d{2})/i;
+
+const RANGE_RE =
+  /(สัปดาห์|อาทิตย์|เดือน|weekly|monthly|this\s+week|last\s+week|this\s+month|last\s+month|สรุป|summary|ชั่วโมง.*(สัปดาห์|เดือน|อาทิตย์)|hours?\s+(this|last)\s+(week|month))/i;
+
+/** Personal-data signals (employee talking about their own work). */
+const PERSONAL_RE =
+  /\b(i|me|my|mine|am\s+i|do\s+i|did\s+i|i'?m|i\s+am)\b|ฉัน|ผม|ของฉัน|ของผม|ของตัวเอง|ได้รับมอบหมาย|รับผิดชอบ/i;
+
+/** Explicit work-context / assignment phrasing (broad). */
+const WORK_CONTEXT_RE =
+  /\b(project|projects|client|clients|role|roles|assignment|assignments|assigned|responsibility|responsibilities|responsible\s+for|account|accounts|customer|customers|engagement|allocated\s+to|allocation|staffed\s+on|involved\s+in|working\s+on|work\s+on|current\s+work|my\s+work|my\s+team|work\s+context|เลือก\s*(project|client|role)|เปลี่ยน\s*(project|client|role)|which\s+(projects?|clients?|accounts?|roles?)|what\s+am\s+i\s+(currently\s+)?(working\s+on|assigned\s+to|responsible\s+for)|show\s+my\s+assignments|what\s+work\s+am\s+i)\b|ฉันมี\s*project|project\s*ที่|client\s*ของ|role\s*ของ|โปรเจกต์|โปรเจค|ลูกค้า|บทบาท|งานที่ได้รับมอบหมาย|ได้รับมอบหมาย|รับผิดชอบ|งานที่รับผิดชอบ|งานของฉัน|งานของผม|ตอนนี้ทำงานอะไร|กำลังทำงานอะไร|ดูแลงาน|ดูแลลูกค้า|อยู่โปรเจกต์ไหน|อยู่โปรเจคไหน|อยู่\s*account\s*ไหน|งานที่ทำอยู่|งานปัจจุบัน|ตอนนี้ฉันรับผิดชอบ|ฉันได้รับมอบหมาย|ตอนนี้ฉันทำงาน|ฉันดูแลงาน|ฉันอยู่\s*account/i;
+
+const WORK_DOMAIN_RE =
+  /\b(project|projects|client|clients|role|roles|assignment|assignments|assigned|responsibility|account|accounts|customer|engagement|allocation|staffed|working\s+on|my\s+work|booking)\b|โปรเจกต์|โปรเจค|ลูกค้า|บทบาท|มอบหมาย|รับผิดชอบ|ดูแลงาน|งานของ|account|งานปัจจุบัน/i;
+
+/** Timesheet / hours domain (needs a period when no date is present). */
+const TIMESHEET_DOMAIN_RE =
+  /\b(timesheet|time\s*sheet|logged\s+hours?|hours?\s+did\s+i\s+log|how\s+many\s+hours|working\s+hours?|work\s+hours?|show\s+my\s+timesheet|my\s+timesheet)\b|ลงเวลา|timesheet|กี่ชั่วโมง|ดู\s*timesheet/i;
+
+/**
+ * Conceptual / educational questions — not the employee's data.
+ */
+const CONCEPTUAL_RE =
+  /^(what\s+is\s+(a|an|the)\s+|what\s+does\s+(a|an|the)\s+|explain\s+|how\s+do\s+i\s+(write|code|program|implement|build)|how\s+does\s+(a|an|the)\s+|tell\s+me\s+about\s+(a|an|the)\s+|เล่าเรื่อง)/i;
+
+/** "What is project management?" style definitions without an article. */
+const CONCEPTUAL_WHAT_IS_RE = /^what\s+is\s+[a-z][\w\s-]{0,60}\??$/i;
+
+const GREETING_THANKS_RE =
+  /^(ขอบคุณ|thanks|thank\s*you|hello|hi|hey|สวัสดี|หวัดดี|good\s*(morning|afternoon|evening)|how\s+are\s+you)[\s!.?]*$/i;
 
 const WEEKDAY_TH: Record<string, number> = {
   อาทิตย์: 0,
@@ -76,6 +94,82 @@ const WEEKDAY_EN: Record<string, number> = {
 
 function extractIsoDates(text: string): string[] {
   return [...text.matchAll(ISO_DATE_GLOBAL_RE)].map((m) => m[1]!);
+}
+
+function hasPersonalDataSignal(text: string): boolean {
+  return PERSONAL_RE.test(text);
+}
+
+/**
+ * Greetings, thanks, jokes/stories, programming help, and conceptual definitions.
+ */
+export function isClearlyGeneralConversation(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+
+  if (GREETING_THANKS_RE.test(t)) return true;
+
+  if (CONCEPTUAL_RE.test(t) || CONCEPTUAL_WHAT_IS_RE.test(t)) {
+    // Personal override: "What am I working on?" / "What is my project?" are not conceptual.
+    if (
+      /\b(am\s+i|do\s+i|did\s+i|my|mine|assigned|ฉัน|ผม)\b/i.test(t)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  if (
+    /^(เล่าเรื่อง|tell\s+me\s+a\s+(joke|story)|joke\b)/i.test(t) &&
+    !hasPersonalDataSignal(t)
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(typescript|javascript|python|microservice|microservices|architecture|programming)\b/i.test(
+      t
+    ) &&
+    !hasPersonalDataSignal(t) &&
+    !WORK_CONTEXT_RE.test(t)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * True when the message may ask about the current employee's ShopStack work data.
+ * Fail-closed helper — not a mathematical guarantee of every NL phrasing.
+ */
+export function isPotentialBusinessIntent(message: string): boolean {
+  const text = message.trim();
+  if (!text) return false;
+  if (isClearlyGeneralConversation(text)) return false;
+
+  if (EXPLICIT_RANGE_RE.test(text) || extractIsoDates(text).length > 0) {
+    return true;
+  }
+  if (RANGE_RE.test(text)) return true;
+  if (
+    /(วันนี้|เมื่อวาน|พรุ่งนี้|tomorrow|today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|วัน(จันทร์|อังคาร|พุธ|พฤหัส|ศุกร์|เสาร์|อาทิตย์))/i.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  if (BARE_DAY_RE.test(text)) return true;
+  if (TIMESHEET_DOMAIN_RE.test(text)) return true;
+  if (WORK_CONTEXT_RE.test(text)) return true;
+  if (hasPersonalDataSignal(text) && WORK_DOMAIN_RE.test(text)) return true;
+  if (
+    hasPersonalDataSignal(text) &&
+    /(ทำอะไร|ลงอะไร|logged|hours?)/i.test(text)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function resolveExplicitRange(text: string): BusinessToolDecision | null {
@@ -120,13 +214,37 @@ function resolveExplicitRange(text: string): BusinessToolDecision | null {
   };
 }
 
+function resolveRelativeRange(
+  text: string,
+  now: Date
+): BusinessToolDecision | null {
+  if (!RANGE_RE.test(text)) return null;
+
+  let range: { startDate: string; endDate: string };
+  if (/(เดือนที่แล้ว|last\s+month)/i.test(text)) {
+    range = bangkokLastMonth(now);
+  } else if (/(เดือนนี้|this\s+month|monthly)/i.test(text)) {
+    range = bangkokThisMonth(now);
+  } else if (/(สัปดาห์ที่แล้ว|อาทิตย์ก่อน|last\s+week)/i.test(text)) {
+    range = bangkokLastWeek(now);
+  } else {
+    range = bangkokCurrentWeek(now);
+  }
+
+  return {
+    action: 'call_tool',
+    toolName: 'get_timesheet_range',
+    arguments: range,
+    reason: 'timesheet_range_intent',
+  };
+}
+
 function resolveSingleDay(
   text: string,
   now: Date
 ): BusinessToolDecision | null {
   const isos = extractIsoDates(text);
   if (isos.length >= 2) {
-    // Should have been handled as an explicit range; do not collapse to single day.
     return {
       action: 'clarify',
       message:
@@ -169,7 +287,11 @@ function resolveSingleDay(
       reason: 'timesheet_day_intent',
     };
   }
-  if (/(วันนี้|today)/i.test(text)) {
+  if (
+    /(วันนี้|today)/i.test(text) &&
+    (TIMESHEET_DOMAIN_RE.test(text) ||
+      /ทำอะไร|ลงอะไร|what\s+did\s+i|log/i.test(text))
+  ) {
     return {
       action: 'call_tool',
       toolName: 'get_timesheet',
@@ -202,22 +324,29 @@ function resolveSingleDay(
     };
   }
 
-  // Day-ish intent without a resolvable date — never guess "today".
-  if (DAY_RE.test(text)) {
-    return {
-      action: 'clarify',
-      message:
-        'Which date do you mean? Please include an explicit date (YYYY-MM-DD) or a relative day such as today or yesterday.',
-      reason: 'unresolved_date_phrase',
-    };
-  }
-
   return null;
 }
 
+function workContextDecision(reason: string): BusinessToolDecision {
+  return {
+    action: 'call_tool',
+    toolName: 'get_work_context',
+    arguments: {},
+    reason,
+  };
+}
+
+const MISSING_PERIOD_CLARIFY: BusinessToolDecision = {
+  action: 'clarify',
+  message: 'Which date or date range do you mean?',
+  reason: 'missing_timesheet_period',
+};
+
 /**
- * Deterministic business-intent router.
- * Business topics must map to tools; general chit-chat returns none.
+ * Deterministic business-intent router (fail closed for potential employee-business asks).
+ *
+ * Recognized and potential employee-business intents are prevented from answering
+ * directly and must route to a Business Tool or clarification.
  */
 export function decideBusinessTool(
   userMessage: string,
@@ -230,16 +359,12 @@ export function decideBusinessTool(
 
   const now = options?.now ?? new Date();
 
-  if (
-    GENERAL_ONLY_RE.test(text) &&
-    !WORK_CONTEXT_RE.test(text) &&
-    !DAY_RE.test(text) &&
-    !RANGE_RE.test(text) &&
-    !EXPLICIT_RANGE_RE.test(text)
-  ) {
+  // Clearly general conversation
+  if (isClearlyGeneralConversation(text)) {
     return { action: 'none', reason: 'general_conversation' };
   }
 
+  // Ambiguous bare day without month/year
   if (
     BARE_DAY_RE.test(text) &&
     extractIsoDates(text).length === 0 &&
@@ -255,56 +380,45 @@ export function decideBusinessTool(
     };
   }
 
-  if (WORK_CONTEXT_RE.test(text)) {
-    return {
-      action: 'call_tool',
-      toolName: 'get_work_context',
-      arguments: {},
-      reason: 'work_context_intent',
-    };
-  }
-
-  // Explicit ISO ranges before single-date / relative range phrases.
+  // Explicit date range wins over project/client words in the same message
   const explicitRange = resolveExplicitRange(text);
   if (explicitRange) {
     return explicitRange;
   }
 
-  if (RANGE_RE.test(text)) {
-    let range: { startDate: string; endDate: string };
-    if (/(เดือนที่แล้ว|last\s+month)/i.test(text)) {
-      range = bangkokLastMonth(now);
-    } else if (/(เดือนนี้|this\s+month|monthly)/i.test(text)) {
-      range = bangkokThisMonth(now);
-    } else if (/(สัปดาห์ที่แล้ว|อาทิตย์ก่อน|last\s+week)/i.test(text)) {
-      range = bangkokLastWeek(now);
-    } else {
-      range = bangkokCurrentWeek(now);
-    }
-    return {
-      action: 'call_tool',
-      toolName: 'get_timesheet_range',
-      arguments: range,
-      reason: 'timesheet_range_intent',
-    };
+  // Relative range
+  const relativeRange = resolveRelativeRange(text, now);
+  if (relativeRange) {
+    return relativeRange;
   }
 
+  // Explicit or relative single date
   const single = resolveSingleDay(text, now);
   if (single) {
     return single;
   }
 
+  // Work context / project / client / role / assignment
+  if (WORK_CONTEXT_RE.test(text)) {
+    return workContextDecision('potential_work_context_intent');
+  }
+
+  // Potential timesheet intent without a resolvable period → clarify
+  if (TIMESHEET_DOMAIN_RE.test(text)) {
+    return MISSING_PERIOD_CLARIFY;
+  }
+
+  // Personal logging ask without a date
   if (
-    /(booking|employee\s+work|work\s+hour|logged\s+hour|ชั่วโมงทำงาน|งานของฉัน)/i.test(
-      text
-    )
+    hasPersonalDataSignal(text) &&
+    /(what\s+did\s+i\s+(do|log)|ทำอะไร|ลงอะไร|logged)/i.test(text)
   ) {
-    return {
-      action: 'call_tool',
-      toolName: 'get_work_context',
-      arguments: {},
-      reason: 'business_topic_fallback_work_context',
-    };
+    return MISSING_PERIOD_CLARIFY;
+  }
+
+  // Potential employee-work intent → get_work_context
+  if (isPotentialBusinessIntent(text)) {
+    return workContextDecision('potential_work_context_intent');
   }
 
   return { action: 'none', reason: 'no_business_intent' };

@@ -6,58 +6,47 @@ Deterministic router that maps user intent to Business Tools before (and if need
 
 ### Business Purpose
 
-Business data must never come from model knowledge. The decision engine makes tool selection reliable for work context and timesheet reads. Conversation Service enforces that the **exact** required Business Tool runs on round 0.
+Business data must never come from model knowledge. Recognized and potential employee-business intents are prevented from answering directly and must route to a Business Tool or clarification.
 
-### Workflow
+Exact-tool enforcement on round 0 remains mandatory via `enforceRequiredBusinessTool()`.
 
-```mermaid
-flowchart TD
-  U[User message] --> D[decideBusinessTool]
-  D -->|clarify| C[Return clarification — no LLM]
-  D -->|call_tool| G{Tools enabled + tool registered?}
-  G -->|no| E[Controlled error — no business answer]
-  G -->|yes| P[Prompt + decision hint]
-  D -->|none| P
-  P --> LLM[OpenAI round 0]
-  LLM --> EN[enforceRequiredBusinessTool]
-  EN -->|missing / wrong tool| F[Inject Decision Engine tool + args]
-  EN -->|correct tool present| A1[Keep one call; overwrite args]
-  F --> X[Execute required tool only]
-  A1 --> X
-  X --> LLM2[OpenAI final answer from tool output]
-  LLM -->|text only + general intent| A[Answer directly]
-```
+### Fail-closed routing order
+
+1. Empty message → `none`
+2. Clearly general conversation → `none`
+3. Ambiguous / invalid date → `clarify`
+4. Explicit ISO date range → `get_timesheet_range` (wins over project/client words in the same message)
+5. Relative range → `get_timesheet_range`
+6. Explicit or relative single date → `get_timesheet`
+7. Work context / project / client / role / assignment → `get_work_context`
+8. Potential timesheet intent without a resolvable period → `clarify` (`missing_timesheet_period`)
+9. Potential employee-work intent → `get_work_context`
+10. Clearly non-business → `none`
+
+Unresolved timesheet asks never default to today or the current week.
+
+### Potential business-intent detection
+
+`isPotentialBusinessIntent()` combines:
+
+- **Personal-data signals** — I / me / my / am I / ฉัน / ผม / ของฉัน / รับผิดชอบ / …
+- **Work-domain signals** — assignment, account, responsibility, working on, โปรเจกต์, ดูแลงาน, …
+
+Broader assignment vocabulary (English and Thai) routes to `get_work_context` with reason `potential_work_context_intent`.
+
+### Personal data vs conceptual questions
+
+| Example | Outcome |
+|---------|---------|
+| What is a timesheet? | `none` (conceptual) |
+| Show my timesheet | `clarify` (needs date/range) |
+| What does a project manager do? | `none` |
+| Which projects am I assigned to? | `get_work_context` |
+| What am I currently working on? | `get_work_context` |
 
 ### Explicit date ranges
 
-Detected **before** single-date routing. Patterns include:
-
-- `จาก 2026-07-01 ถึง 2026-07-10`
-- `ตั้งแต่ 2026-07-01 ถึง 2026-07-10`
-- `from 2026-07-01 to 2026-07-10`
-- `between 2026-07-01 and 2026-07-10`
-- `2026-07-01 - 2026-07-10`
-
-Rules:
-
-- Both dates must be real calendar days
-- `startDate > endDate` → clarify (no LLM / no tool)
-- Range longer than 31 inclusive days → clarify
-- Never silently collapse an explicit range into `get_timesheet`
-
-### Business Logic
-
-| Intent | Tool / outcome |
-|--------|----------------|
-| project / client / role / work context | `get_work_context` |
-| today / yesterday / tomorrow / weekday / one ISO date | `get_timesheet` (Bangkok calendar) |
-| explicit ISO range | `get_timesheet_range` |
-| week / month / summary phrases | `get_timesheet_range` |
-| ambiguous bare day (e.g. วันที่ 15) | clarify — no LLM |
-| unresolved day-ish phrase | clarify — never guess today |
-| thanks / greeting / joke / story | no tool |
-
-Timezone: `Asia/Bangkok` (`bangkokToday` / `bangkokYesterday` / `bangkokTomorrow`).
+Detected **before** single-date and work-context routing. Invalid / reversed / >31-day ranges → `clarify` without LLM or tools.
 
 ### Round-0 required-tool enforcement
 
@@ -66,12 +55,8 @@ When the Decision Engine returns `call_tool`:
 1. Inspect model tool calls on round 0.
 2. An unrelated tool (`ping`, `current_date`, wrong Business Tool, etc.) does **not** satisfy the gate.
 3. If the required tool is absent, inject the Decision Engine call (name + arguments).
-4. If the required tool is present, keep a single call and overwrite arguments with Decision Engine values (no duplicate execution).
-5. Do not execute demonstration tools as a substitute.
-6. If the required tool is missing from the registry → controlled configuration error (no LLM business answer).
-7. If `enableTools: false` with business intent → controlled tools-disabled error (no LLM business answer).
-
-Tests prove these paths with a model that skips tools or selects the wrong tool on purpose.
+4. If the required tool is present, keep a single call and overwrite arguments with Decision Engine values.
+5. Missing registry tool or `enableTools: false` → controlled error (no business answer from the model).
 
 ### Code
 

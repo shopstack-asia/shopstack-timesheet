@@ -626,3 +626,178 @@ describe('AI conversation tool selection reliability', () => {
     expect(result.toolRounds).toBe(0);
   });
 });
+
+const WORK_CONTEXT_PAYLOAD = {
+  'work-context': {
+    user: { id: 'S1', name: 'Ada' },
+    clients: [
+      {
+        id: 'c1',
+        name: 'Acme',
+        projects: [
+          {
+            id: 'p1',
+            name: 'Portal',
+            roles: [{ id: 'r1', name: 'Dev' }],
+          },
+        ],
+      },
+    ],
+  },
+};
+
+describe('fail-closed potential work-context intents', () => {
+  it.each([
+    'What am I currently working on?',
+    'Show my assignments',
+    'Which accounts am I assigned to?',
+    'What work am I responsible for?',
+    'What am I assigned to?',
+    'ตอนนี้ฉันรับผิดชอบงานอะไรอยู่',
+    'ฉันได้รับมอบหมายงานอะไรบ้าง',
+    'ตอนนี้ฉันทำงานอะไรอยู่',
+    'ฉันดูแลงานอะไรบ้าง',
+    'ฉันอยู่ account ไหนบ้าง',
+  ])('routes to get_work_context: %s', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW })).toMatchObject({
+      action: 'call_tool',
+      toolName: 'get_work_context',
+      arguments: {},
+    });
+  });
+
+  it('forces get_work_context when model says it cannot access assignments', async () => {
+    const registry = makeRegistry(mockClient(WORK_CONTEXT_PAYLOAD));
+    const executed: string[] = [];
+    let turn = 0;
+
+    const result = await runConversation(
+      input('What am I currently working on?', 'conv-assign'),
+      {
+        toolRegistry: registry,
+        decisionNow: FIXED_NOW,
+        generate: async (req: GenerateResponseInput) => {
+          turn += 1;
+          if (turn === 1) {
+            return {
+              text: 'I cannot access your assignments.',
+              model: 'm',
+            };
+          }
+          const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+          expect(toolMsgs).toHaveLength(1);
+          expect(toolMsgs[0]?.name).toBe('get_work_context');
+          executed.push(toolMsgs[0]!.name!);
+          expect(toolMsgs[0]?.content).toContain('Portal');
+          return {
+            text: 'You are assigned to Portal under Acme.',
+            model: 'm',
+          };
+        },
+      }
+    );
+
+    expect(executed).toEqual(['get_work_context']);
+    expect(result.text).toContain('Portal');
+    expect(result.text).not.toMatch(/cannot access/i);
+  });
+
+  it.each([['ping'], ['current_date'], ['get_timesheet']] as const)(
+    'replaces wrong tool %s with get_work_context for assignment ask',
+    async (wrongTool) => {
+      const registry = makeRegistry(mockClient(WORK_CONTEXT_PAYLOAD));
+      const executed: string[] = [];
+      let turn = 0;
+
+      await runConversation(
+        input('Show my assignments', `conv-wrong-wc-${wrongTool}`),
+        {
+          toolRegistry: registry,
+          decisionNow: FIXED_NOW,
+          generate: async (req: GenerateResponseInput) => {
+            turn += 1;
+            if (turn === 1) {
+              return {
+                text: '',
+                model: 'm',
+                toolCalls: [
+                  {
+                    id: 'w1',
+                    type: 'function' as const,
+                    function: {
+                      name: wrongTool,
+                      arguments:
+                        wrongTool === 'get_timesheet'
+                          ? JSON.stringify({ date: '2026-07-18' })
+                          : '{}',
+                    },
+                  },
+                ],
+              };
+            }
+            const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+            expect(toolMsgs).toHaveLength(1);
+            expect(toolMsgs[0]?.name).toBe('get_work_context');
+            executed.push(toolMsgs[0]!.name!);
+            return { text: 'Assignments loaded.', model: 'm' };
+          },
+        }
+      );
+
+      expect(executed).toEqual(['get_work_context']);
+    }
+  );
+});
+
+describe('missing timesheet period clarification', () => {
+  it.each([
+    'Show my timesheet',
+    'How many hours did I log?',
+    'ฉันลงเวลาไปกี่ชั่วโมง',
+    'ดู timesheet ของฉัน',
+  ])('clarifies without LLM/tool: %s', async (msg) => {
+    const d = decideBusinessTool(msg, { now: FIXED_NOW });
+    expect(d.action).toBe('clarify');
+    if (d.action === 'clarify') {
+      expect(d.reason).toBe('missing_timesheet_period');
+      expect(d.message).toMatch(/date/i);
+    }
+
+    const generate = vi.fn();
+    const route = vi.fn();
+    const result = await runConversation(input(msg, `conv-clarify-${msg}`), {
+      decisionNow: FIXED_NOW,
+      toolRegistry: createToolRegistry(),
+      toolRouter: { route } as never,
+      generate,
+    });
+    expect(generate).not.toHaveBeenCalled();
+    expect(route).not.toHaveBeenCalled();
+    expect(result.model).toBe('decision-engine');
+    expect(result.text).toMatch(/date/i);
+  });
+});
+
+describe('general conversation regressions', () => {
+  it.each([
+    'What is a timesheet?',
+    'What is project management?',
+    'Explain microservice architecture',
+    'How do I write TypeScript?',
+    'เล่าเรื่องการทำงานของโปรแกรมให้ฟัง',
+  ])('stays none: %s', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW }).action).toBe('none');
+  });
+
+  it('date range with project word still uses get_timesheet_range', () => {
+    const d = decideBusinessTool(
+      'Show my work on project Portal from 2026-07-01 to 2026-07-10',
+      { now: FIXED_NOW }
+    );
+    expect(d).toMatchObject({
+      action: 'call_tool',
+      toolName: 'get_timesheet_range',
+      arguments: { startDate: '2026-07-01', endDate: '2026-07-10' },
+    });
+  });
+});
