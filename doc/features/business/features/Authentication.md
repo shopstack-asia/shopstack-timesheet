@@ -36,7 +36,7 @@ sequenceDiagram
   participant T as Business Tool
   participant C as BusinessApiClient
   participant A as AuthProvider
-  participant API as CS-Core
+  participant API as Timesheet API
 
   T->>C: get/post(...)
   C->>A: apply(headers)

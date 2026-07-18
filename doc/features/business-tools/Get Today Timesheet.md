@@ -16,7 +16,7 @@ sequenceDiagram
   participant AI as OpenAI
   participant T as get_today_timesheet
   participant C as Business API Client
-  participant API as CS-Core
+  participant API as Timesheet API
 
   U->>AI: What did I log today?
   AI->>T: execute()

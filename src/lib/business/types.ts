@@ -1,5 +1,5 @@
 /**
- * Business API Client types (CS-Core / internal REST).
+ * Business API Client types (Timesheet API / internal REST).
  * No domain business logic — transport contracts only.
  */
 

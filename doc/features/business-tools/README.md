@@ -1,6 +1,6 @@
 # Business Tools — feature area
 
-Read-only AI Business Tools that call CS-Core via the Business API Client.
+Read-only AI Business Tools that call Timesheet API via the Business API Client.
 
 ## Scope (Phase 9.2)
 

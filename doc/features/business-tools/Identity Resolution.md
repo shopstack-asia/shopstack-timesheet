@@ -37,7 +37,7 @@ Implemented in `createIdentityResolver()`; default uses `resolveSlackIdentity`.
 
 - Business tools MUST NOT resolve identity themselves
 - Business tools MUST NOT accept employeeId from AI
-- Downstream CS-Core calls receive `X-Employee-Id` from Conversation Context only
+- Downstream Timesheet API calls receive `X-Employee-Id` from Conversation Context only
 
 ## Failure cases
 

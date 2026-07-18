@@ -95,7 +95,7 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | Legacy aliases (still accepted) |
 | `TIMESHEET_AGENT_TIMEZONE` | Agent date resolution (default `Asia/Bangkok`) |
 
-**Business API (CS-Core foundation)**:
+**Business API (Timesheet API foundation)**:
 
 | Variable | Purpose |
 |----------|---------|

@@ -14,7 +14,7 @@ import {
   createGetWeekTimesheetTool,
   parseWeekTimesheet,
 } from '@/lib/tools/business/timesheet/get-week-timesheet';
-import { CS_CORE_PATHS } from '@/lib/tools/business/types';
+import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 
 function mockClient(
   impl: (
@@ -29,7 +29,7 @@ function mockClient(
 ): BusinessApiClient {
   return {
     getConfig: () => ({
-      baseUrl: 'https://cs-core.test',
+      baseUrl: 'https://timesheet-api.test',
       timeoutMs: 5000,
       apiKey: 'k',
       maxRetries: 0,
@@ -122,7 +122,7 @@ describe('get_week_timesheet tool', () => {
     const tool = createGetWeekTimesheetTool(
       makeDeps(
         mockClient(async (path) => {
-          expect(path).toBe(CS_CORE_PATHS.weekTimesheet);
+          expect(path).toBe(TIMESHEET_API_PATHS.weekTimesheet);
           return {
             success: true,
             data: validWeek,

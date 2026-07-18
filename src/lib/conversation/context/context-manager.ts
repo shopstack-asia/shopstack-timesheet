@@ -16,7 +16,7 @@ import type {
   SelectedRef,
 } from '@/lib/conversation/context/types';
 import { parseWorkContext } from '@/lib/tools/business/context/work-context-parse';
-import { CS_CORE_PATHS } from '@/lib/tools/business/types';
+import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 
 export type ContextManagerDeps = {
   store?: ContextStore;
@@ -54,7 +54,7 @@ async function loadWorkContext(
   requestId?: string,
   signal?: AbortSignal
 ) {
-  const response = await client.get<unknown>(CS_CORE_PATHS.workContext, {
+  const response = await client.get<unknown>(TIMESHEET_API_PATHS.workContext, {
     requestId,
     signal,
     idempotent: true,

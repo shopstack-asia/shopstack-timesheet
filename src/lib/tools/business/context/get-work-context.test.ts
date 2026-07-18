@@ -15,7 +15,7 @@ import {
   parseWorkContext,
   buildSelectionHints,
 } from '@/lib/tools/business/context/get-work-context';
-import { CS_CORE_PATHS } from '@/lib/tools/business/types';
+import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 
 function mockClient(
   impl: (
@@ -30,7 +30,7 @@ function mockClient(
 ): BusinessApiClient {
   return {
     getConfig: () => ({
-      baseUrl: 'https://cs-core.test',
+      baseUrl: 'https://timesheet-api.test',
       timeoutMs: 5000,
       apiKey: 'k',
       maxRetries: 0,
@@ -131,7 +131,7 @@ describe('get_work_context tool', () => {
     let calls = 0;
     const client = mockClient(async (path) => {
       calls += 1;
-      expect(path).toBe(CS_CORE_PATHS.workContext);
+      expect(path).toBe(TIMESHEET_API_PATHS.workContext);
       return {
         success: true,
         data: validContext,

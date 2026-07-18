@@ -10,7 +10,7 @@ import {
   toolSuccess,
   type BusinessToolDeps,
 } from '@/lib/tools/business/helpers';
-import { CS_CORE_PATHS } from '@/lib/tools/business/types';
+import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 import { parseWeekTimesheet } from '@/lib/tools/business/timesheet/parse-week';
 
 export { parseWeekTimesheet } from '@/lib/tools/business/timesheet/parse-week';
@@ -50,7 +50,7 @@ export function createGetWeekTimesheetTool(deps?: BusinessToolDeps): Tool {
 
         const client = resolveBusinessClient(deps);
         const response = await client.get<unknown>(
-          CS_CORE_PATHS.weekTimesheet,
+          TIMESHEET_API_PATHS.weekTimesheet,
           {
             ...requestMeta(context, conv.employeeId),
             idempotent: true,

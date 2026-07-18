@@ -40,7 +40,7 @@ function parseEntry(raw: unknown): TimesheetEntry {
   };
 }
 
-/** Normalize CS-Core today timesheet payload. */
+/** Normalize Timesheet API today timesheet payload. */
 export function parseTodayTimesheet(data: unknown): TodayTimesheet {
   if (!isPlainObject(data)) {
     throw new ToolError(

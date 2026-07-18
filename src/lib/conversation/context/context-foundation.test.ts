@@ -9,7 +9,7 @@ import {
   createIdentityResolver,
   IdentityResolutionError,
 } from '@/lib/conversation/context/identity-resolver';
-import { CS_CORE_PATHS } from '@/lib/tools/business/types';
+import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 
 const workPayload = {
   user: { id: 'u1', name: 'Ada' },
@@ -34,7 +34,7 @@ const workPayload = {
 function mockApi(getImpl: BusinessApiClient['get']): BusinessApiClient {
   return {
     getConfig: () => ({
-      baseUrl: 'https://cs-core.test',
+      baseUrl: 'https://timesheet-api.test',
       timeoutMs: 5000,
       apiKey: 'k',
       maxRetries: 0,
@@ -365,7 +365,7 @@ describe('conversation context manager', () => {
       ensureWorkContext: true,
     });
     expect(get).toHaveBeenCalledWith(
-      CS_CORE_PATHS.workContext,
+      TIMESHEET_API_PATHS.workContext,
       expect.objectContaining({
         headers: expect.objectContaining({ 'X-Employee-Id': 'S9' }),
       })

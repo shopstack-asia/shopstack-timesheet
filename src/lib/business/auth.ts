@@ -13,7 +13,7 @@ export type AuthProvider = {
 
 /**
  * Authorization: Bearer <token>
- * Current production path for CS-Core.
+ * Current production path for Timesheet API.
  */
 export function createBearerTokenProvider(token: string): AuthProvider {
   const trimmed = token.trim();

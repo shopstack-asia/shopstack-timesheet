@@ -32,6 +32,6 @@ export type ResolvedIdentity = {
 export type GetConversationContextOptions = {
   /** When true, load/cache WorkContext via Business API if missing */
   ensureWorkContext?: boolean;
-  /** When true, reload WorkContext from CS-Core and clear selection */
+  /** When true, reload WorkContext from Timesheet API and clear selection */
   forceRefreshWorkContext?: boolean;
 };

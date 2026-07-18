@@ -33,7 +33,7 @@ export function createGetWorkContextTool(deps?: BusinessToolDeps): Tool {
         refresh: {
           type: 'boolean',
           description:
-            'When true, reload work context from CS-Core and clear selected client/project/role',
+            'When true, reload work context from Timesheet API and clear selected client/project/role',
         },
         selectedClientId: {
           type: 'string',

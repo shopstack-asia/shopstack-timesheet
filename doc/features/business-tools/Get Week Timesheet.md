@@ -16,7 +16,7 @@ sequenceDiagram
   participant AI as OpenAI
   participant T as get_week_timesheet
   participant C as Business API Client
-  participant API as CS-Core
+  participant API as Timesheet API
 
   U->>AI: How many hours this week?
   AI->>T: execute()

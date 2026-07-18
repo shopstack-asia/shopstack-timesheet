@@ -25,7 +25,7 @@ function parseDay(raw: unknown): WeekDaySummary {
   };
 }
 
-/** Normalize CS-Core week timesheet payload. */
+/** Normalize Timesheet API week timesheet payload. */
 export function parseWeekTimesheet(data: unknown): WeekTimesheet {
   if (!isPlainObject(data)) {
     throw new ToolError(

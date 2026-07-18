@@ -12,7 +12,7 @@ Return everything required for future Timesheet creation in **one** tool call.
 
 ```text
 Slack → Conversation → OpenAI → Tool Router → get_work_context
-  → Business API Client → GET /v1/work-context → CS-Core
+  → Business API Client → GET /v1/work-context → Timesheet API
 ```
 
 ```mermaid
@@ -21,7 +21,7 @@ sequenceDiagram
   participant AI as OpenAI
   participant T as get_work_context
   participant C as Business API Client
-  participant API as CS-Core
+  participant API as Timesheet API
 
   U->>AI: Log 8 hours today
   AI->>T: execute()

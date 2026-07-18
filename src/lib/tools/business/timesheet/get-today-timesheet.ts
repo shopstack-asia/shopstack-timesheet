@@ -11,7 +11,7 @@ import {
   type BusinessToolDeps,
 } from '@/lib/tools/business/helpers';
 import {
-  CS_CORE_PATHS,
+  TIMESHEET_API_PATHS,
 } from '@/lib/tools/business/types';
 import { parseTodayTimesheet } from '@/lib/tools/business/timesheet/parse-today';
 
@@ -52,7 +52,7 @@ export function createGetTodayTimesheetTool(deps?: BusinessToolDeps): Tool {
 
         const client = resolveBusinessClient(deps);
         const response = await client.get<unknown>(
-          CS_CORE_PATHS.todayTimesheet,
+          TIMESHEET_API_PATHS.todayTimesheet,
           {
             ...requestMeta(context, conv.employeeId),
             idempotent: true,

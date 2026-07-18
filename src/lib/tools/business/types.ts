@@ -1,5 +1,5 @@
 /**
- * CS-Core domain types for read-only business tools (Phase 9.2).
+ * Timesheet API domain types for read-only business tools (Phase 9.2).
  */
 
 export type WorkRole = {
@@ -64,8 +64,8 @@ export type WeekTimesheet = {
   submissionStatus?: string;
 };
 
-/** CS-Core REST paths used by Phase 9.2 read-only tools. */
-export const CS_CORE_PATHS = {
+/** Timesheet API REST paths used by Phase 9.2 read-only tools. */
+export const TIMESHEET_API_PATHS = {
   workContext: '/v1/work-context',
   todayTimesheet: '/v1/timesheets/today',
   weekTimesheet: '/v1/timesheets/week',

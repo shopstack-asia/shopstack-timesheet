@@ -62,7 +62,7 @@ function parseClient(raw: unknown): WorkClient {
   };
 }
 
-/** Normalize CS-Core work-context payload into WorkContext. */
+/** Normalize Timesheet API work-context payload into WorkContext. */
 export function parseWorkContext(data: unknown): WorkContext {
   if (!isPlainObject(data)) {
     throw new ToolError(

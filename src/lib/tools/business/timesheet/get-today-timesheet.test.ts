@@ -14,7 +14,7 @@ import {
   createGetTodayTimesheetTool,
   parseTodayTimesheet,
 } from '@/lib/tools/business/timesheet/get-today-timesheet';
-import { CS_CORE_PATHS } from '@/lib/tools/business/types';
+import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 
 function mockClient(
   impl: (
@@ -29,7 +29,7 @@ function mockClient(
 ): BusinessApiClient {
   return {
     getConfig: () => ({
-      baseUrl: 'https://cs-core.test',
+      baseUrl: 'https://timesheet-api.test',
       timeoutMs: 5000,
       apiKey: 'k',
       maxRetries: 0,
@@ -117,7 +117,7 @@ describe('get_today_timesheet tool', () => {
     const tool = createGetTodayTimesheetTool(
       makeDeps(
         mockClient(async (path, options) => {
-          expect(path).toBe(CS_CORE_PATHS.todayTimesheet);
+          expect(path).toBe(TIMESHEET_API_PATHS.todayTimesheet);
           expect(options?.headers?.['X-Employee-Id']).toBe('S1');
           return {
             success: true,
