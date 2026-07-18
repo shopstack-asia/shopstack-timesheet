@@ -29,4 +29,17 @@ export async function register(): Promise<void> {
     );
     throw error;
   }
+
+  const { assertBusinessApiConfigOnStartup } = await import(
+    '@/lib/business/config'
+  );
+  try {
+    assertBusinessApiConfigOnStartup();
+  } catch (error) {
+    console.error(
+      '[startup] Business API configuration validation failed:',
+      error instanceof Error ? error.message : String(error)
+    );
+    throw error;
+  }
 }
