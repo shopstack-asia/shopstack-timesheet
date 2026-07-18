@@ -42,4 +42,4 @@ Setup details by area:
 
 ## License
 
-Proprietary — Shopstack internal use only.
+Proprietary — Shopstack internal use only..
