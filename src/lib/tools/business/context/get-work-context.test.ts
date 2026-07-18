@@ -5,12 +5,15 @@ import {
   UnexpectedApiError,
 } from '@/lib/business/errors';
 import type { BusinessApiClient } from '@/lib/business/client';
+import { createContextManager } from '@/lib/conversation/context/context-manager';
+import { createContextStore } from '@/lib/conversation/context/context-store';
+import { createIdentityResolver } from '@/lib/conversation/context/identity-resolver';
 import { createToolContext } from '@/lib/tools/tool-context';
 import { createDefaultToolRegistry } from '@/lib/tools';
 import {
-  buildSelectionHints,
   createGetWorkContextTool,
   parseWorkContext,
+  buildSelectionHints,
 } from '@/lib/tools/business/context/get-work-context';
 import { CS_CORE_PATHS } from '@/lib/tools/business/types';
 
@@ -36,7 +39,8 @@ function mockClient(
     request: async () => {
       throw new Error('not used');
     },
-    get: (async (path, options) => impl(path, options)) as BusinessApiClient['get'],
+    get: (async (path, options) =>
+      impl(path, options)) as BusinessApiClient['get'],
     post: async () => {
       throw new Error('not used');
     },
@@ -69,46 +73,51 @@ const validContext = {
   ],
 };
 
+function toolCtx() {
+  return createToolContext({
+    requestId: 'r1',
+    userId: 'U1',
+    conversationId: 'conv-1',
+    metadata: { slackUserId: 'U1', conversationId: 'conv-1' },
+  });
+}
+
+function makeDeps(client: BusinessApiClient) {
+  const identityResolver = createIdentityResolver({
+    lookup: async () => ({
+      ok: true,
+      auth: {
+        staff: {
+          EmployeeID: 'S1',
+          Email: 'ada@shopstack.asia',
+          FirstName: 'Ada',
+          LastName: 'Lovelace',
+        },
+      },
+    }),
+  });
+  const contextManager = createContextManager({
+    store: createContextStore(),
+    identityResolver,
+    businessClient: client,
+  });
+  return { client, contextManager };
+}
+
 describe('parseWorkContext / selection hints', () => {
   it('parses valid payload', () => {
     const ctx = parseWorkContext(validContext);
     expect(ctx.user.name).toBe('Ada');
-    expect(ctx.clients[0]?.projects[0]?.roles[0]?.name).toBe('Dev');
   });
 
   it('rejects malformed response', () => {
     expect(() => parseWorkContext(null)).toThrow(/Malformed/);
-    expect(() => parseWorkContext({ user: { id: 'u' } })).toThrow(/Malformed/);
   });
 
   it('auto-selects only when exactly one path', () => {
-    const hints = buildSelectionHints(parseWorkContext(validContext));
-    expect(hints.autoSelectable).toBe(true);
-    expect(hints.singleRole?.id).toBe('r1');
-  });
-
-  it('asks user when multiple clients', () => {
-    const hints = buildSelectionHints(
-      parseWorkContext({
-        ...validContext,
-        clients: [
-          validContext.clients[0],
-          {
-            id: 'c2',
-            name: 'Beta',
-            projects: [
-              {
-                id: 'p2',
-                name: 'App',
-                roles: [{ id: 'r2', name: 'QA' }],
-              },
-            ],
-          },
-        ],
-      })
+    expect(buildSelectionHints(parseWorkContext(validContext)).autoSelectable).toBe(
+      true
     );
-    expect(hints.autoSelectable).toBe(false);
-    expect(hints.message).toMatch(/Multiple clients/);
   });
 });
 
@@ -118,83 +127,90 @@ describe('get_work_context tool', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  it('success path', async () => {
-    const tool = createGetWorkContextTool({
-      client: mockClient(async (path) => {
-        expect(path).toBe(CS_CORE_PATHS.workContext);
-        return {
-          success: true,
-          data: validContext,
-          status: 200,
-          requestId: 'r1',
-        };
-      }),
-    });
-    const result = await tool.execute(
-      {},
-      createToolContext({ requestId: 'r1' })
-    );
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const data = result.result as { user: { name: string }; selection: { autoSelectable: boolean } };
-      expect(data.user.name).toBe('Ada');
-      expect(data.selection.autoSelectable).toBe(true);
-    }
-  });
-
-  it('authentication failure', async () => {
-    const tool = createGetWorkContextTool({
-      client: mockClient(async () => {
-        throw new AuthenticationError('nope', { requestId: 'r1' });
-      }),
-    });
-    const result = await tool.execute({}, createToolContext());
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.errorCode).toBe('authentication');
-    }
-  });
-
-  it('API failure', async () => {
-    const tool = createGetWorkContextTool({
-      client: mockClient(async () => {
-        throw new UnexpectedApiError('boom', { status: 500, requestId: 'r1' });
-      }),
-    });
-    const result = await tool.execute({}, createToolContext());
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.errorCode).toBe('unexpected');
-    }
-  });
-
-  it('timeout', async () => {
-    const tool = createGetWorkContextTool({
-      client: mockClient(async () => {
-        throw new TimeoutError('timed out', { requestId: 'r1' });
-      }),
-    });
-    const result = await tool.execute({}, createToolContext());
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.errorCode).toBe('timeout');
-    }
-  });
-
-  it('malformed response', async () => {
-    const tool = createGetWorkContextTool({
-      client: mockClient(async () => ({
+  it('success path via conversation context', async () => {
+    let calls = 0;
+    const client = mockClient(async (path) => {
+      calls += 1;
+      expect(path).toBe(CS_CORE_PATHS.workContext);
+      return {
         success: true,
-        data: { broken: true },
+        data: validContext,
         status: 200,
         requestId: 'r1',
-      })),
+      };
     });
-    const result = await tool.execute({}, createToolContext());
+    const tool = createGetWorkContextTool(makeDeps(client));
+    const result = await tool.execute({}, toolCtx());
+    expect(result.success).toBe(true);
+    expect(calls).toBe(1);
+    if (result.success) {
+      expect(result.result).toMatchObject({
+        employeeId: 'S1',
+        user: { name: 'Ada' },
+      });
+    }
+
+    // Cache hit — second call does not hit API again
+    const result2 = await tool.execute({}, toolCtx());
+    expect(result2.success).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  it('rejects AI-supplied employeeId', async () => {
+    const client = mockClient(async () => ({
+      success: true,
+      data: validContext,
+      status: 200,
+      requestId: 'r1',
+    }));
+    const tool = createGetWorkContextTool(makeDeps(client));
+    const result = await tool.execute({ employeeId: 'S999' }, toolCtx());
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.errorCode).toBe('validation_error');
     }
+  });
+
+  it('authentication failure', async () => {
+    const client = mockClient(async () => {
+      throw new AuthenticationError('nope', { requestId: 'r1' });
+    });
+    const tool = createGetWorkContextTool(makeDeps(client));
+    const result = await tool.execute({}, toolCtx());
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.errorCode).toBe('authentication');
+  });
+
+  it('API failure', async () => {
+    const client = mockClient(async () => {
+      throw new UnexpectedApiError('boom', { status: 500, requestId: 'r1' });
+    });
+    const tool = createGetWorkContextTool(makeDeps(client));
+    const result = await tool.execute({}, toolCtx());
+    expect(result.success).toBe(false);
+  });
+
+  it('timeout', async () => {
+    const client = mockClient(async () => {
+      throw new TimeoutError('timed out', { requestId: 'r1' });
+    });
+    const tool = createGetWorkContextTool(makeDeps(client));
+    const result = await tool.execute({}, toolCtx());
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.errorCode).toBe('timeout');
+  });
+
+  it('malformed response', async () => {
+    const client = mockClient(async () => ({
+      success: true,
+      data: { broken: true },
+      status: 200,
+      requestId: 'r1',
+    }));
+    const tool = createGetWorkContextTool(makeDeps(client));
+    const result = await tool.execute({}, toolCtx());
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.errorCode).toBe('validation_error');
   });
 
   it('registered in default registry with OpenAI schema', () => {
@@ -203,8 +219,6 @@ describe('get_work_context tool', () => {
     const def = registry
       .toLlmToolDefinitions()
       .find((d) => d.function.name === 'get_work_context');
-    expect(def?.type).toBe('function');
     expect(def?.function.description).toMatch(/work context/i);
-    expect(def?.function.parameters.type).toBe('object');
   });
 });

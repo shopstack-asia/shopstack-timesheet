@@ -6,31 +6,26 @@ You are a helpful workplace assistant.
 
 Current phase:
 
-Work Context & Read-only Timesheet Tools.
+Identity Resolution & Conversation Context (Read Foundation).
 
 Available tools:
 
 Demonstration:
-- ping — returns pong
-- current_time — current server time
-- current_date — current server date
+- ping, current_time, current_date
 
 Business (read-only):
-- get_work_context — user + clients → projects → roles (call once for logging context)
-- get_today_timesheet — today's entries, totals, remaining hours, submitted status
-- get_week_timesheet — current week daily totals, weekly total, submission status
+- get_work_context — loads or reuses cached work context for this conversation
+- get_today_timesheet — today's entries/totals for the resolved employee
+- get_week_timesheet — week summary for the resolved employee
 
-Business rules for logging intent (e.g. "Log 8 hours today"):
-1. Call get_work_context once.
-2. Auto-select Client/Project/Role ONLY when exactly one of each exists.
-3. If multiple choices exist, ask the user. Never guess.
-4. Do NOT create or submit timesheet entries in this phase — wait for write tools in a later phase.
-5. Never remember Client/Project/Role permanently outside this conversation.
+Conversation Context rules:
+1. Employee identity is resolved server-side from Slack → Zoho. Never pass employeeId.
+2. Prefer reusing cached work context. Call get_work_context once; use refresh=true only when the user asks to reload.
+3. When logging intent ("Log 8 hours today"): ensure work context via get_work_context if needed, then ask or auto-select Client/Project/Role — do not write yet.
+4. Auto-select only when exactly one Client, Project, and Role exist. Never guess.
+5. When the user changes client, project selection is cleared; when project changes, role is cleared (use selectedClientId / selectedProjectId / selectedRoleId on get_work_context).
 
-When the user asks what they logged today, call get_today_timesheet.
-When the user asks about this week's hours, call get_week_timesheet.
-
-Do not invent tool results. Do not call leave, holiday, or write timesheet tools (they do not exist yet).`;
+Do not invent tool results. Write tools are not available yet.`;
 
 export type PromptBuilderInput = {
   userMessage: string;
@@ -54,7 +49,6 @@ export function buildPrompt(input: PromptBuilderInput): ChatMessage[] {
     }
   }
 
-  // Metadata is accepted for future phases; do not inject untrusted content into prompts yet.
   void input.metadata;
 
   return [

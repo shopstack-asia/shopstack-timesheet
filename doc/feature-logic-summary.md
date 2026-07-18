@@ -42,7 +42,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | Slack Timesheet AI Agent | `slack`, `timesheet` | Events foundation: `src/lib/slack/*`, `src/app/api/slack/events`; AI agent (later wiring): `src/lib/timesheet-agent`; docs: `doc/features/slack/`, `docs/ai-implementation/` |
 | Tool Execution Foundation | `tools`, `ai`, `slack` | Vendor-agnostic tools: `src/lib/tools/*`; Conversation tool loop: `src/lib/ai/conversation.ts`; docs: `doc/features/tools/` |
 | Business API Foundation | `business`, `tools` | CS-Core HTTP client: `src/lib/business/*`; docs: `doc/features/business/` |
-| Business Tools (read-only) | `business-tools`, `tools`, `ai` | `get_work_context`, `get_today_timesheet`, `get_week_timesheet`; `src/lib/tools/business/*` |
+| Business Tools (read-only) | `business-tools`, `tools`, `ai` | `get_work_context`, `get_today_timesheet`, `get_week_timesheet`; identity + conversation context: `src/lib/conversation/context/*` |
 
 ### Source Code References
 

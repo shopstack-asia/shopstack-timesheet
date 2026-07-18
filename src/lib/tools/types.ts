@@ -22,6 +22,8 @@ export type ToolContext = {
   eventId?: string;
   userId?: string;
   slackChannel?: string;
+  /** Stable id for Conversation Context cache (Slack channel/thread/user). */
+  conversationId?: string;
   metadata?: Record<string, string | undefined>;
   /** Future: tenant, locale, permissions */
   signal?: AbortSignal;

@@ -60,6 +60,8 @@ export interface ConversationInput {
   userMessage: string;
   requestId?: string;
   eventId?: string;
+  /** Stable conversation id for context cache (required for business tools). */
+  conversationId?: string;
   /** Optional metadata for prompt / tool context */
   metadata?: Record<string, string | undefined>;
 }
