@@ -1,7 +1,12 @@
 import { createOpenAIClient } from '@/lib/ai/client';
+import {
+  decideBusinessTool,
+  type BusinessToolDecision,
+} from '@/lib/ai/decision-engine';
 import { AiError, FRIENDLY_AI_FALLBACK } from '@/lib/ai/errors';
 import { buildPrompt } from '@/lib/ai/prompt';
 import type {
+  AssistantToolCall,
   ChatMessage,
   ConversationInput,
   ConversationResult,
@@ -21,6 +26,12 @@ export const MAX_AI_RESPONSE_CHARS = 3500;
 /** Max tool → model rounds per conversation turn (prevents loops). */
 export const MAX_TOOL_ROUNDS = 3;
 
+export const TOOLS_DISABLED_FOR_BUSINESS_MESSAGE =
+  'Business tools are disabled for this request, so I cannot look up your work data.';
+
+export const REQUIRED_TOOL_MISSING_MESSAGE =
+  'This assistant is missing a required Business Tool and cannot answer that request.';
+
 export type RunConversationDeps = {
   generate?: GenerateResponseFn;
   /** Injected registry (defaults to demonstration tools). */
@@ -29,6 +40,10 @@ export type RunConversationDeps = {
   toolRouter?: ToolRouter;
   /** Disable tool calling for this run (tests / text-only). */
   enableTools?: boolean;
+  /** Injected decision engine (defaults to decideBusinessTool). */
+  decideTool?: typeof decideBusinessTool;
+  /** Fixed "now" for Bangkok date resolution in the decision engine. */
+  decisionNow?: Date;
 };
 
 function validateResponseText(text: string): string {
@@ -45,9 +60,61 @@ function validateResponseText(text: string): string {
   return trimmed;
 }
 
+function decisionToToolCall(
+  decision: Extract<BusinessToolDecision, { action: 'call_tool' }>
+): AssistantToolCall {
+  return {
+    id: `decision_${decision.toolName}`,
+    type: 'function',
+    function: {
+      name: decision.toolName,
+      arguments: JSON.stringify(decision.arguments),
+    },
+  };
+}
+
 /**
- * Conversation Service — prompt → OpenAI → optional tools → validated plain text.
- * No Slack I/O. No business APIs. Tool framework is vendor-agnostic.
+ * Round-0 enforcement: the required Business Tool must run with Decision Engine args.
+ * Unrelated tools (ping, wrong business tool, etc.) never satisfy the gate.
+ */
+export function enforceRequiredBusinessTool(
+  toolCalls: AssistantToolCall[],
+  decision: Extract<BusinessToolDecision, { action: 'call_tool' }>
+): { toolCalls: AssistantToolCall[]; enforced: boolean } {
+  const required = toolCalls.filter(
+    (c) => c.function.name === decision.toolName
+  );
+  if (required.length === 1) {
+    // Keep a single call; replace arguments with Decision Engine values.
+    return {
+      toolCalls: [
+        {
+          ...required[0]!,
+          function: {
+            name: decision.toolName,
+            arguments: JSON.stringify(decision.arguments),
+          },
+        },
+      ],
+      enforced: false,
+    };
+  }
+  if (required.length > 1) {
+    return {
+      toolCalls: [decisionToToolCall(decision)],
+      enforced: true,
+    };
+  }
+  // Missing required tool (zero calls, or only unrelated tools).
+  return {
+    toolCalls: [decisionToToolCall(decision)],
+    enforced: true,
+  };
+}
+
+/**
+ * Conversation Service — prompt → decision engine → OpenAI → tools → plain text.
+ * Recognized business intents require the exact Decision Engine tool before answering.
  */
 export async function runConversation(
   input: ConversationInput,
@@ -93,10 +160,92 @@ export async function runConversation(
   const registry = deps?.toolRegistry ?? createDefaultToolRegistry();
   const router = deps?.toolRouter ?? createToolRouter(registry);
   const llmTools = enableTools ? registry.toLlmToolDefinitions() : [];
+  const decide = deps?.decideTool ?? decideBusinessTool;
+  const decision = decide(userMessage, { now: deps?.decisionNow });
+
+  if (decision.action === 'clarify') {
+    console.log(
+      JSON.stringify({
+        scope: 'ai',
+        level: 'info',
+        message: 'conversation completed',
+        requestId: input.requestId,
+        eventId: input.eventId,
+        usedFallback: false,
+        reason: decision.reason,
+        toolRounds: 0,
+        durationMs: Date.now() - started,
+        ts: new Date().toISOString(),
+      })
+    );
+    return {
+      text: decision.message,
+      model: 'decision-engine',
+      usedFallback: false,
+      toolRounds: 0,
+    };
+  }
+
+  if (decision.action === 'call_tool' && !enableTools) {
+    console.log(
+      JSON.stringify({
+        scope: 'ai',
+        level: 'info',
+        message: 'conversation completed',
+        requestId: input.requestId,
+        eventId: input.eventId,
+        usedFallback: false,
+        reason: 'tools_disabled_for_business_intent',
+        toolRounds: 0,
+        durationMs: Date.now() - started,
+        ts: new Date().toISOString(),
+      })
+    );
+    return {
+      text: TOOLS_DISABLED_FOR_BUSINESS_MESSAGE,
+      model: 'decision-engine',
+      usedFallback: false,
+      toolRounds: 0,
+    };
+  }
+
+  if (decision.action === 'call_tool' && !registry.exists(decision.toolName)) {
+    console.log(
+      JSON.stringify({
+        scope: 'ai',
+        level: 'info',
+        message: 'conversation completed',
+        requestId: input.requestId,
+        eventId: input.eventId,
+        usedFallback: false,
+        reason: 'required_tool_missing',
+        toolName: decision.toolName,
+        toolRounds: 0,
+        durationMs: Date.now() - started,
+        ts: new Date().toISOString(),
+      })
+    );
+    return {
+      text: REQUIRED_TOOL_MISSING_MESSAGE,
+      model: 'decision-engine',
+      usedFallback: false,
+      toolRounds: 0,
+    };
+  }
+
+  const decisionHint =
+    decision.action === 'call_tool'
+      ? [
+          `Decision engine requires tool: ${decision.toolName}(${JSON.stringify(decision.arguments)}).`,
+          'You must call this exact Business Tool before answering.',
+          'Do not answer from model knowledge. Do not substitute ping/current_date/current_time or another Business Tool.',
+        ].join(' ')
+      : undefined;
 
   const messages: ChatMessage[] = buildPrompt({
     userMessage,
     metadata: input.metadata,
+    extraSystemSegments: decisionHint ? [decisionHint] : undefined,
   });
 
   const generate =
@@ -129,6 +278,7 @@ export async function runConversation(
           messageCount: messages.length,
           toolRound: round,
           toolsEnabled: llmTools.length > 0,
+          decision: decision.action,
           ts: new Date().toISOString(),
         })
       );
@@ -143,9 +293,29 @@ export async function runConversation(
       lastModel = result.model;
       lastUsage = result.usage;
 
-      const toolCalls = result.toolCalls?.filter((c) => c.function?.name) ?? [];
+      let toolCalls = result.toolCalls?.filter((c) => c.function?.name) ?? [];
+
+      if (round === 0 && decision.action === 'call_tool') {
+        const enforced = enforceRequiredBusinessTool(toolCalls, decision);
+        if (enforced.enforced) {
+          console.log(
+            JSON.stringify({
+              scope: 'ai',
+              level: 'info',
+              message: 'enforcing required business tool from decision engine',
+              requestId: input.requestId,
+              toolName: decision.toolName,
+              reason: decision.reason,
+              modelToolNames: toolCalls.map((c) => c.function.name),
+              ts: new Date().toISOString(),
+            })
+          );
+        }
+        toolCalls = enforced.toolCalls;
+      }
 
       if (toolCalls.length === 0) {
+        // Business intent cannot reach here without a required tool on round 0.
         const text = validateResponseText(result.text);
 
         console.log(
@@ -223,7 +393,6 @@ export async function runConversation(
       }
     }
 
-    // Unreachable: loop always returns or throws
     return {
       text: FRIENDLY_AI_FALLBACK,
       model: lastModel,
@@ -241,7 +410,6 @@ export async function runConversation(
         requestId: input.requestId,
         eventId: input.eventId,
         errorCode: code,
-        // Never include API key or raw upstream authorization
         error: error instanceof Error ? error.message : 'unknown',
         durationMs: Date.now() - started,
         ts: new Date().toISOString(),

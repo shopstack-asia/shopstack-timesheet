@@ -12,7 +12,7 @@ export * from '@/lib/tools/router';
 export * from '@/lib/tools/builtins';
 export * from '@/lib/tools/business';
 
-/** Default registry: demo tools + Phase 9.2 read-only business tools. */
+/** Default registry: demo tools + read-only business tools. */
 export function createDefaultToolRegistry(): ToolRegistry {
   return createToolRegistry([...BUILTIN_TOOLS, ...BUSINESS_READ_TOOLS]);
 }

@@ -1,53 +1,18 @@
-# Get Today Timesheet
+# Get Today Timesheet (deprecated)
 
-## Tool
+## Status
 
-`get_today_timesheet`
+**Deprecated.** Removed from the AI-visible tool registry.
 
-## Purpose
+Use [`get_timesheet`](./Get%20Timesheet.md) with Bangkok “today” resolved to `YYYY-MM-DD`.
 
-Answer “What did I log today?” with entries, totals, remaining hours, and submitted status.
+## Compatibility wrapper
 
-## Flow
+`createGetTodayTimesheetTool()` remains exportable for legacy callers. It delegates to the shared daily timesheet load:
 
-```mermaid
-sequenceDiagram
-  participant U as User
-  participant AI as OpenAI
-  participant T as get_today_timesheet
-  participant C as Business API Client
-  participant API as Timesheet API
-
-  U->>AI: What did I log today?
-  AI->>T: execute()
-  T->>C: GET /v1/timesheets/today
-  C->>API: Bearer request
-  API-->>C: TodayTimesheet
-  T-->>AI: entries + totals
-  AI-->>U: summary
+```http
+GET /v1/timesheets?date=<Asia/Bangkok today>
+X-Employee-Id: <Conversation Context>
 ```
 
-## Return fields
-
-| Field | Meaning |
-|-------|---------|
-| `date` | ISO date |
-| `entries` | List of day entries |
-| `totalHours` | Sum of entry hours |
-| `remainingHours` | `expectedHours - totalHours` (or upstream value) |
-| `expectedHours` | Default 8 if omitted |
-| `submitted` | Day submission flag |
-
-## API
-
-| Method | Path |
-|--------|------|
-| GET | `/v1/timesheets/today` |
-
-## Error cases
-
-Auth / timeout / upstream / malformed → typed `errorCode` on ToolResult (`authentication`, `timeout`, `unexpected`, `validation_error`).
-
-## Source Code References
-
-- `src/lib/tools/business/timesheet/get-today-timesheet.ts`
+No duplicated parsing or API mapping beyond the thin wrapper.

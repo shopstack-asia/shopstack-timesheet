@@ -1,30 +1,25 @@
 import type { Tool, ToolContext } from '@/lib/tools/types';
 import {
-  assertNotAborted,
-  rejectAiEmployeeId,
-  requireConversationIds,
-  resolveBusinessClient,
-  resolveContextManager,
-  requestMeta,
   toolFailureFromError,
   toolSuccess,
   type BusinessToolDeps,
 } from '@/lib/tools/business/helpers';
-import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
-import { parseWeekTimesheet } from '@/lib/tools/business/timesheet/parse-week';
+import { bangkokCurrentWeek } from '@/lib/tools/business/timesheet/bangkok-dates';
+import { loadTimesheetRange } from '@/lib/tools/business/timesheet/get-timesheet-range';
 
 export { parseWeekTimesheet } from '@/lib/tools/business/timesheet/parse-week';
 
+/**
+ * @deprecated Prefer get_timesheet_range with explicit ISO start/end.
+ * Compatibility wrapper: loads Bangkok current week (Mon–today) via shared range implementation.
+ * Not registered in the AI-visible tool registry.
+ */
 export function createGetWeekTimesheetTool(deps?: BusinessToolDeps): Tool {
   return {
     name: 'get_week_timesheet',
-    description: [
-      'Return the current week timesheet summary for the resolved conversation employee.',
-      'Uses Conversation Context for identity — never pass employeeId.',
-      'Example: User says "How many hours this week?" → call get_week_timesheet.',
-      'Read-only — does not create or modify entries.',
-    ].join(' '),
-    version: '1.1.0',
+    description:
+      '[Deprecated] Use get_timesheet_range with this week resolved to YYYY-MM-DD dates in Asia/Bangkok.',
+    version: '2.0.0-deprecated',
     idempotent: true,
     inputSchema: {
       type: 'object',
@@ -34,32 +29,25 @@ export function createGetWeekTimesheetTool(deps?: BusinessToolDeps): Tool {
     async execute(input, context: ToolContext) {
       const started = Date.now();
       try {
-        assertNotAborted(context.signal);
-        rejectAiEmployeeId(input);
-
-        const { conversationId, slackUserId } =
-          requireConversationIds(context);
-        const manager = resolveContextManager(deps);
-        const conv = await manager.getConversationContext({
-          conversationId,
-          slackUserId,
-          requestId: context.requestId,
-          signal: context.signal,
-          ensureWorkContext: false,
-        });
-
-        const client = resolveBusinessClient(deps);
-        const response = await client.get<unknown>(
-          TIMESHEET_API_PATHS.weekTimesheet,
-          {
-            ...requestMeta(context, conv.employeeId),
-            idempotent: true,
-          }
+        void input;
+        const { startDate, endDate } = bangkokCurrentWeek();
+        const range = await loadTimesheetRange(
+          deps,
+          startDate,
+          endDate,
+          context
         );
-        const week = parseWeekTimesheet(response.data);
         return toolSuccess('get_week_timesheet', started, {
-          ...week,
-          employeeId: conv.employeeId,
+          weekStart: range.startDate,
+          weekEnd: range.endDate,
+          days: range.days.map((d) => ({
+            date: d.date,
+            totalHours: d.totalHours,
+            submitted: d.submitted,
+          })),
+          weeklyTotal: range.totalHours,
+          submitted: range.unsubmittedDays === 0 && range.days.length > 0,
+          employeeId: range.employeeId,
         });
       } catch (error) {
         return toolFailureFromError('get_week_timesheet', started, error);

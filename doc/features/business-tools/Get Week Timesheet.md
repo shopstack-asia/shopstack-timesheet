@@ -1,53 +1,16 @@
-# Get Week Timesheet
+# Get Week Timesheet (deprecated)
 
-## Tool
+## Status
 
-`get_week_timesheet`
+**Deprecated.** Removed from the AI-visible tool registry.
 
-## Purpose
+Use [`get_timesheet_range`](./Get%20Timesheet%20Range.md) with Bangkok week bounds resolved to `YYYY-MM-DD`.
 
-Return the current week summary: week range, daily totals, weekly total, submission status.
+## Compatibility wrapper
 
-## Flow
+`createGetWeekTimesheetTool()` remains exportable for legacy callers. It delegates to the shared range load for Monday → today (Asia/Bangkok) and maps the result to the legacy week shape (`weekStart`, `days`, `weeklyTotal`, …).
 
-```mermaid
-sequenceDiagram
-  participant U as User
-  participant AI as OpenAI
-  participant T as get_week_timesheet
-  participant C as Business API Client
-  participant API as Timesheet API
-
-  U->>AI: How many hours this week?
-  AI->>T: execute()
-  T->>C: GET /v1/timesheets/week
-  C->>API: Bearer request
-  API-->>C: WeekTimesheet
-  T-->>AI: weekly summary
-  AI-->>U: reply
+```http
+GET /v1/timesheets?startDate=<Mon>&endDate=<today>
+X-Employee-Id: <Conversation Context>
 ```
-
-## Return fields
-
-| Field | Meaning |
-|-------|---------|
-| `weekStart` | Week start date |
-| `weekEnd` | Optional week end |
-| `days` | `{ date, totalHours, submitted? }[]` |
-| `weeklyTotal` | Sum of daily totals (or upstream) |
-| `submitted` | Week-level submitted flag |
-| `submissionStatus` | Optional status string |
-
-## API
-
-| Method | Path |
-|--------|------|
-| GET | `/v1/timesheets/week` |
-
-## Error cases
-
-Auth / timeout / upstream / malformed → typed ToolResult errors.
-
-## Source Code References
-
-- `src/lib/tools/business/timesheet/get-week-timesheet.ts`

@@ -1,5 +1,5 @@
 /**
- * Timesheet API domain types for read-only business tools (Phase 9.2).
+ * Timesheet API domain types for read-only business tools.
  */
 
 export type WorkRole = {
@@ -39,22 +39,39 @@ export type TimesheetEntry = {
   description?: string;
 };
 
-export type TodayTimesheet = {
+/** One calendar day of timesheet data. */
+export type DailyTimesheet = {
   date: string;
   entries: TimesheetEntry[];
   totalHours: number;
-  remainingHours: number;
-  /** Expected working hours for the day (default 8). */
   expectedHours: number;
+  remainingHours: number;
   submitted: boolean;
 };
 
+/** @deprecated Use DailyTimesheet */
+export type TodayTimesheet = DailyTimesheet;
+
+/** Inclusive date-range summary. */
+export type TimesheetRange = {
+  startDate: string;
+  endDate: string;
+  days: DailyTimesheet[];
+  totalHours: number;
+  expectedHours: number;
+  remainingHours: number;
+  submittedDays: number;
+  unsubmittedDays: number;
+};
+
+/** @deprecated Prefer TimesheetRange for multi-day reads */
 export type WeekDaySummary = {
   date: string;
   totalHours: number;
   submitted?: boolean;
 };
 
+/** @deprecated Prefer TimesheetRange */
 export type WeekTimesheet = {
   weekStart: string;
   weekEnd?: string;
@@ -64,11 +81,12 @@ export type WeekTimesheet = {
   submissionStatus?: string;
 };
 
-/** Timesheet API REST paths used by Phase 9.2 read-only tools. */
+/** Timesheet API REST paths used by read-only tools. */
 export const TIMESHEET_API_PATHS = {
   workContext: '/v1/work-context',
-  todayTimesheet: '/v1/timesheets/today',
-  weekTimesheet: '/v1/timesheets/week',
+  timesheets: '/v1/timesheets',
 } as const;
 
 export const DEFAULT_EXPECTED_DAY_HOURS = 8;
+export const MAX_TIMESHEET_RANGE_DAYS = 31;
+export const TIMESHEET_TIMEZONE = 'Asia/Bangkok';

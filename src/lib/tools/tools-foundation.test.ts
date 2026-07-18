@@ -50,8 +50,8 @@ describe('ToolRegistry', () => {
     expect(names).toEqual([
       'current_date',
       'current_time',
-      'get_today_timesheet',
-      'get_week_timesheet',
+      'get_timesheet',
+      'get_timesheet_range',
       'get_work_context',
       'ping',
     ]);

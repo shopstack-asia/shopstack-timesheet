@@ -1,9 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  AuthenticationError,
-  TimeoutError,
-  UnexpectedApiError,
-} from '@/lib/business/errors';
 import type { BusinessApiClient } from '@/lib/business/client';
 import { createContextManager } from '@/lib/conversation/context/context-manager';
 import { createContextStore } from '@/lib/conversation/context/context-store';
@@ -14,6 +9,7 @@ import {
   createGetWeekTimesheetTool,
   parseWeekTimesheet,
 } from '@/lib/tools/business/timesheet/get-week-timesheet';
+import { bangkokCurrentWeek } from '@/lib/tools/business/timesheet/bangkok-dates';
 import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
 
 function mockClient(
@@ -55,18 +51,6 @@ function mockClient(
   };
 }
 
-const validWeek = {
-  weekStart: '2026-07-13',
-  weekEnd: '2026-07-19',
-  days: [
-    { date: '2026-07-13', totalHours: 8, submitted: true },
-    { date: '2026-07-14', totalHours: 4, submitted: false },
-  ],
-  weeklyTotal: 12,
-  submitted: false,
-  submissionStatus: 'in_progress',
-};
-
 function makeDeps(client: BusinessApiClient) {
   return {
     client,
@@ -88,23 +72,15 @@ function makeDeps(client: BusinessApiClient) {
   };
 }
 
-function toolCtx() {
-  return createToolContext({
-    userId: 'U1',
-    conversationId: 'conv-week',
-  });
-}
-
-describe('parseWeekTimesheet', () => {
-  it('parses and derives weekly total', () => {
+describe('parseWeekTimesheet (compat)', () => {
+  it('still parses legacy week shape', () => {
     const week = parseWeekTimesheet({
       weekStart: '2026-07-13',
-      days: [
-        { date: '2026-07-13', totalHours: 8 },
-        { date: '2026-07-14', totalHours: 2 },
-      ],
+      days: [{ date: '2026-07-13', totalHours: 8 }],
+      weeklyTotal: 8,
+      submitted: true,
     });
-    expect(week.weeklyTotal).toBe(10);
+    expect(week.weeklyTotal).toBe(8);
   });
 
   it('rejects malformed', () => {
@@ -112,89 +88,58 @@ describe('parseWeekTimesheet', () => {
   });
 });
 
-describe('get_week_timesheet tool', () => {
+describe('get_week_timesheet deprecated wrapper', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  it('success', async () => {
+  it('calls shared /v1/timesheets range for Bangkok current week', async () => {
+    const { startDate, endDate } = bangkokCurrentWeek();
     const tool = createGetWeekTimesheetTool(
       makeDeps(
-        mockClient(async (path) => {
-          expect(path).toBe(TIMESHEET_API_PATHS.weekTimesheet);
+        mockClient(async (path, options) => {
+          expect(path).toBe(
+            `${TIMESHEET_API_PATHS.timesheets}?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`
+          );
+          expect(options?.headers?.['X-Employee-Id']).toBe('S1');
           return {
             success: true,
-            data: validWeek,
+            data: {
+              days: [
+                {
+                  date: startDate,
+                  entries: [{ hours: 8 }],
+                  totalHours: 8,
+                  expectedHours: 8,
+                  remainingHours: 0,
+                  submitted: true,
+                },
+              ],
+            },
             status: 200,
             requestId: 'r1',
           };
         })
       )
     );
-    const result = await tool.execute({}, toolCtx());
+    const result = await tool.execute(
+      {},
+      createToolContext({ userId: 'U1', conversationId: 'conv-week' })
+    );
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.result).toMatchObject({
-        weekStart: '2026-07-13',
-        employeeId: 'S1',
+        weekStart: startDate,
+        weekEnd: endDate,
+        weeklyTotal: 8,
       });
     }
   });
 
-  it('authentication failure', async () => {
-    const tool = createGetWeekTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new AuthenticationError();
-        })
-      )
+  it('not registered in AI default registry', () => {
+    expect(createDefaultToolRegistry().exists('get_week_timesheet')).toBe(
+      false
     );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('API failure', async () => {
-    const tool = createGetWeekTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new UnexpectedApiError('fail');
-        })
-      )
-    );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('timeout', async () => {
-    const tool = createGetWeekTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new TimeoutError();
-        })
-      )
-    );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('malformed response', async () => {
-    const tool = createGetWeekTimesheetTool(
-      makeDeps(
-        mockClient(async () => ({
-          success: true,
-          data: { days: [] },
-          status: 200,
-          requestId: 'r1',
-        }))
-      )
-    );
-    const result = await tool.execute({}, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('registered with OpenAI schema', () => {
-    const registry = createDefaultToolRegistry();
-    expect(registry.exists('get_week_timesheet')).toBe(true);
   });
 });
