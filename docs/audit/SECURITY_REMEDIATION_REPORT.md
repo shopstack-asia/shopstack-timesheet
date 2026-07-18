@@ -136,12 +136,57 @@ New coverage: `src/lib/security-remediation.test.ts` (cron fail-closed, sanitize
 
 | Issue | Status |
 |-------|--------|
-| Atomic rate limiting (INCR + EXPIRE on first) | Fixed |
+| Atomic rate limiting (INCR + EXPIRE on first) | Fixed (superseded by Sprint 1.2 Lua) |
 | Submit policy fail-closed on leave/holiday load | Fixed (`SubmitPolicyDependencyError` → 503) |
 | Slack tools no longer hardcode all acks true | Fixed (pending `presentedPolicyCodes` + `policyAcks`) |
 | Web explicit policy confirmation via `policyCode` | Fixed |
 
 See test files: `rate-limit.test.ts`, `submit-policy.test.ts`, `submit-week-days.test.ts`, `pending-acks.test.ts`.
+
+---
+
+## Sprint 1.2 — Fully atomic Redis rate limit (Lua EVAL)
+
+### Root cause
+
+The Sprint 1.1 limiter used two Redis commands:
+
+```text
+INCR key
+if counter == 1:
+  EXPIRE key windowSeconds
+```
+
+That closed the concurrent race (many clients could no longer bypass the limit by reading a shared GET), but **INCR and EXPIRE were still separate round-trips**.
+
+### Why that was not fully atomic
+
+If Redis or the Node process crashed **after INCR succeeded and before EXPIRE ran**, the counter key could remain **without a TTL**. The key would never expire, so subsequent increments would permanently accumulate and **permanently rate-limit** that IP/user bucket.
+
+### New implementation
+
+`src/lib/rate-limit.ts` now runs a single Redis **Lua EVAL** (`RATE_LIMIT_INCR_EXPIRE_SCRIPT`) via `RedisAdapter.evalScript`:
+
+1. `INCR` the counter  
+2. If `current == 1` **or** `PTTL < 0` (missing TTL / orphan from the old path), `EXPIRE` the key  
+3. Return the counter  
+
+INCR and EXPIRE execute inside **one** Redis script evaluation — they cannot be separated by a crash between client commands. Orphan keys without TTL are healed on the next bump.
+
+Public API (`enforceRateLimit`, `bumpCounterAtomic`, options) is unchanged.
+
+### Test evidence
+
+`src/lib/rate-limit.test.ts` covers:
+
+- First request allowed + TTL applied  
+- Limit reached → reject  
+- Concurrent requests (20 parallel) stay within limit  
+- TTL applied once while key already has expiry  
+- Redis restart / missing-TTL simulation (orphan counter healed)  
+- Lua EVAL failure → fail-open (request allowed, error logged)  
+
+Validation: `npm test`, `npx tsc --noEmit`, `npm run lint`, `npm run build`.
 
 ## Final production readiness assessment
 
@@ -150,7 +195,8 @@ See test files: `rate-limit.test.ts`, `submit-policy.test.ts`, `submit-week-days
 ```
 
 **Code-level Critical and High findings from Sprint 1 are remediated.**
-**PR #3 blocking review findings (atomic rate limit, fail-closed policy deps, Slack/web ack binding) are remediated.**
+**PR #3 blocking review findings (fail-closed policy deps, Slack/web ack binding) are remediated.**
+**Rate limiter is fully atomic via Lua EVAL (Sprint 1.2) — INCR and EXPIRE cannot leave permanent counters.**
 
 Before declaring full production readiness, operators must verify:
 

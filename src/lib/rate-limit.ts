@@ -17,11 +17,25 @@ export type RateLimitOptions = {
   userKey?: string | null;
 };
 
-type CounterRedis = Pick<RedisAdapter, 'incr' | 'expire'>;
+type CounterRedis = Pick<RedisAdapter, 'evalScript'>;
+
+/**
+ * Atomic INCR + EXPIRE in one Redis EVAL.
+ * Also heals orphan keys that have a counter but no TTL (e.g. crash between
+ * legacy separate INCR/EXPIRE calls).
+ */
+export const RATE_LIMIT_INCR_EXPIRE_SCRIPT = `
+local current = redis.call("INCR", KEYS[1])
+local ttl = redis.call("PTTL", KEYS[1])
+if current == 1 or ttl < 0 then
+  redis.call("EXPIRE", KEYS[1], tonumber(ARGV[1]))
+end
+return current
+`.trim();
 
 /**
  * Redis-backed fixed-window rate limit (IP + optional user).
- * Uses atomic INCR; sets EXPIRE only when the counter is first created.
+ * Uses a single Lua EVAL so INCR and EXPIRE cannot be separated.
  * Fail-open on Redis errors so availability is preserved; logs the failure.
  */
 export async function enforceRateLimit(
@@ -75,7 +89,7 @@ export function clientIp(request: NextRequest): string {
 }
 
 /**
- * Atomic counter: INCR then EXPIRE only when count === 1.
+ * Atomic counter via Lua: INCR then EXPIRE when count === 1 (or TTL missing).
  * Returns false when the new count exceeds `limit`.
  */
 export async function bumpCounterAtomic(
@@ -84,9 +98,10 @@ export async function bumpCounterAtomic(
   limit: number,
   windowSeconds: number
 ): Promise<boolean> {
-  const n = await redis.incr(key);
-  if (n === 1) {
-    await redis.expire(key, windowSeconds);
-  }
+  const n = await redis.evalScript<number>(
+    RATE_LIMIT_INCR_EXPIRE_SCRIPT,
+    [key],
+    [windowSeconds]
+  );
   return n <= limit;
 }

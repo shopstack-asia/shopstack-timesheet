@@ -1,30 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
-import { bumpCounterAtomic, enforceRateLimit } from '@/lib/rate-limit';
+import {
+  bumpCounterAtomic,
+  enforceRateLimit,
+  RATE_LIMIT_INCR_EXPIRE_SCRIPT,
+} from '@/lib/rate-limit';
 import { NextRequest } from 'next/server';
 
-function memoryRedis() {
+/**
+ * In-memory Redis stand-in that executes the rate-limit Lua semantics in one
+ * synchronous step (mirrors atomic EVAL: INCR + conditional EXPIRE).
+ */
+function memoryRedis(options?: { evalFails?: boolean }) {
   const store = new Map<string, { value: number; expiresAt?: number }>();
+  let expireCalls = 0;
+
   return {
-    async incr(key: string) {
+    store,
+    getExpireCalls: () => expireCalls,
+    async evalScript<T = unknown>(
+      script: string,
+      keys: string[],
+      args: (string | number)[]
+    ): Promise<T> {
+      if (options?.evalFails) {
+        throw new Error('Lua EVAL failed');
+      }
+      expect(script).toBe(RATE_LIMIT_INCR_EXPIRE_SCRIPT);
+      const key = keys[0]!;
+      const windowSeconds = Number(args[0]);
       const cur = store.get(key);
       const next = (cur?.value || 0) + 1;
-      store.set(key, { value: next, expiresAt: cur?.expiresAt });
-      return next;
+      const ttlMissing = cur?.expiresAt == null;
+      const entry: { value: number; expiresAt?: number } = {
+        value: next,
+        expiresAt: cur?.expiresAt,
+      };
+      // Same as Lua: EXPIRE when first create (count==1) or PTTL < 0 (no TTL)
+      if (next === 1 || ttlMissing) {
+        entry.expiresAt = Date.now() + windowSeconds * 1000;
+        expireCalls += 1;
+      }
+      store.set(key, entry);
+      return next as T;
     },
-    async expire(key: string, seconds: number) {
-      const cur = store.get(key) || { value: 0 };
-      store.set(key, { ...cur, expiresAt: Date.now() + seconds * 1000 });
-    },
-    store,
   };
 }
 
-describe('atomic rate limit', () => {
-  it('allows first request', async () => {
+describe('atomic rate limit (Lua EVAL)', () => {
+  it('allows first request and applies TTL', async () => {
     const redis = memoryRedis();
     expect(await bumpCounterAtomic(redis, 'k', 3, 60)).toBe(true);
     expect(redis.store.get('k')?.value).toBe(1);
     expect(redis.store.get('k')?.expiresAt).toBeTypeOf('number');
+    expect(redis.getExpireCalls()).toBe(1);
   });
 
   it('allows request at limit', async () => {
@@ -33,7 +61,7 @@ describe('atomic rate limit', () => {
     expect(await bumpCounterAtomic(redis, 'k', 2, 60)).toBe(true);
   });
 
-  it('rejects above limit', async () => {
+  it('rejects when limit reached', async () => {
     const redis = memoryRedis();
     await bumpCounterAtomic(redis, 'k', 2, 60);
     await bumpCounterAtomic(redis, 'k', 2, 60);
@@ -47,15 +75,44 @@ describe('atomic rate limit', () => {
     );
     expect(results.filter(Boolean)).toHaveLength(5);
     expect(redis.store.get('concurrent')?.value).toBe(20);
+    expect(redis.store.get('concurrent')?.expiresAt).toBeTypeOf('number');
   });
 
-  it('sets expiration only on first incr', async () => {
+  it('applies TTL only once while key already has expiry', async () => {
     const redis = memoryRedis();
-    const expire = vi.spyOn(redis, 'expire');
     await bumpCounterAtomic(redis, 'ttl', 10, 30);
+    const firstExpiry = redis.store.get('ttl')?.expiresAt;
     await bumpCounterAtomic(redis, 'ttl', 10, 30);
-    expect(expire).toHaveBeenCalledTimes(1);
-    expect(expire).toHaveBeenCalledWith('ttl', 30);
+    expect(redis.getExpireCalls()).toBe(1);
+    expect(redis.store.get('ttl')?.expiresAt).toBe(firstExpiry);
+  });
+
+  it('heals missing TTL after simulated Redis restart / crash between INCR and EXPIRE', async () => {
+    const redis = memoryRedis();
+    // Simulate legacy non-atomic path: INCR succeeded, EXPIRE never ran
+    redis.store.set('orphan', { value: 4 });
+    expect(redis.store.get('orphan')?.expiresAt).toBeUndefined();
+
+    expect(await bumpCounterAtomic(redis, 'orphan', 10, 45)).toBe(true);
+    expect(redis.store.get('orphan')?.value).toBe(5);
+    expect(redis.store.get('orphan')?.expiresAt).toBeTypeOf('number');
+    expect(redis.getExpireCalls()).toBe(1);
+  });
+
+  it('fail-opens when Lua script evaluation fails', async () => {
+    const redis = memoryRedis({ evalFails: true });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const req = new NextRequest('http://localhost/api/x', {
+      headers: { 'x-forwarded-for': '1.2.3.4' },
+    });
+    const result = await enforceRateLimit(
+      req,
+      { bucket: 't', limit: 1, windowSeconds: 60 },
+      { redis }
+    );
+    expect(result.ok).toBe(true);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 
   it('separate IP and user buckets', async () => {
@@ -79,9 +136,7 @@ describe('atomic rate limit', () => {
       expect(b.response.status).toBe(429);
       expect(b.response.headers.get('Retry-After')).toBe('60');
     }
-    // Different user still hits same IP bucket first — IP already at 2? 
-    // After 2 calls IP count is 2 with limit 1, so any further IP fail.
-    // Use fresh redis for user isolation demo:
+
     const redis2 = memoryRedis();
     const r1 = await enforceRateLimit(
       new NextRequest('http://localhost/api/x', {

@@ -14,6 +14,12 @@ export interface RedisAdapter {
   incr(key: string): Promise<number>;
   /** Set TTL in seconds (does not change value) */
   expire(key: string, seconds: number): Promise<void>;
+  /** Run a Lua script atomically (EVAL) */
+  evalScript<T = unknown>(
+    script: string,
+    keys: string[],
+    args: (string | number)[]
+  ): Promise<T>;
 }
 
 // Upstash Redis adapter
@@ -44,6 +50,14 @@ class UpstashRedisAdapter implements RedisAdapter {
 
   async expire(key: string, seconds: number): Promise<void> {
     await this.client.expire(key, seconds);
+  }
+
+  async evalScript<T = unknown>(
+    script: string,
+    keys: string[],
+    args: (string | number)[]
+  ): Promise<T> {
+    return this.client.eval<unknown[], T>(script, keys, args);
   }
 }
 
@@ -83,6 +97,20 @@ class LocalRedisAdapter implements RedisAdapter {
 
   async expire(key: string, seconds: number): Promise<void> {
     await this.client.expire(key, seconds);
+  }
+
+  async evalScript<T = unknown>(
+    script: string,
+    keys: string[],
+    args: (string | number)[]
+  ): Promise<T> {
+    const result = await this.client.eval(
+      script,
+      keys.length,
+      ...keys,
+      ...args.map(String)
+    );
+    return result as T;
   }
 }
 
