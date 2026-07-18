@@ -2,7 +2,7 @@
 
 ### Overview
 
-Phase 7 adds an OpenAI conversation layer between Slack handlers and Slack responses. Business APIs are not called.
+Conversation layer between Slack handlers and Slack responses. Supports plain-text replies and a vendor-agnostic **tool loop** (demonstration tools only). Business APIs are not called.
 
 ### Diagram
 
@@ -14,6 +14,8 @@ flowchart TB
   Conv --> Prompt[prompt.ts]
   Conv --> Client[OpenAI client]
   Client --> API[Chat Completions]
+  Conv --> Tools[Tool Router / Registry]
+  Tools --> Conv
   Conv --> CH
   CH --> Resp[responses.ts]
   Resp --> Slack
@@ -23,10 +25,11 @@ flowchart TB
 
 | Path | Role |
 |------|------|
-| `src/lib/ai/client.ts` | Config, singleton client, retries, timeouts |
-| `src/lib/ai/conversation.ts` | Orchestration + validation + fallback |
+| `src/lib/ai/client.ts` | Config, singleton client, tools adapter, retries, timeouts |
+| `src/lib/ai/conversation.ts` | Orchestration + tool loop + validation + fallback |
 | `src/lib/ai/prompt.ts` | System/user message builder |
 | `src/lib/ai/errors.ts` | Typed errors + friendly fallback text |
+| `src/lib/tools/*` | Tool foundation (see tools feature area) |
 | `src/lib/slack/conversation/conversation-handler.ts` | Slack adapter |
 
 ### Configuration
@@ -39,9 +42,4 @@ flowchart TB
 | `OPENAI_TEMPERATURE` | `0.7` |
 | `OPENAI_TIMEOUT_MS` | `30000` |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
-
-Aliases: `AI_API_KEY`, `AI_MODEL`, `AI_BASE_URL` still accepted.
-
-### Future (Phase 8+)
-
-Append tools / policies via `extraSystemSegments` and later tool-calling without rewriting Slack handlers.
+| `AI_API_KEY` / `AI_MODEL` / `AI_BASE_URL` | aliases |

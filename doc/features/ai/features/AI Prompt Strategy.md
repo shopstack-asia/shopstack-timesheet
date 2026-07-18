@@ -2,16 +2,14 @@
 
 ### Foundation system prompt
 
-The builder always starts with:
+The builder always starts with a Tool Execution Foundation prompt that:
 
-```text
-You are AI Timesheet.
-You are a helpful workplace assistant.
-Current phase: Conversation Foundation.
-Do not invent information.
-Do not claim to perform actions.
-If asked to perform operations, explain that operational capabilities will be available in future phases.
-```
+- Identifies the assistant as AI Timesheet  
+- Allows demonstration tools: `ping`, `current_time`, `current_date`  
+- Forbids inventing tool results  
+- Defers business operations to future phases  
+
+Canonical text lives in `src/lib/ai/prompt.ts` (`AI_TIMESHEET_SYSTEM_PROMPT`).
 
 ### Builder API
 
@@ -19,15 +17,16 @@ If asked to perform operations, explain that operational capabilities will be av
 buildPrompt({ userMessage, metadata?, extraSystemSegments? })
 ```
 
-- `metadata` is accepted for future injection (ignored for content in Phase 7)  
-- `extraSystemSegments` appends system text (policy, tools, memories later)
+- `metadata` is accepted for future injection (not injected into prompts yet)  
+- `extraSystemSegments` appends system text (policy, memories later)  
+- Tool **schemas** are passed separately via the OpenAI client `tools` array (from Tool Registry)
 
 ### Extensibility
 
 Later phases can:
 
 1. Pass company policy segments  
-2. Add tool schemas (separate from this builder)  
+2. Register business tools in the Tool Registry (Conversation Service unchanged)  
 3. Inject memory summaries as extra system segments  
 
-Conversation Service stays unchanged.
+Conversation Service stays free of business tool implementations.

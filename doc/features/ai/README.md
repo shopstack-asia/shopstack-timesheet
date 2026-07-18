@@ -2,16 +2,17 @@
 
 ## Purpose
 
-OpenAI conversation foundation for Slack: prompt build → chat completion → validated plain-text reply. No tools, memory, or business APIs.
+OpenAI conversation foundation for Slack: prompt build → chat completion → optional **tool loop** → validated plain-text reply.
 
 ## Scope
 
 - `src/lib/ai/*` — client, conversation, prompt, types, errors
 - Slack adapter: `src/lib/slack/conversation/conversation-handler.ts`
+- Tool loop uses [../tools/](../tools/) (demonstration tools only)
 
 ## Out of scope
 
-Tool calling, timesheet/leave APIs, Redis memory, RAG, embeddings, LangChain.
+Business tools (timesheet/leave/holiday), Redis memory, RAG, embeddings, LangChain.
 
 ## Reading order
 
@@ -23,5 +24,6 @@ Tool calling, timesheet/leave APIs, Redis memory, RAG, embeddings, LangChain.
 
 ## Related
 
+- Tools foundation: [../tools/](../tools/)
 - Slack events/responses: [../slack/](../slack/)
 - Env: [../ops/features/environment-variables.md](../ops/features/environment-variables.md)

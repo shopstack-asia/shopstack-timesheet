@@ -25,6 +25,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | `ops` | [features/ops/](./features/ops/) | [README.md](./features/ops/README.md) | [feature-logic-summary.md](./features/ops/feature-logic-summary.md) |
 | `slack` | [features/slack/](./features/slack/) | [README.md](./features/slack/README.md) | [feature-logic-summary.md](./features/slack/feature-logic-summary.md) |
 | `ai` | [features/ai/](./features/ai/) | [README.md](./features/ai/README.md) | [feature-logic-summary.md](./features/ai/feature-logic-summary.md) |
+| `tools` | [features/tools/](./features/tools/) | [README.md](./features/tools/README.md) | [feature-logic-summary.md](./features/tools/feature-logic-summary.md) |
 
 ## Cross-feature concerns
 
@@ -37,6 +38,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | Cron bearer secret | `reminders`, `holidays` | `Authorization: Bearer ${CRON_SECRET}` |
 | Theme / view prefs | `layout` | `localStorage` keys `theme`, `timesheetViewMode` |
 | Slack Timesheet AI Agent | `slack`, `timesheet` | Events foundation: `src/lib/slack/*`, `src/app/api/slack/events`; AI agent (later wiring): `src/lib/timesheet-agent`; docs: `doc/features/slack/`, `docs/ai-implementation/` |
+| Tool Execution Foundation | `tools`, `ai`, `slack` | Vendor-agnostic tools: `src/lib/tools/*`; Conversation tool loop: `src/lib/ai/conversation.ts`; docs: `doc/features/tools/` |
 
 ### Source Code References
 

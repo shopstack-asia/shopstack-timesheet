@@ -11,4 +11,5 @@
 - `src/lib/ai/client.ts`
 - `src/lib/ai/conversation.ts`
 - `src/lib/ai/prompt.ts`
+- `src/lib/tools/` (tool loop)
 - `src/lib/slack/conversation/conversation-handler.ts`

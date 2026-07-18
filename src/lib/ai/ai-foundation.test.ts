@@ -140,6 +140,59 @@ describe('createOpenAIClient / generateResponse', () => {
   });
 });
 
+describe('createOpenAIClient tool calling', () => {
+  beforeEach(() => {
+    resetOpenAIClient();
+  });
+
+  it('returns tool_calls without requiring text', async () => {
+    const client = createOpenAIClient({
+      forceNew: true,
+      config: loadOpenAIConfig({ OPENAI_API_KEY: 'sk-test' }),
+      fetchImpl: async ({ body }) => {
+        const b = body as { tools?: unknown[] };
+        expect(b.tools?.length).toBeGreaterThan(0);
+        return {
+          status: 200,
+          json: {
+            model: 'gpt-4o-mini',
+            choices: [
+              {
+                message: {
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: 'call_ping',
+                      type: 'function',
+                      function: { name: 'ping', arguments: '{}' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        };
+      },
+    });
+
+    const result = await client.generateResponse({
+      messages: [{ role: 'user', content: 'Ping' }],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'ping',
+            description: 'ping',
+            parameters: { type: 'object', properties: {} },
+          },
+        },
+      ],
+    });
+    expect(result.toolCalls?.[0]?.function.name).toBe('ping');
+    expect(result.text).toBe('');
+  });
+});
+
 describe('runConversation', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -154,6 +207,7 @@ describe('runConversation', () => {
           text: 'Hello! How can I help you today?',
           model: 'gpt-4o-mini',
         }),
+        enableTools: false,
       }
     );
     expect(result.usedFallback).toBe(false);
@@ -167,6 +221,7 @@ describe('runConversation', () => {
         generate: async () => {
           throw new AiError('rate', 'rate_limited', true);
         },
+        enableTools: false,
       }
     );
     expect(result.usedFallback).toBe(true);
@@ -181,6 +236,7 @@ describe('runConversation', () => {
           text: 'x'.repeat(5000),
           model: 'm',
         }),
+        enableTools: false,
       }
     );
     expect(result.usedFallback).toBe(true);
@@ -188,7 +244,108 @@ describe('runConversation', () => {
   });
 
   it('empty user message uses fallback', async () => {
-    const result = await runConversation({ userMessage: '   ' });
+    const result = await runConversation(
+      { userMessage: '   ' },
+      { enableTools: false }
+    );
     expect(result.usedFallback).toBe(true);
+  });
+
+  it('executes tool then returns final AI answer (ping)', async () => {
+    let round = 0;
+    const result = await runConversation(
+      { userMessage: 'Ping', requestId: 'r1', eventId: 'e1' },
+      {
+        generate: async (input) => {
+          round += 1;
+          if (round === 1) {
+            expect(input.tools?.some((t) => t.function.name === 'ping')).toBe(
+              true
+            );
+            return {
+              text: '',
+              model: 'gpt-4o-mini',
+              toolCalls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'ping', arguments: '{}' },
+                },
+              ],
+            };
+          }
+          const toolMsg = input.messages.find((m) => m.role === 'tool');
+          expect(toolMsg?.content).toContain('"success":true');
+          expect(toolMsg?.content).toContain('pong');
+          return {
+            text: 'Pong!',
+            model: 'gpt-4o-mini',
+          };
+        },
+      }
+    );
+    expect(result.usedFallback).toBe(false);
+    expect(result.text).toBe('Pong!');
+    expect(result.toolRounds).toBe(1);
+  });
+
+  it('executes current_time tool then final answer', async () => {
+    let round = 0;
+    const result = await runConversation(
+      { userMessage: 'What time is it?' },
+      {
+        generate: async () => {
+          round += 1;
+          if (round === 1) {
+            return {
+              text: '',
+              model: 'm',
+              toolCalls: [
+                {
+                  id: 'call_t',
+                  type: 'function',
+                  function: { name: 'current_time', arguments: '{}' },
+                },
+              ],
+            };
+          }
+          return {
+            text: 'Current server time is 14:32 ICT.',
+            model: 'm',
+          };
+        },
+      }
+    );
+    expect(result.text).toContain('14:32');
+    expect(result.toolRounds).toBe(1);
+  });
+
+  it('feeds unknown-tool failure back to the model', async () => {
+    let round = 0;
+    const result = await runConversation(
+      { userMessage: 'Do something' },
+      {
+        generate: async (input) => {
+          round += 1;
+          if (round === 1) {
+            return {
+              text: '',
+              model: 'm',
+              toolCalls: [
+                {
+                  id: 'call_x',
+                  type: 'function',
+                  function: { name: 'not_a_tool', arguments: '{}' },
+                },
+              ],
+            };
+          }
+          const toolMsg = input.messages.find((m) => m.role === 'tool');
+          expect(toolMsg?.content).toContain('unknown_tool');
+          return { text: 'I cannot do that yet.', model: 'm' };
+        },
+      }
+    );
+    expect(result.text).toContain('cannot');
   });
 });
