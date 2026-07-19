@@ -3,7 +3,10 @@ import {
   readDailyTimesheetForEmployee,
 } from '@/lib/timesheet/canonical-read';
 import { submitDayTimesheetForStaff } from '@/lib/timesheet/timesheet-service';
-import { SubmitPolicyError } from '@/lib/timesheet/submit-policy';
+import {
+  SubmitPolicyDependencyError,
+  SubmitPolicyError,
+} from '@/lib/timesheet/submit-policy';
 import { SheetsWriteLockError } from '@/lib/sheets-write-lock';
 import { auditTimesheetWrite } from '@/lib/timesheet/write/audit-log';
 import {
@@ -34,7 +37,43 @@ export type ConfirmDeps = {
   pendingStore?: PendingTimesheetChangeStore;
   readDaily?: typeof readDailyTimesheetForEmployee;
   submitDay?: typeof submitDayTimesheetForStaff;
+  requestId?: string;
 };
+
+const GENERIC_SOURCE_SAFE_MESSAGE =
+  'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง';
+
+export function holidayDependencySafeMessage(year: number): string {
+  return `ยังไม่สามารถตรวจสอบข้อมูลวันหยุดสำหรับปี ${year} ได้ครับ จึงยังไม่บันทึก Timesheet เพื่อป้องกันข้อมูลผิดพลาด กรุณาลองใหม่อีกครั้งภายหลัง`;
+}
+
+export function mapConfirmWriteError(
+  error: unknown,
+  fallbackYear?: number
+): string {
+  if (error instanceof SubmitPolicyError) {
+    return error.message;
+  }
+  if (error instanceof SubmitPolicyDependencyError) {
+    if (
+      error.code === 'holiday_source_unavailable' ||
+      error.code === 'holiday_data_invalid'
+    ) {
+      const year = error.requestedYear ?? fallbackYear ?? new Date().getFullYear();
+      return holidayDependencySafeMessage(year);
+    }
+    if (error.code === 'leave_source_unavailable') {
+      return 'ยังไม่สามารถตรวจสอบข้อมูลการลาได้ครับ จึงยังไม่บันทึก Timesheet เพื่อป้องกันข้อมูลผิดพลาด กรุณาลองใหม่อีกครั้งภายหลัง';
+    }
+    return GENERIC_SOURCE_SAFE_MESSAGE;
+  }
+  if (error instanceof SheetsWriteLockError) {
+    return error.code === 'LOCK_TIMEOUT'
+      ? 'ระบบกำลังบันทึก Timesheet จากคำขออื่นอยู่ กรุณาลองใหม่อีกครั้งครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง'
+      : 'ยังไม่สามารถบันทึก Timesheet ได้ในขณะนี้ กรุณาลองใหม่อีกครั้งครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง';
+  }
+  return GENERIC_SOURCE_SAFE_MESSAGE;
+}
 
 function ownershipOk(
   pending: PendingTimesheetChange,
@@ -132,7 +171,7 @@ async function resolveAfterFenceLoss(
       status: 'failed',
       message:
         change.safeError ||
-        'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง',
+        GENERIC_SOURCE_SAFE_MESSAGE,
     };
   }
   if (change?.status === 'cancelled') {
@@ -213,7 +252,7 @@ export async function confirmTimesheetChange(
         status: 'failed',
         message:
           existing.safeError ||
-          'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง',
+        GENERIC_SOURCE_SAFE_MESSAGE,
       };
     }
 
@@ -379,6 +418,7 @@ export async function confirmTimesheetChange(
       });
       await submit(auth, date, claimed.writeEntries, {
         allowCustomProject: false,
+        requestId: deps?.requestId,
       });
       const verifiedDay = await read(
         {
@@ -419,12 +459,7 @@ export async function confirmTimesheetChange(
       if (error instanceof PendingStoreError && error.code === 'REDIS_UNAVAILABLE') {
         throw error;
       }
-      const message =
-        error instanceof SubmitPolicyError
-          ? error.message
-          : error instanceof SheetsWriteLockError
-            ? 'ระบบกำลังบันทึก Timesheet จากคำขออื่นอยู่ กรุณาลองใหม่อีกครั้งครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง'
-            : 'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง';
+      const message = mapConfirmWriteError(error, Number(date.slice(0, 4)));
       const fence = await store.markFailed(id, version, message);
       if (!fence.ok) {
         return resolveAfterFenceLoss(store, id, fence);

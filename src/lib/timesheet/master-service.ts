@@ -77,14 +77,17 @@ function resolveHolidayLocation(ctx: AgentAuthContext): string {
 
 export async function getHolidaysForStaff(
   ctx: AgentAuthContext,
-  year: number
+  year: number,
+  opts?: { requestId?: string }
 ): Promise<Holiday[]> {
   assertAgentAuth(ctx);
   if (Number.isNaN(year) || year < 2000) {
     throw new Error('Invalid year parameter');
   }
   const location = resolveHolidayLocation(ctx);
-  return getCachedHolidays(location || undefined, year);
+  return getCachedHolidays(location || undefined, year, {
+    requestId: opts?.requestId,
+  });
 }
 
 export async function getCurrentEmployee(ctx: AgentAuthContext) {

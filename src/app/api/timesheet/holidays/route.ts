@@ -65,19 +65,17 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get holidays from Redis cache only
-    // If location is available, it will be used to filter holidays
-    // If not, all holidays will be returned
+    // Cache-aside: Redis hit, or Zoho reload on miss (never treat miss as empty)
     try {
-      console.log('[Holiday API] Getting cached holidays for location:', location, 'and year:', year);
+      console.log('[Holiday API] Getting holidays for location:', location, 'and year:', year);
       const holidays = await getCachedHolidays(location || undefined, year);
-      console.log('[Holiday API] Holidays:', holidays);
+      console.log('[Holiday API] Holidays count:', holidays.length);
       return NextResponse.json<ApiResponse<Holiday[]>>({
         success: true,
         data: holidays,
       });
     } catch (error) {
-      console.error('[Holiday API] Failed to get cached holidays:', error);
+      console.error('[Holiday API] Failed to get holidays:', error);
       if (error instanceof HolidayUnavailableError) {
         return NextResponse.json<ApiResponse<Holiday[]>>(
           {

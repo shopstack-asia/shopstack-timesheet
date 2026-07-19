@@ -87,10 +87,18 @@ export async function POST(request: NextRequest) {
     console.error('Error submitting timesheet:', error);
 
     if (error instanceof SubmitPolicyDependencyError) {
+      const year = error.requestedYear ?? new Date().getFullYear();
+      const message =
+        error.code === 'holiday_source_unavailable' ||
+        error.code === 'holiday_data_invalid'
+          ? `Holiday data for ${year} is temporarily unavailable. Please try again later.`
+          : error.code === 'leave_source_unavailable'
+            ? 'Leave data is temporarily unavailable. Please try again later.'
+            : 'Timesheet policy data is temporarily unavailable. Please try again later.';
       return NextResponse.json<ApiResponse<void>>(
         {
           success: false,
-          error: 'Timesheet policy data is temporarily unavailable. Please try again later.',
+          error: message,
         },
         { status: 503 }
       );
@@ -114,7 +122,13 @@ export async function POST(request: NextRequest) {
         (error as Error & { statusCode?: number }).statusCode === 503)
     ) {
       const message =
-        error instanceof Error ? error.message : 'Timesheet is busy, please try again';
+        error instanceof SheetsWriteLockError
+          ? error.code === 'LOCK_TIMEOUT'
+            ? 'Timesheet is busy, please try again'
+            : 'Timesheet write lock unavailable, please try again'
+          : error instanceof Error
+            ? error.message
+            : 'Timesheet is busy, please try again';
       return NextResponse.json<ApiResponse<void>>(
         { success: false, error: message },
         { status: 503 }

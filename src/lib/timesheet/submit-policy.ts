@@ -33,10 +33,24 @@ export class SubmitPolicyError extends Error {
 /** Leave/holiday dependency unavailable — fail closed */
 export class SubmitPolicyDependencyError extends Error {
   readonly statusCode = 503;
+  readonly code:
+    | 'holiday_source_unavailable'
+    | 'holiday_data_invalid'
+    | 'leave_source_unavailable'
+    | 'redis_unavailable';
+  readonly requestedYear?: number;
 
-  constructor(message = 'Timesheet policy data is temporarily unavailable') {
+  constructor(
+    message = 'Timesheet policy data is temporarily unavailable',
+    options?: {
+      code?: SubmitPolicyDependencyError['code'];
+      requestedYear?: number;
+    }
+  ) {
     super(message);
     this.name = 'SubmitPolicyDependencyError';
+    this.code = options?.code ?? 'holiday_source_unavailable';
+    this.requestedYear = options?.requestedYear;
   }
 }
 
@@ -44,7 +58,7 @@ export class SubmitPolicyDependencyError extends Error {
  * Server-side business rules for any timesheet day write (web, Slack, future callers).
  * Empty entries (clear day) skip leave/holiday/hour content rules.
  * Leave and holiday loads fail closed (503), never treated as empty.
- * Holiday cache miss / Redis error / corruption → HolidayUnavailableError → 503.
+ * Holiday cache miss triggers Zoho reload; only canonical failure → 503.
  */
 export async function assertSubmitBusinessRules(
   ctx: AgentAuthContext,
@@ -61,6 +75,7 @@ export async function assertSubmitBusinessRules(
       ctx: AgentAuthContext,
       year: number
     ) => Promise<import('@/types').Holiday[]>;
+    requestId?: string;
   }
 ): Promise<void> {
   if (entries.length === 0) {
@@ -97,8 +112,22 @@ export async function assertSubmitBusinessRules(
       leave = await getLeaveMonthlyForStaff(ctx, year, month);
     }
   } catch (error) {
-    console.error('[submit-policy] leave load failed', error);
-    throw new SubmitPolicyDependencyError();
+    console.error(
+      JSON.stringify({
+        scope: 'submit-policy',
+        level: 'error',
+        message: 'leave_source_unavailable',
+        dependency: 'leave',
+        requestId: deps?.requestId,
+        requestedYear: year,
+        error: error instanceof Error ? error.message : 'unknown',
+        ts: new Date().toISOString(),
+      })
+    );
+    throw new SubmitPolicyDependencyError(
+      'Leave data is temporarily unavailable',
+      { code: 'leave_source_unavailable', requestedYear: year }
+    );
   }
 
   try {
@@ -106,11 +135,48 @@ export async function assertSubmitBusinessRules(
       holidays = await deps.loadHolidays(ctx, year);
     } else {
       const { getHolidaysForStaff } = await import('@/lib/timesheet/master-service');
-      holidays = await getHolidaysForStaff(ctx, year);
+      holidays = await getHolidaysForStaff(ctx, year, {
+        requestId: deps?.requestId,
+      });
     }
   } catch (error) {
-    console.error('[submit-policy] holiday load failed', error);
-    throw new SubmitPolicyDependencyError();
+    const { HolidayUnavailableError } = await import('@/lib/holiday-cache');
+    const code =
+      error instanceof HolidayUnavailableError
+        ? error.code
+        : 'holiday_source_unavailable';
+    console.error(
+      JSON.stringify({
+        scope: 'submit-policy',
+        level: 'error',
+        message: 'holiday_dependency_unavailable',
+        dependency: 'holiday',
+        requestId: deps?.requestId,
+        requestedYear: year,
+        cacheOutcome:
+          error instanceof HolidayUnavailableError
+            ? error.cacheOutcome
+            : undefined,
+        canonicalOutcome:
+          error instanceof HolidayUnavailableError
+            ? error.canonicalOutcome
+            : 'failed',
+        error: error instanceof Error ? error.message : 'unknown',
+        ts: new Date().toISOString(),
+      })
+    );
+    throw new SubmitPolicyDependencyError(
+      'Holiday data is temporarily unavailable',
+      {
+        code:
+          code === 'holiday_data_invalid'
+            ? 'holiday_data_invalid'
+            : code === 'redis_unavailable'
+              ? 'redis_unavailable'
+              : 'holiday_source_unavailable',
+        requestedYear: year,
+      }
+    );
   }
 
   const daySet = entriesToDaySet(

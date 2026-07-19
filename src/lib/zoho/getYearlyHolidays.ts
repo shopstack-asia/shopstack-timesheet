@@ -1,17 +1,42 @@
+/**
+ * Zoho yearly holidays — strict parse of recognized response shapes only.
+ * Unknown / partial / malformed payloads throw ZohoHolidayParseError (never silent []).
+ */
+
 import { format, parse, isValid } from 'date-fns';
 import { getZohoPeopleService } from '@/lib/zoho-people';
 import { Holiday } from '@/types';
 
 const HOLIDAYS_ENDPOINT = 'https://people.zoho.com/people/api/leave/v2/holidays/get';
 const REQUEST_DATE_FORMAT = 'dd-MMM-yyyy';
-const SUPPORTED_RESPONSE_FORMATS = ['dd-MMM-yyyy', 'yyyy-MM-dd'];
+const SUPPORTED_RESPONSE_FORMATS = ['dd-MMM-yyyy', 'yyyy-MM-dd'] as const;
 
 export interface GetYearlyHolidaysInput {
   location?: string;
   year: number;
 }
 
-type HolidayRecord = Record<string, any>;
+export type GetYearlyHolidaysDeps = {
+  fetchFn?: typeof fetch;
+  getAccessToken?: () => Promise<string>;
+  refreshAccessToken?: () => Promise<string>;
+};
+
+/** Malformed / unrecognized Zoho holiday payload — map to holiday_data_invalid upstream. */
+export class ZohoHolidayParseError extends Error {
+  readonly kind = 'holiday_data_invalid' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ZohoHolidayParseError';
+  }
+}
+
+type HolidayRecord = Record<string, unknown>;
+
+type ExtractOk = { ok: true; records: HolidayRecord[] };
+type ExtractErr = { ok: false; reason: string };
+type ExtractResult = ExtractOk | ExtractErr;
 
 const buildDateRange = (year: number) => {
   const start = new Date(Date.UTC(year, 0, 1));
@@ -22,148 +47,308 @@ const buildDateRange = (year: number) => {
   };
 };
 
-const normalizeDate = (value?: string): string | null => {
-  if (!value) {
+/** True only for real calendar dates (rejects 2026-02-30, etc.). */
+export function isStrictCalendarIsoDate(value: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return (
+    dt.getUTCFullYear() === y &&
+    dt.getUTCMonth() === mo - 1 &&
+    dt.getUTCDate() === d
+  );
+}
+
+const normalizeDate = (value?: unknown): string | null => {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const str = String(value).trim();
+  if (!str) {
     return null;
   }
 
   for (const pattern of SUPPORTED_RESPONSE_FORMATS) {
-    const parsed = parse(value, pattern, new Date());
+    const parsed = parse(str, pattern, new Date());
     if (isValid(parsed)) {
-      return format(parsed, 'yyyy-MM-dd');
+      const iso = format(parsed, 'yyyy-MM-dd');
+      if (isStrictCalendarIsoDate(iso)) {
+        // Reject date-fns overflow (e.g. Feb 30 → Mar 2)
+        if (pattern === 'yyyy-MM-dd' && iso !== str) {
+          return null;
+        }
+        if (pattern === 'dd-MMM-yyyy') {
+          const roundTrip = format(parsed, 'dd-MMM-yyyy');
+          // Allow case differences in month abbrev by comparing via ISO only
+          if (!isStrictCalendarIsoDate(iso)) {
+            return null;
+          }
+          void roundTrip;
+        }
+        return iso;
+      }
+      return null;
     }
-  }
-
-  const parsed = new Date(value);
-  if (!Number.isNaN(parsed.getTime())) {
-    return format(parsed, 'yyyy-MM-dd');
   }
 
   return null;
 };
 
-const toBoolean = (value: any, fallback = true) => {
+const parseIsHoliday = (value: unknown): boolean => {
   if (value === undefined || value === null) {
-    return fallback;
+    return true;
   }
-
   if (typeof value === 'boolean') {
     return value;
   }
-
-  const str = String(value).toLowerCase();
-  return str === 'true' || str === '1' || str === 'yes';
+  const str = String(value).trim().toLowerCase();
+  if (str === 'true' || str === '1' || str === 'yes') return true;
+  if (str === 'false' || str === '0' || str === 'no') return false;
+  throw new ZohoHolidayParseError(`Invalid is_holiday value: ${String(value)}`);
 };
 
-const normalizeRecord = (record: HolidayRecord): Holiday | null => {
-  if (!record) {
-    return null;
+/**
+ * Normalize one holiday row. Throws ZohoHolidayParseError on any malformed field.
+ * Does not silently drop rows.
+ */
+export function normalizeHolidayRecord(
+  record: unknown,
+  year: number
+): Holiday {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    throw new ZohoHolidayParseError('Holiday row is not an object');
   }
+  const r = record as HolidayRecord;
 
   const date =
-    normalizeDate(record.date) ||
-    normalizeDate(record.holiday_date) ||
-    normalizeDate(record.HolidayDate) ||
-    normalizeDate(record['Holiday Date']) ||
-    normalizeDate(record['Date']) ||
-    normalizeDate(record.Date);
+    normalizeDate(r.date) ||
+    normalizeDate(r.holiday_date) ||
+    normalizeDate(r.HolidayDate) ||
+    normalizeDate(r['Holiday Date']) ||
+    normalizeDate(r['Date']) ||
+    normalizeDate(r.Date);
 
   if (!date) {
-    return null;
+    throw new ZohoHolidayParseError('Holiday row missing or invalid date');
+  }
+  if (!date.startsWith(`${year}-`)) {
+    throw new ZohoHolidayParseError(
+      `Holiday date ${date} is outside requested year ${year}`
+    );
   }
 
-  const name =
-    record.name ||
-    record.holiday_name ||
-    record.HolidayName ||
-    record['Holiday Name'] ||
-    record.Name ||
-    'Holiday';
+  const nameRaw =
+    r.name ||
+    r.holiday_name ||
+    r.HolidayName ||
+    r['Holiday Name'] ||
+    r.Name;
+  const name = nameRaw !== undefined && nameRaw !== null ? String(nameRaw).trim() : '';
+  if (!name) {
+    throw new ZohoHolidayParseError('Holiday row missing name');
+  }
 
-  const id =
-    record.id ||
-    record.holiday_id ||
-    record.holidayId ||
-    record.HolidayID ||
-    record.HolidayId ||
+  const idRaw =
+    r.id ||
+    r.holiday_id ||
+    r.holidayId ||
+    r.HolidayID ||
+    r.HolidayId ||
     `${date}-${name}`;
+  const id = String(idRaw).trim();
+  if (!id) {
+    throw new ZohoHolidayParseError('Holiday row missing id');
+  }
+
+  const is_holiday = parseIsHoliday(r.is_holiday);
+
+  const optionalString = (v: unknown): string | undefined => {
+    if (v === undefined || v === null) return undefined;
+    const s = String(v).trim();
+    return s || undefined;
+  };
 
   return {
-    id: String(id),
+    id,
     name,
     date,
-    shift_name:
-      record.shift_name ||
-      record.shift ||
-      record.Shift ||
-      record['Shift Name'] ||
-      record.ShiftName ||
-      undefined,
-    location_name:
-      record.location_name ||
-      record.location ||
-      record.Location ||
-      record['Location Name'] ||
-      record.LocationName ||
-      undefined,
-    remarks:
-      record.remarks ||
-      record.description ||
-      record.Description ||
-      record['Holiday Description'] ||
-      record.Remarks ||
-      undefined,
-    is_holiday: toBoolean(record.is_holiday),
+    shift_name: optionalString(
+      r.shift_name || r.shift || r.Shift || r['Shift Name'] || r.ShiftName
+    ),
+    location_name: optionalString(
+      r.location_name ||
+        r.location ||
+        r.Location ||
+        r['Location Name'] ||
+        r.LocationName
+    ),
+    remarks: optionalString(
+      r.remarks ||
+        r.description ||
+        r.Description ||
+        r['Holiday Description'] ||
+        r.Remarks
+    ),
+    is_holiday,
   };
-};
+}
 
-const unwrapRowFormat = (rows: Array<{ FL: Array<{ val: string; content: string }> }>) => {
-  return rows.map((row) => {
+function unwrapRowFormat(rows: unknown): ExtractResult {
+  if (!Array.isArray(rows)) {
+    return { ok: false, reason: 'zoho_row_not_array' };
+  }
+  const records: HolidayRecord[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return { ok: false, reason: 'malformed_zoho_row' };
+    }
+    const fl = (row as { FL?: unknown }).FL;
+    if (!Array.isArray(fl)) {
+      return { ok: false, reason: 'malformed_zoho_row_fl' };
+    }
     const flattened: Record<string, string> = {};
-    (row.FL || []).forEach((field) => {
-      flattened[field.val] = field.content;
-    });
-    return flattened;
-  });
-};
+    for (const field of fl) {
+      if (!field || typeof field !== 'object') {
+        return { ok: false, reason: 'malformed_zoho_row_field' };
+      }
+      const f = field as { val?: unknown; content?: unknown };
+      if (typeof f.val !== 'string') {
+        return { ok: false, reason: 'malformed_zoho_row_field' };
+      }
+      flattened[f.val] = f.content === undefined || f.content === null
+        ? ''
+        : String(f.content);
+    }
+    records.push(flattened);
+  }
+  return { ok: true, records };
+}
 
-const extractHolidayArray = (payload: any): HolidayRecord[] => {
-  if (!payload) {
-    return [];
+/**
+ * Extract holiday records from a recognized Zoho response shape only.
+ * Unknown shapes and non-array collection fields are errors — never silent [].
+ */
+export function extractHolidayArray(payload: unknown): ExtractResult {
+  if (payload === null || payload === undefined) {
+    return { ok: false, reason: 'empty_payload' };
   }
 
   if (Array.isArray(payload)) {
-    return payload;
+    return { ok: true, records: payload as HolidayRecord[] };
   }
 
-  if (Array.isArray(payload.data)) {
-    return payload.data;
+  if (typeof payload !== 'object') {
+    return { ok: false, reason: 'non_object_payload' };
   }
 
-  if (Array.isArray(payload.holidays)) {
-    return payload.holidays;
+  const obj = payload as Record<string, unknown>;
+
+  const asArrayField = (
+    value: unknown,
+    fieldName: string
+  ): ExtractResult | 'absent' => {
+    if (value === undefined) return 'absent';
+    if (!Array.isArray(value)) {
+      return { ok: false, reason: `${fieldName}_not_array` };
+    }
+    return { ok: true, records: value as HolidayRecord[] };
+  };
+
+  // Top-level recognized collection fields (present + non-array → invalid)
+  for (const key of ['holidays', 'holiday_list', 'holidayList'] as const) {
+    const field = asArrayField(obj[key], key);
+    if (field !== 'absent') {
+      return field;
+    }
   }
 
-  if (Array.isArray(payload.holiday_list)) {
-    return payload.holiday_list;
+  // `data` may be the collection itself or an object with `.holidays`
+  if (obj.data !== undefined) {
+    if (Array.isArray(obj.data)) {
+      return { ok: true, records: obj.data as HolidayRecord[] };
+    }
+    if (obj.data && typeof obj.data === 'object') {
+      const nested = (obj.data as Record<string, unknown>).holidays;
+      if (nested !== undefined) {
+        const nestedResult = asArrayField(nested, 'data.holidays');
+        if (nestedResult === 'absent') {
+          return { ok: false, reason: 'data_holidays_absent' };
+        }
+        return nestedResult;
+      }
+      return { ok: false, reason: 'data_not_array' };
+    }
+    return { ok: false, reason: 'data_not_array' };
   }
 
-  if (Array.isArray(payload.holidayList)) {
-    return payload.holidayList;
+  const response = obj.response;
+  if (response !== undefined) {
+    if (!response || typeof response !== 'object' || Array.isArray(response)) {
+      return { ok: false, reason: 'invalid_response_shape' };
+    }
+    const result = (response as Record<string, unknown>).result;
+    if (result !== undefined) {
+      if (!result || typeof result !== 'object' || Array.isArray(result)) {
+        return { ok: false, reason: 'invalid_result_shape' };
+      }
+      const holidaysNode = (result as Record<string, unknown>).Holidays;
+      if (holidaysNode !== undefined) {
+        if (
+          !holidaysNode ||
+          typeof holidaysNode !== 'object' ||
+          Array.isArray(holidaysNode)
+        ) {
+          return { ok: false, reason: 'invalid_holidays_node' };
+        }
+        const row = (holidaysNode as Record<string, unknown>).row;
+        if (row === undefined) {
+          return { ok: false, reason: 'missing_holidays_row' };
+        }
+        return unwrapRowFormat(row);
+      }
+    }
   }
 
-  if (Array.isArray(payload.data?.holidays)) {
-    return payload.data.holidays;
+  return { ok: false, reason: 'unrecognized_response_shape' };
+}
+
+/**
+ * Strict parse of one Zoho holiday page payload for the requested year.
+ * Recognized empty collections return []. Unknown/partial/invalid throw.
+ */
+export function parseZohoHolidayPayload(
+  payload: unknown,
+  year: number
+): Holiday[] {
+  if (!Number.isFinite(year) || year < 2000) {
+    throw new ZohoHolidayParseError('Invalid year for holiday parse');
   }
 
-  if (Array.isArray(payload.response?.result?.Holidays?.row)) {
-    return unwrapRowFormat(payload.response.result.Holidays.row);
+  const extracted = extractHolidayArray(payload);
+  if (!extracted.ok) {
+    throw new ZohoHolidayParseError(
+      `Unrecognized or invalid Zoho holiday response (${extracted.reason})`
+    );
   }
 
-  return [];
-};
+  const holidays: Holiday[] = [];
+  for (const record of extracted.records) {
+    holidays.push(normalizeHolidayRecord(record, year));
+  }
+  return holidays;
+}
 
-const buildUrl = (location: string | undefined, from: string, to: string, page?: number, limit?: number) => {
+const buildUrl = (
+  location: string | undefined,
+  from: string,
+  to: string,
+  page?: number,
+  limit?: number
+) => {
   const url = new URL(HOLIDAYS_ENDPOINT);
   if (location) {
     url.searchParams.set('location', location);
@@ -171,15 +356,14 @@ const buildUrl = (location: string | undefined, from: string, to: string, page?:
   url.searchParams.set('from', from);
   url.searchParams.set('to', to);
   url.searchParams.set('dateFormat', REQUEST_DATE_FORMAT);
-  
-  // Add pagination parameters if provided
+
   if (page !== undefined) {
     url.searchParams.set('page', page.toString());
   }
   if (limit !== undefined) {
     url.searchParams.set('limit', limit.toString());
   }
-  
+
   return url.toString();
 };
 
@@ -188,44 +372,65 @@ const fetchHolidays = async (
   location: string | undefined,
   from: string,
   to: string,
-  page?: number,
-  limit?: number
+  page: number | undefined,
+  limit: number | undefined,
+  fetchFn: typeof fetch
 ) => {
-  const response = await fetch(buildUrl(location, from, to, page, limit), {
+  return fetchFn(buildUrl(location, from, to, page, limit), {
     method: 'GET',
     headers: {
       Authorization: `Zoho-oauthtoken ${token}`,
     },
     cache: 'no-store',
   });
-
-  return response;
 };
 
-export async function getYearlyHolidays({
-  location,
-  year,
-}: GetYearlyHolidaysInput): Promise<Holiday[]> {
+export async function getYearlyHolidays(
+  { location, year }: GetYearlyHolidaysInput,
+  deps: GetYearlyHolidaysDeps = {}
+): Promise<Holiday[]> {
   if (!Number.isFinite(year)) {
-    throw new Error('Year is required to fetch holidays');
+    throw new ZohoHolidayParseError('Year is required to fetch holidays');
   }
 
+  const fetchFn = deps.fetchFn ?? fetch;
   const zohoService = getZohoPeopleService();
+  const getToken =
+    deps.getAccessToken ?? (() => zohoService.getValidAccessTokenForApi());
+  const refreshToken =
+    deps.refreshAccessToken ?? (() => zohoService.refreshAccessTokenForApi());
+
   const { from, to } = buildDateRange(year);
 
   const allHolidays: Holiday[] = [];
-  const PAGE_LIMIT = 200; // Zoho API typically limits to 200 records per page
-  const MAX_PAGES = 100; // Safety limit to prevent infinite loops
+  const PAGE_LIMIT = 200;
+  const MAX_PAGES = 100;
   let page = 1;
   let hasMore = true;
 
   while (hasMore && page <= MAX_PAGES) {
-    let accessToken = await zohoService.getValidAccessTokenForApi();
-    let response = await fetchHolidays(accessToken, location, from, to, page, PAGE_LIMIT);
+    let accessToken = await getToken();
+    let response = await fetchHolidays(
+      accessToken,
+      location,
+      from,
+      to,
+      page,
+      PAGE_LIMIT,
+      fetchFn
+    );
 
     if (response.status === 401) {
-      accessToken = await zohoService.refreshAccessTokenForApi();
-      response = await fetchHolidays(accessToken, location, from, to, page, PAGE_LIMIT);
+      accessToken = await refreshToken();
+      response = await fetchHolidays(
+        accessToken,
+        location,
+        from,
+        to,
+        page,
+        PAGE_LIMIT,
+        fetchFn
+      );
     }
 
     if (!response.ok) {
@@ -235,48 +440,50 @@ export async function getYearlyHolidays({
       );
     }
 
-    const payload = await response.json().catch((error) => {
-      console.error('[Zoho] Failed to parse holiday response', error);
-      throw new Error('Unable to parse Zoho holiday response');
-    });
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new ZohoHolidayParseError('Unable to parse Zoho holiday response JSON');
+    }
 
-    const holidays = extractHolidayArray(payload);
-    const normalized = holidays
-      .map((record) => normalizeRecord(record))
-      .filter((holiday): holiday is Holiday => Boolean(holiday));
+    const pageHolidays = parseZohoHolidayPayload(payload, year);
+    allHolidays.push(...pageHolidays);
 
-    allHolidays.push(...normalized);
+    const extracted = extractHolidayArray(payload);
+    const recordCount = extracted.ok ? extracted.records.length : 0;
 
-    console.log(
-      `[Zoho] Fetched page ${page} with ${normalized.length} holidays (total so far: ${allHolidays.length})`
-    );
-
-    // Check if there are more pages
-    // Zoho API may return pagination info in different formats
     const hasMoreData =
-      payload.hasMore ||
-      payload.moreRecords ||
-      payload.nextPage ||
-      (payload.pageInfo && payload.pageInfo.hasMore) ||
-      (payload.response && payload.response.pageInfo && payload.response.pageInfo.hasMore) ||
+      (payload &&
+        typeof payload === 'object' &&
+        !Array.isArray(payload) &&
+        Boolean(
+          (payload as Record<string, unknown>).hasMore ||
+            (payload as Record<string, unknown>).moreRecords ||
+            (payload as Record<string, unknown>).nextPage ||
+            (
+              (payload as Record<string, unknown>).pageInfo as
+                | { hasMore?: boolean }
+                | undefined
+            )?.hasMore ||
+            (
+              (
+                (payload as Record<string, unknown>).response as
+                  | { pageInfo?: { hasMore?: boolean } }
+                  | undefined
+              )?.pageInfo
+            )?.hasMore
+        )) ||
       false;
 
-    // If we got fewer records than the limit, we've reached the last page
-    if (holidays.length < PAGE_LIMIT) {
+    if (recordCount < PAGE_LIMIT) {
       hasMore = false;
     } else if (hasMoreData) {
-      // If API explicitly says there's more, continue
+      page++;
+    } else if (recordCount === PAGE_LIMIT) {
       page++;
     } else {
-      // If we got exactly PAGE_LIMIT records, there might be more
-      // Try fetching next page to check
-      if (holidays.length === PAGE_LIMIT) {
-        page++;
-        // Continue loop to fetch next page
-        // If next page returns empty or fewer records, loop will end
-      } else {
-        hasMore = false;
-      }
+      hasMore = false;
     }
   }
 
@@ -286,7 +493,5 @@ export async function getYearlyHolidays({
     );
   }
 
-  console.log(`[Zoho] Total holidays fetched: ${allHolidays.length} from ${page - 1} page(s)`);
   return allHolidays;
 }
-
