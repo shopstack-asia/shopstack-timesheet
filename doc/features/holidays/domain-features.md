@@ -16,7 +16,8 @@
 
 ## Non-obvious constraints
 
-- Cache miss → Zoho reload; Zoho failure → 503 / fail-closed write block (never empty-list inference).
+- Cache miss → Zoho reload; Zoho failure / unrecognized / partial payload → 503 / fail-closed write block (never empty-list inference from unknown shapes).
+- Only a recognized, fully valid Zoho collection (including explicit empty) is trusted as “no holidays”.
 - Empty location string uses `holiday:default:{year}` with env-default Zoho location.
 - UI may skip holiday fetch when no location configured client-side.
 - Year boundary and TTL expiry recover automatically via cache-aside (no manual Redis insert).

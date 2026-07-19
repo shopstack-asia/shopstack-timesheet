@@ -27,9 +27,19 @@ Mark non-working days and enforce holiday acknowledgement on Timesheet writes wi
 4. **Miss / expired / invalid / wrong year|scope** — load Zoho `getYearlyHolidays`, validate/normalize, write versioned envelope, return.
 5. **Redis read failure** — still attempt Zoho; do not treat as empty holidays.
 6. **Redis write failure after Zoho success** — return Zoho data for this request; log `holiday_cache_write_failed_but_source_available`.
-7. **Zoho failure / malformed** — `HolidayUnavailableError` → fail closed (zero Timesheet writes).
+7. **Zoho failure / malformed / unrecognized payload** — `HolidayUnavailableError` (`holiday_source_unavailable` or `holiday_data_invalid`) → fail closed (zero Timesheet writes; zero holiday cache writes for invalid data).
 
-A trusted empty list (`[]`) is only returned when the canonical load (or a validated cache entry) confirms no holidays. A missing Redis key is **never** interpreted as no holidays.
+A trusted empty list (`[]`) is only returned when the **canonical Zoho response is a recognized collection shape** (top-level array, `data`, `holidays`, `holiday_list`, `holidayList`, `data.holidays`, or supported Zoho `response.result.Holidays.row` format) and every row validates—or the collection is explicitly empty. A missing Redis key is **never** interpreted as no holidays.
+
+**Invalid / partial Zoho payloads fail closed:**
+
+- Unknown HTTP 200 object shape → `holiday_data_invalid` (not empty success)
+- Recognized field present but not an array → invalid
+- Any malformed holiday row (bad/missing date, wrong year, empty id/name, invalid `is_holiday`) → entire load fails
+- Mixed valid + invalid rows → entire load fails; **no partial list** is returned or cached
+- Invalid JSON → `holiday_data_invalid`
+- Zero Redis holiday writes on any of the above
+- Submit policy / confirm block before Sheets lock or mutation
 
 **Refresh warmup (`refreshHolidayCache`)** — optional reliability optimization for locations × years Y-1..Y+1. Correctness does not require warmup; cache-aside recovers after deploy / year boundary / TTL expiry.
 
@@ -113,3 +123,4 @@ Redeploy the previous application version. Do not permanently disable holiday po
 - Redis read/write failure + Zoho success continues
 - Zoho failure blocks; policy holiday ack paths
 - Confirm Slack maps holiday dependency (no identity wording)
+- **Strict Zoho parse:** recognized empty only; unknown/partial/invalid → `holiday_data_invalid`; zero cache writes; sheets never mutated

@@ -6,11 +6,15 @@
  * Canonical Zoho failure → HolidayUnavailableError (fail closed).
  */
 
-import { z } from 'zod';
-import { getYearlyHolidays } from '@/lib/zoho/getYearlyHolidays';
+import {
+  getYearlyHolidays,
+  ZohoHolidayParseError,
+  isStrictCalendarIsoDate,
+} from '@/lib/zoho/getYearlyHolidays';
 import { getRedisClient, type RedisAdapter } from '@/lib/redis';
 import { getZohoPeopleService } from '@/lib/zoho-people';
 import { Holiday } from '@/types';
+import { z } from 'zod';
 
 export const HOLIDAY_CACHE_SCHEMA_VERSION = 1 as const;
 /** ~1 year — expiry triggers cache-aside reload, not permanent loss of holidays. */
@@ -313,12 +317,12 @@ function normalizeCanonicalHolidays(
   for (const h of holidays) {
     const item = HolidayItemSchema.safeParse({
       id: String(h.id),
-      name: h.name || 'Holiday',
+      name: h.name,
       date: h.date,
       shift_name: h.shift_name,
       location_name: h.location_name,
       remarks: h.remarks,
-      is_holiday: h.is_holiday !== false,
+      is_holiday: h.is_holiday,
     });
     if (!item.success) {
       throw new HolidayUnavailableError('Canonical holiday data is invalid', {
@@ -327,9 +331,29 @@ function normalizeCanonicalHolidays(
         canonicalOutcome: 'invalid',
       });
     }
+    if (!isStrictCalendarIsoDate(item.data.date)) {
+      throw new HolidayUnavailableError('Canonical holiday date is invalid', {
+        code: 'holiday_data_invalid',
+        requestedYear: year,
+        canonicalOutcome: 'invalid',
+      });
+    }
     if (!item.data.date.startsWith(`${year}-`)) {
-      // Drop out-of-year rows rather than failing the whole year set
-      continue;
+      throw new HolidayUnavailableError(
+        `Canonical holiday date ${item.data.date} is outside year ${year}`,
+        {
+          code: 'holiday_data_invalid',
+          requestedYear: year,
+          canonicalOutcome: 'invalid',
+        }
+      );
+    }
+    if (!item.data.id.trim() || !item.data.name.trim()) {
+      throw new HolidayUnavailableError('Canonical holiday id/name is empty', {
+        code: 'holiday_data_invalid',
+        requestedYear: year,
+        canonicalOutcome: 'invalid',
+      });
     }
     normalized.push(item.data);
   }
@@ -382,6 +406,13 @@ async function loadCanonicalForScope(
   } catch (error) {
     if (error instanceof HolidayUnavailableError) {
       throw error;
+    }
+    if (error instanceof ZohoHolidayParseError) {
+      throw new HolidayUnavailableError(error.message, {
+        code: 'holiday_data_invalid',
+        requestedYear: year,
+        canonicalOutcome: 'invalid',
+      });
     }
     throw new HolidayUnavailableError(
       error instanceof Error ? error.message : 'Holiday source unavailable',

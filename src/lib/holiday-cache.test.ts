@@ -329,6 +329,25 @@ describe('getCachedHolidays cache-aside', () => {
     ).rejects.toMatchObject({ code: 'holiday_data_invalid' });
   });
 
+  it('wrong-year row from canonical loader blocks without caching', async () => {
+    const store = new Map<string, unknown>();
+    await expect(
+      getCachedHolidays('Bangkok', 2026, {
+        redis: memoryHolidayRedis(store),
+        loadCanonical: async () => [
+          {
+            id: '1',
+            name: 'NY',
+            date: '2025-01-01',
+            is_holiday: true,
+          },
+        ],
+        skipRefreshWait: true,
+      })
+    ).rejects.toMatchObject({ code: 'holiday_data_invalid' });
+    expect(store.has(holidayCacheKey('Bangkok', 2026))).toBe(false);
+  });
+
   it('legacy raw array cache hit still works', async () => {
     const store = new Map<string, unknown>([
       [holidayCacheKey('Bangkok', 2026), SAMPLE],
