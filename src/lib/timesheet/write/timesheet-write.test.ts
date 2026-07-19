@@ -154,10 +154,10 @@ describe('snapshot hash', () => {
 });
 
 describe('pending store', () => {
-  it('claims atomically and rejects double claim', () => {
+  it('claims atomically and rejects double claim', async () => {
     const store = createPendingTimesheetChangeStore();
     const snap = { date: '2026-07-18', entries: [] };
-    store.create({
+    await store.create({
       confirmationId: 'confirm_a',
       operation: 'create_entry',
       conversationId: 'C1',
@@ -172,8 +172,8 @@ describe('pending store', () => {
       summaryPayload: {},
       writeEntries: [],
     });
-    expect(store.claimForExecution('confirm_a')?.status).toBe('executing');
-    expect(store.claimForExecution('confirm_a')).toBeNull();
+    expect((await store.claimForExecution('confirm_a'))?.status).toBe('executing');
+    expect(await store.claimForExecution('confirm_a')).toBeNull();
   });
 });
 
@@ -196,7 +196,9 @@ describe('prepare create', () => {
     );
     expect(result.status).toBe('confirmation_required');
     if (result.status !== 'confirmation_required') return;
-    const pending = store.get(result.confirmationId)!;
+    const pending = await store.get(result.confirmationId);
+    expect(pending).toBeDefined();
+    if (!pending) return;
     expect(pending.proposedSnapshot.entries).toHaveLength(3);
     expect(
       pending.proposedSnapshot.entries.some((e) => e.projectId === 'P-HERTZ')
@@ -281,7 +283,9 @@ describe('prepare update/delete', () => {
     );
     expect(result.status).toBe('confirmation_required');
     if (result.status !== 'confirmation_required') return;
-    const pending = store.get(result.confirmationId)!;
+    const pending = await store.get(result.confirmationId);
+    expect(pending).toBeDefined();
+    if (!pending) return;
     expect(pending.proposedSnapshot.entries).toHaveLength(3);
     expect(
       pending.proposedSnapshot.entries.find((e) => e.id === 'e3')?.hours
@@ -315,7 +319,9 @@ describe('prepare update/delete', () => {
     );
     expect(result.status).toBe('confirmation_required');
     if (result.status !== 'confirmation_required') return;
-    const pending = store.get(result.confirmationId)!;
+    const pending = await store.get(result.confirmationId);
+    expect(pending).toBeDefined();
+    if (!pending) return;
     expect(pending.proposedSnapshot.entries).toHaveLength(2);
     expect(
       pending.proposedSnapshot.entries.some((e) => e.id === 'e2')

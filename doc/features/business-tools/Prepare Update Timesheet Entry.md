@@ -21,4 +21,4 @@ Entry must belong to the conversation employee’s day. Cross-employee entries a
 
 ## Behavior
 
-Builds proposed full-day snapshot with the selected entry changed; preserves all other entries; stores pending; returns old vs new confirmation text.
+Builds a lossless current full-day snapshot before selecting or changing an entry; incomplete existing rows fail closed. It then validates the full proposed snapshot, preserves all other entries, stores pending asynchronously in Redis, and returns old vs new confirmation text. Redis unavailability returns `unavailable`; prepare never writes Sheets.

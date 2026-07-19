@@ -5,9 +5,10 @@ import {
   type PendingTimesheetChangeStore,
 } from '@/lib/timesheet/write/pending-store';
 import {
-  daySnapshotFromDailyEntries,
+  buildDaySnapshot,
   hashDaySnapshot,
 } from '@/lib/timesheet/write/snapshot-hash';
+import { PendingStoreError } from '@/lib/timesheet/write/pending-store';
 import {
   formatProjectLabel,
   resolveProject,
@@ -17,6 +18,10 @@ import { auditTimesheetWrite } from '@/lib/timesheet/write/audit-log';
 import type {
   PrepareTimesheetChangeResult,
   SnapshotEntry,
+} from '@/lib/timesheet/write/pending-types';
+import {
+  INCOMPLETE_DAY_SAFE_MESSAGE,
+  STORE_UNAVAILABLE_SAFE_MESSAGE,
 } from '@/lib/timesheet/write/pending-types';
 import { isValidCalendarDate } from '@/lib/tools/business/timesheet/date-input';
 import type { Project, Task } from '@/types';
@@ -50,6 +55,28 @@ function validateHours(hours: number): string | null {
     return 'จำนวนชั่วโมงต่อรายการต้องไม่เกิน 24 ครับ';
   }
   return null;
+}
+
+function incompleteDayResult(
+  identity: WriteIdentity,
+  operation: 'create_entry' | 'update_entry' | 'delete_entry',
+  date: string,
+  failure: Exclude<ReturnType<typeof buildDaySnapshot>, { ok: true }>
+): PrepareTimesheetChangeResult {
+  auditTimesheetWrite({
+    message: 'prepare_incomplete_day',
+    requestId: identity.requestId,
+    conversationId: identity.conversationId,
+    operation,
+    targetDate: date,
+    safeErrorCode: failure.reason,
+    invalidEntryCount: failure.invalidEntryIndexes.length,
+  });
+  return { status: 'validation_failed', message: INCOMPLETE_DAY_SAFE_MESSAGE };
+}
+
+function storeUnavailableResult(): PrepareTimesheetChangeResult {
+  return { status: 'unavailable', message: STORE_UNAVAILABLE_SAFE_MESSAGE };
 }
 
 export async function prepareCreateTimesheetEntry(
@@ -146,7 +173,11 @@ export async function prepareCreateTimesheetEntry(
     input.date
   );
 
-  const original = daySnapshotFromDailyEntries(input.date, day.entries);
+  const originalResult = buildDaySnapshot(input.date, day.entries);
+  if (!originalResult.ok) {
+    return incompleteDayResult(identity, 'create_entry', input.date, originalResult);
+  }
+  const original = originalResult.snapshot;
   const duplicate = day.entries.find(
     (e) => e.projectId === project.ProjectID && e.taskId === task.TaskID
   );
@@ -168,10 +199,11 @@ export async function prepareCreateTimesheetEntry(
       hours: input.hours,
     },
   ];
-  const proposed = {
-    date: input.date,
-    entries: proposedEntries,
-  };
+  const proposedResult = buildDaySnapshot(input.date, proposedEntries);
+  if (!proposedResult.ok) {
+    return incompleteDayResult(identity, 'create_entry', input.date, proposedResult);
+  }
+  const proposed = proposedResult.snapshot;
   const confirmationId = newConfirmationId();
   const confirmationMessage = [
     'ต้องการบันทึกรายการนี้ใช่ไหมครับ',
@@ -182,33 +214,43 @@ export async function prepareCreateTimesheetEntry(
     'ตอบ *ยืนยัน* หรือ *ยกเลิก*',
   ].join('\n');
 
-  store.create({
-    confirmationId,
-    operation: 'create_entry',
-    conversationId: identity.conversationId,
-    slackUserId: identity.slackUserId,
-    employeeId: identity.employeeId,
-    date: input.date,
-    originalSnapshot: original,
-    originalSnapshotHash: hashDaySnapshot(original),
-    proposedSnapshot: proposed,
-    proposedSnapshotHash: hashDaySnapshot(proposed),
-    summary: confirmationMessage,
-    summaryPayload: {
-      clientName: project.ProjectClient,
-      projectName: formatProjectLabel(project),
-      taskName: task.Task,
-      hours: input.hours,
+  try {
+    await store.create({
+      confirmationId,
+      operation: 'create_entry',
+      conversationId: identity.conversationId,
+      slackUserId: identity.slackUserId,
+      employeeId: identity.employeeId,
       date: input.date,
-    },
-    writeEntries: proposedEntries.map((e) => ({
-      projectId: e.projectId,
-      taskId: e.taskId,
-      hours: e.hours,
-    })),
-    requestId: identity.requestId,
-    sourceEventId: identity.sourceEventId,
-  });
+      originalSnapshot: original,
+      originalSnapshotHash: hashDaySnapshot(original),
+      proposedSnapshot: proposed,
+      proposedSnapshotHash: hashDaySnapshot(proposed),
+      summary: confirmationMessage,
+      summaryPayload: {
+        clientName: project.ProjectClient,
+        projectName: formatProjectLabel(project),
+        taskName: task.Task,
+        hours: input.hours,
+        date: input.date,
+      },
+      writeEntries: proposed.entries.map((e) => ({
+        projectId: e.projectId,
+        taskId: e.taskId,
+        hours: e.hours,
+      })),
+      requestId: identity.requestId,
+      sourceEventId: identity.sourceEventId,
+    });
+  } catch (error) {
+    if (
+      error instanceof PendingStoreError &&
+      error.code === 'REDIS_UNAVAILABLE'
+    ) {
+      return storeUnavailableResult();
+    }
+    throw error;
+  }
 
   auditTimesheetWrite({
     message: 'prepare_create',
@@ -290,6 +332,11 @@ export async function prepareUpdateTimesheetEntry(
     },
     input.date
   );
+  const originalResult = buildDaySnapshot(input.date, day.entries);
+  if (!originalResult.ok) {
+    return incompleteDayResult(identity, 'update_entry', input.date, originalResult);
+  }
+  const original = originalResult.snapshot;
 
   let existing = input.entryId?.trim()
     ? day.entries.find((e) => e.id === input.entryId!.trim())
@@ -383,7 +430,6 @@ export async function prepareUpdateTimesheetEntry(
   const nextTaskId = task?.TaskID ?? existing.taskId;
   const nextHours = input.hours ?? existing.hours;
 
-  const original = daySnapshotFromDailyEntries(input.date, day.entries);
   const proposedEntries: SnapshotEntry[] = original.entries.map((e) =>
     e.id === existing.id
       ? {
@@ -394,7 +440,11 @@ export async function prepareUpdateTimesheetEntry(
         }
       : e
   );
-  const proposed = { date: input.date, entries: proposedEntries };
+  const proposedResult = buildDaySnapshot(input.date, proposedEntries);
+  if (!proposedResult.ok) {
+    return incompleteDayResult(identity, 'update_entry', input.date, proposedResult);
+  }
+  const proposed = proposedResult.snapshot;
 
   // Load labels for confirmation
   const projectResFinal = await resolveProject({ projectId: nextProjectId });
@@ -425,34 +475,44 @@ export async function prepareUpdateTimesheetEntry(
   ].join('\n');
 
   const confirmationId = newConfirmationId();
-  store.create({
-    confirmationId,
-    operation: 'update_entry',
-    conversationId: identity.conversationId,
-    slackUserId: identity.slackUserId,
-    employeeId: identity.employeeId,
-    date: input.date,
-    originalSnapshot: original,
-    originalSnapshotHash: hashDaySnapshot(original),
-    proposedSnapshot: proposed,
-    proposedSnapshotHash: hashDaySnapshot(proposed),
-    summary: confirmationMessage,
-    summaryPayload: {
-      fromHours: existing.hours,
-      toHours: nextHours,
-      clientName,
-      projectName: projectLabel,
-      taskName: taskLabel,
+  try {
+    await store.create({
+      confirmationId,
+      operation: 'update_entry',
+      conversationId: identity.conversationId,
+      slackUserId: identity.slackUserId,
+      employeeId: identity.employeeId,
       date: input.date,
-    },
-    writeEntries: proposedEntries.map((e) => ({
-      projectId: e.projectId,
-      taskId: e.taskId,
-      hours: e.hours,
-    })),
-    requestId: identity.requestId,
-    sourceEventId: identity.sourceEventId,
-  });
+      originalSnapshot: original,
+      originalSnapshotHash: hashDaySnapshot(original),
+      proposedSnapshot: proposed,
+      proposedSnapshotHash: hashDaySnapshot(proposed),
+      summary: confirmationMessage,
+      summaryPayload: {
+        fromHours: existing.hours,
+        toHours: nextHours,
+        clientName,
+        projectName: projectLabel,
+        taskName: taskLabel,
+        date: input.date,
+      },
+      writeEntries: proposed.entries.map((e) => ({
+        projectId: e.projectId,
+        taskId: e.taskId,
+        hours: e.hours,
+      })),
+      requestId: identity.requestId,
+      sourceEventId: identity.sourceEventId,
+    });
+  } catch (error) {
+    if (
+      error instanceof PendingStoreError &&
+      error.code === 'REDIS_UNAVAILABLE'
+    ) {
+      return storeUnavailableResult();
+    }
+    throw error;
+  }
 
   auditTimesheetWrite({
     message: 'prepare_update',
@@ -543,6 +603,11 @@ export async function prepareDeleteTimesheetEntry(
     },
     input.date
   );
+  const originalResult = buildDaySnapshot(input.date, day.entries);
+  if (!originalResult.ok) {
+    return incompleteDayResult(identity, 'delete_entry', input.date, originalResult);
+  }
+  const original = originalResult.snapshot;
 
   let existing = input.entryId?.trim()
     ? day.entries.find((e) => e.id === input.entryId!.trim())
@@ -576,11 +641,14 @@ export async function prepareDeleteTimesheetEntry(
     };
   }
 
-  const original = daySnapshotFromDailyEntries(input.date, day.entries);
-  const proposed = {
-    date: input.date,
-    entries: original.entries.filter((e) => e.id !== existing.id),
-  };
+  const proposedResult = buildDaySnapshot(
+    input.date,
+    original.entries.filter((e) => e.id !== existing.id)
+  );
+  if (!proposedResult.ok) {
+    return incompleteDayResult(identity, 'delete_entry', input.date, proposedResult);
+  }
+  const proposed = proposedResult.snapshot;
 
   const confirmationMessage = [
     'ต้องการลบรายการนี้ใช่ไหมครับ',
@@ -592,33 +660,43 @@ export async function prepareDeleteTimesheetEntry(
   ].join('\n');
 
   const confirmationId = newConfirmationId();
-  store.create({
-    confirmationId,
-    operation: 'delete_entry',
-    conversationId: identity.conversationId,
-    slackUserId: identity.slackUserId,
-    employeeId: identity.employeeId,
-    date: input.date,
-    originalSnapshot: original,
-    originalSnapshotHash: hashDaySnapshot(original),
-    proposedSnapshot: proposed,
-    proposedSnapshotHash: hashDaySnapshot(proposed),
-    summary: confirmationMessage,
-    summaryPayload: {
-      clientName: existing.clientName,
-      projectName: existing.projectName,
-      taskName: existing.taskName,
-      hours: existing.hours,
+  try {
+    await store.create({
+      confirmationId,
+      operation: 'delete_entry',
+      conversationId: identity.conversationId,
+      slackUserId: identity.slackUserId,
+      employeeId: identity.employeeId,
       date: input.date,
-    },
-    writeEntries: proposed.entries.map((e) => ({
-      projectId: e.projectId,
-      taskId: e.taskId,
-      hours: e.hours,
-    })),
-    requestId: identity.requestId,
-    sourceEventId: identity.sourceEventId,
-  });
+      originalSnapshot: original,
+      originalSnapshotHash: hashDaySnapshot(original),
+      proposedSnapshot: proposed,
+      proposedSnapshotHash: hashDaySnapshot(proposed),
+      summary: confirmationMessage,
+      summaryPayload: {
+        clientName: existing.clientName,
+        projectName: existing.projectName,
+        taskName: existing.taskName,
+        hours: existing.hours,
+        date: input.date,
+      },
+      writeEntries: proposed.entries.map((e) => ({
+        projectId: e.projectId,
+        taskId: e.taskId,
+        hours: e.hours,
+      })),
+      requestId: identity.requestId,
+      sourceEventId: identity.sourceEventId,
+    });
+  } catch (error) {
+    if (
+      error instanceof PendingStoreError &&
+      error.code === 'REDIS_UNAVAILABLE'
+    ) {
+      return storeUnavailableResult();
+    }
+    throw error;
+  }
 
   auditTimesheetWrite({
     message: 'prepare_delete',

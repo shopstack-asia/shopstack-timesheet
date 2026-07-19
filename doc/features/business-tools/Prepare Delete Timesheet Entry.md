@@ -17,4 +17,4 @@ Prepare removing one Time Log entry. **Does not write Google Sheets.**
 
 ## Behavior
 
-Proposed snapshot = current day without the selected entry. Confirmation required before write.
+The current day must first build as a lossless snapshot; incomplete existing rows fail closed. Proposed snapshot = current day without the selected entry and is validated before the asynchronous Redis pending-store write. Confirmation is required before any Sheets write; Redis unavailability returns `unavailable`.

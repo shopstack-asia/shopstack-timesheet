@@ -28,7 +28,7 @@ General-intent override runs **before** date and work keyword routing.
 
 Unresolved timesheet asks never default to today or the current week.
 
-Write helpers live in `src/lib/ai/write-decision.ts`. Conversation passes `pendingChanges` from the in-memory pending store into `decideBusinessTool`.
+Write helpers live in `src/lib/ai/write-decision.ts`. Conversation asynchronously loads `pendingChanges` from the Redis-backed pending store into `decideBusinessTool`. If Redis is unavailable while resolving a bare confirm/cancel, it returns the safe store-unavailable message rather than claiming no pending change.
 
 ### Separated detectors
 

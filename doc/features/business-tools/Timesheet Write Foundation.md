@@ -9,12 +9,12 @@ Confirmation-gated Timesheet mutations for the Slack AI assistant. Prepare tools
 1. Understand request (Decision Engine)
 2. Resolve date (Asia/Bangkok → `YYYY-MM-DD`)
 3. Resolve Project / Task from canonical master data
-4. Read current persisted day (canonical reader)
+4. Read current persisted day (canonical reader) and build a lossless snapshot; incomplete rows fail closed
 5. Validate business rules
 6. Store `PendingTimesheetChange` (TTL 10 minutes)
 7. Show confirmation summary (no Sheets write)
 8. User confirms → `confirm_timesheet_change({ confirmationId })`
-9. Ownership + expiry + snapshot-hash checks
+9. Ownership + expiry + snapshot-hash checks; Redis unavailability fails closed
 10. Canonical write (full day snapshot)
 11. Canonical read-back verify
 12. Report success only after verification
@@ -42,19 +42,28 @@ There is **no** unconfirmed direct-write tool in the AI registry. Internal helpe
 
 `submitDayTimesheetForStaff` replaces the complete employee/date snapshot. Prepare always builds the **full proposed day** (preserving unaffected entries). Confirmation writes that full snapshot — never a single entry alone.
 
+`buildDaySnapshot` **fails closed** if any existing row lacks `projectId`/`taskId`, has invalid hours, or duplicates project+task. Incomplete days block prepare and confirm so malformed rows cannot be silently dropped and deleted by a replace-all write.
+
 ## Pending store
 
-- Abstraction: `PendingTimesheetChangeStore` (`src/lib/timesheet/write/pending-store.ts`)
-- Default: **in-memory**, TTL **10 minutes**, one-time atomic claim (`pending` → `executing`)
-- **Not horizontally distributed.** Redis (or equivalent) is required before multi-instance deploy.
+- Abstraction: `PendingTimesheetChangeStore` (async)
+- Production default: **Redis** via `getRedisClient()` — Lua atomic create/claim/cancel/CAS
+- Keys: `timesheet:pending-change:{id}`, `timesheet:pending-by-conv:{conversationId}`
+- TTL **10 minutes** pending; completed retention **30 minutes** for Slack retries
+- In-memory Map is an **explicit test double only** — production never falls back to it
+- Redis errors → safe `unavailable` (zero Sheets writes)
 
-## Concurrency
+## Concurrency and recovery
 
-Normalized snapshot hash (`hashDaySnapshot`) compared at confirm time. Mismatch → `conflict` (no overwrite).
+- Optimistic concurrency: confirm writes only when current snapshot matches `originalSnapshotHash` (or content equals original after stale-lease reclaim)
+- If current already matches **proposed** content → complete without rewriting (reconciliation)
+- Executing lease **90s**: stale claims may reclaim; fresh claims return `already_processing`
+- Prefer the phrase **idempotent confirmation with reconciliation** over “exactly-once”
 
-## Idempotency
+## Identity
 
-- Same `confirmationId` executes at most once (atomic claim + completed result cache for Slack retries).
+- Employee identity comes **only** from Conversation Context (never AI)
+- Confirm/cancel require same `slackUserId`, `conversationId`, and `employeeId`
 
 ## Submit Week
 

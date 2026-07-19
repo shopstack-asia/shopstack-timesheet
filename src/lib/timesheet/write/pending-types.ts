@@ -1,6 +1,7 @@
 /**
  * Pending Timesheet Change — server-side confirmation state.
- * In-memory store is NOT safe across multiple app instances (use Redis before horizontal scale).
+ * Production store is Redis (shared across serverless instances).
+ * In-memory Map is test-only and must never be the production default.
  */
 
 export type TimesheetWriteOperation =
@@ -52,6 +53,8 @@ export type PendingTimesheetChange = {
   status: PendingChangeStatus;
   requestId?: string;
   sourceEventId?: string;
+  /** When status became executing (lease / crash recovery). */
+  claimedAt?: Date;
   completedAt?: Date;
   resultSnapshotHash?: string;
   safeError?: string;
@@ -61,7 +64,18 @@ export type PendingTimesheetChange = {
   writeEntries: Array<{ projectId: string; taskId: string; hours: number }>;
 };
 
+/** Pending confirmation TTL (10 minutes). */
 export const PENDING_CHANGE_TTL_MS = 10 * 60 * 1000;
+export const PENDING_CHANGE_TTL_SECONDS = 10 * 60;
+
+/** Keep completed results available for Slack retries. */
+export const COMPLETED_RETENTION_SECONDS = 30 * 60;
+
+/**
+ * Executing lease: if claim is older than this and no completed result,
+ * confirm may attempt crash recovery (reconcile / controlled retry).
+ */
+export const EXECUTING_LEASE_MS = 90 * 1000;
 
 export type PrepareTimesheetChangeResult =
   | {
@@ -85,6 +99,10 @@ export type PrepareTimesheetChangeResult =
     }
   | {
       status: 'validation_failed';
+      message: string;
+    }
+  | {
+      status: 'unavailable';
       message: string;
     }
   | {
@@ -114,7 +132,9 @@ export type ConfirmTimesheetChangeResult =
         | 'expired'
         | 'cancelled'
         | 'already_completed'
-        | 'failed';
+        | 'already_processing'
+        | 'failed'
+        | 'unavailable';
       message: string;
     };
 
@@ -125,6 +145,16 @@ export type CancelTimesheetChangeResult =
       message: string;
     }
   | {
-      status: 'no_pending_change' | 'already_completed' | 'expired';
+      status:
+        | 'no_pending_change'
+        | 'already_completed'
+        | 'expired'
+        | 'unavailable';
       message: string;
     };
+
+export const INCOMPLETE_DAY_SAFE_MESSAGE =
+  'ไม่สามารถแก้ไข Timesheet วันนี้ได้อัตโนมัติ เนื่องจากข้อมูลที่มีอยู่ไม่ครบถ้วน กรุณาตรวจสอบในหน้า Weekly Timesheet ครับ';
+
+export const STORE_UNAVAILABLE_SAFE_MESSAGE =
+  'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ ยังไม่มีการเปลี่ยนแปลงข้อมูล';

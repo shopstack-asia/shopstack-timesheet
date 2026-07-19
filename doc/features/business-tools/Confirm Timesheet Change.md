@@ -16,13 +16,13 @@ Mutation fields (`date`, `hours`, `projectId`, `proposedSnapshot`, `operation`, 
 
 1. Load pending by `confirmationId`
 2. Verify same Slack user, conversation, employee
-3. Status must be `pending` and not expired
-4. Atomic claim → `executing`
-5. Re-read Sheets; hash must equal `originalSnapshotHash` else `conflict`
-6. `submitDayTimesheetForStaff(..., allowCustomProject: false)` with full proposed day
-7. Read-back verify proposed vs persisted (by projectId+taskId+hours)
-8. Mark `completed`; cache result for Slack retries
+3. Status must be `pending` and not expired; a non-stale `executing` claim returns `already_processing`
+4. Atomic claim → `executing`; after the 90-second lease, reclaim and reconcile a stale claim
+5. Re-read Sheets and build a lossless snapshot. Incomplete data fails closed with no write.
+6. If current content already equals proposed, mark completed without writing. Otherwise current must equal original (content equality is accepted only during stale recovery), else `conflict`.
+7. `submitDayTimesheetForStaff(..., allowCustomProject: false)` with full proposed day
+8. Read-back builds a lossless snapshot and verifies proposed content, then marks `completed` and caches the result for Slack retries.
 
 ## Result statuses
 
-`completed` | `conflict` | `expired` | `cancelled` | `already_completed` | `failed`
+`completed` | `conflict` | `expired` | `cancelled` | `already_completed` | `already_processing` | `unavailable` | `failed`
