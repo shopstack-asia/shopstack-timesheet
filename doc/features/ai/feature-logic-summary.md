@@ -5,7 +5,7 @@
 | [AI-First Intent Extraction.md](./features/AI-First%20Intent%20Extraction.md) | Structured NLU → deterministic enforce → tools |
 | [AI Conversation Architecture.md](./features/AI%20Conversation%20Architecture.md) | Modules and boundaries |
 | [AI Prompt Strategy.md](./features/AI%20Prompt%20Strategy.md) | System prompt and extensibility |
-| [AI Decision Engine.md](./features/AI%20Decision%20Engine.md) | Regex router (fallback / flag-off) + force-call gate |
+| [AI Decision Engine.md](./features/AI%20Decision%20Engine.md) | Legacy regex helpers (not production NL routing) + force-call gate |
 | [AI Request Lifecycle.md](./features/AI%20Request%20Lifecycle.md) | Sequence, retries, errors |
 
 ## Related code

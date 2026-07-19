@@ -1,13 +1,13 @@
 /**
- * AI-first decision orchestrator with deterministic regex fallback.
+ * AI-first decision orchestrator — always-on structured extraction.
+ * Regex is used only for bare confirm/cancel and related deterministic helpers.
+ * Natural-language business intents never route through decideBusinessTool().
  */
 
-import {
-  decideBusinessTool,
-  type BusinessToolDecision,
-  type DecideBusinessToolOptions,
+import type {
+  BusinessToolDecision,
+  DecideBusinessToolOptions,
 } from '@/lib/ai/decision-engine';
-import { isAiIntentExtractionEnabled } from '@/lib/ai/intent/config';
 import {
   createRedisIntentDraftStore,
   draftSummary,
@@ -17,22 +17,26 @@ import {
   DRAFT_CANCELLED_MESSAGE,
   DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY,
   enforceStructuredIntentDetailed,
-  looksLikeBusinessTimesheetText,
   type EnforceIntentOptions,
 } from '@/lib/ai/intent/enforce';
 import {
   extractStructuredIntent,
   type ExtractIntentFn,
 } from '@/lib/ai/intent/extract';
-import {
-  isExplicitDraftCancelPhrase,
-} from '@/lib/ai/intent/follow-up';
+import { isExplicitDraftCancelPhrase } from '@/lib/ai/intent/follow-up';
 import type { IntentDraft, StructuredIntent } from '@/lib/ai/intent/types';
 import {
   isBareCancelPhrase,
   isBareConfirmPhrase,
   resolveConfirmOrCancel,
 } from '@/lib/ai/write-decision';
+
+/** Controlled response when structured extraction fails technically. */
+export const EXTRACTION_FAILED_MESSAGE_TH =
+  'ตอนนี้ยังไม่สามารถทำความเข้าใจคำขอได้ครับ กรุณาลองส่งอีกครั้ง โดยระบุวันที่ Project งาน และจำนวนชั่วโมงให้ครบถ้วน';
+
+export const EXTRACTION_FAILED_MESSAGE_EN =
+  'I couldn’t understand that request right now. Please try again with the date, project, task, and hours.';
 
 export type DecideWithIntentOptions = DecideBusinessToolOptions & {
   conversationId?: string;
@@ -41,16 +45,22 @@ export type DecideWithIntentOptions = DecideBusinessToolOptions & {
   eventId?: string;
   extractIntent?: ExtractIntentFn;
   draftStore?: IntentDraftStore;
-  intentExtractionEnabled?: boolean;
-  /** When true, skip AI and use regex Decision Engine only. */
-  forceRegexFallback?: boolean;
   resolveProjectFn?: EnforceIntentOptions['resolveProjectFn'];
   resolveTaskFn?: EnforceIntentOptions['resolveTaskFn'];
 };
 
+export type ExtractionOutcome =
+  | 'extraction_succeeded'
+  | 'extraction_failed'
+  | 'skipped_deterministic'
+  | 'clarification_required'
+  | 'general_conversation'
+  | 'business_tool_selected'
+  | 'draft_store_unavailable';
+
 export type DecideWithIntentResult = {
   decision: BusinessToolDecision;
-  fallbackUsed: boolean;
+  extractionOutcome: ExtractionOutcome;
   extractedIntent?: StructuredIntent;
   typedErrorCode?: string;
   draftStoreAvailable?: boolean;
@@ -68,8 +78,17 @@ function logIntent(payload: Record<string, unknown>): void {
   );
 }
 
+function extractionFailureDecision(): BusinessToolDecision {
+  return {
+    action: 'clarify',
+    message: EXTRACTION_FAILED_MESSAGE_TH,
+    reason: 'extraction_failed',
+  };
+}
+
 /**
- * Primary entry: AI structured extraction → deterministic enforce → regex fallback.
+ * Production entry: bare confirm/cancel → AI structured extraction → enforce.
+ * Never calls decideBusinessTool for natural-language business routing.
  */
 export async function decideWithIntentExtraction(
   userMessage: string,
@@ -78,8 +97,6 @@ export async function decideWithIntentExtraction(
   const text = userMessage?.trim() || '';
   const now = options.now ?? new Date();
   const pending = options.pendingChanges ?? [];
-  const enabled =
-    options.intentExtractionEnabled ?? isAiIntentExtractionEnabled();
 
   const draftStore =
     options.draftStore ??
@@ -99,15 +116,18 @@ export async function decideWithIntentExtraction(
         requestId: options.requestId,
         eventId: options.eventId,
         conversationId: options.conversationId,
+        extractionOutcome: 'skipped_deterministic',
         selectedTool:
           cc.action === 'call_tool' ? cc.toolName : undefined,
         clarificationReason: cc.action === 'clarify' ? cc.reason : undefined,
-        fallbackUsed: false,
       });
-      return { decision: cc, fallbackUsed: false, draftStoreAvailable: true };
+      return {
+        decision: cc,
+        extractionOutcome: 'skipped_deterministic',
+        draftStoreAvailable: true,
+      };
     }
 
-    // Bare cancel with no pending confirmation → clear Intent Draft if any
     if (isBareCancelPhrase(text) && pending.length === 0) {
       const draftLoad = await safeLoadDraft(draftStore, options);
       if (draftLoad.draft) {
@@ -121,7 +141,7 @@ export async function decideWithIntentExtraction(
             message: DRAFT_CANCELLED_MESSAGE,
             reason: 'intent_draft_cancelled',
           },
-          fallbackUsed: false,
+          extractionOutcome: 'skipped_deterministic',
           draftOutcome: 'draft_cleared',
           draftStoreAvailable: draftLoad.available,
         };
@@ -129,14 +149,17 @@ export async function decideWithIntentExtraction(
       if (cc) {
         return {
           decision: cc,
-          fallbackUsed: false,
+          extractionOutcome: 'skipped_deterministic',
           draftStoreAvailable: draftLoad.available,
         };
       }
     }
 
     if (cc) {
-      return { decision: cc, fallbackUsed: false };
+      return {
+        decision: cc,
+        extractionOutcome: 'skipped_deterministic',
+      };
     }
   }
 
@@ -149,7 +172,7 @@ export async function decideWithIntentExtraction(
           message: DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY,
           reason: 'draft_store_unavailable',
         },
-        fallbackUsed: false,
+        extractionOutcome: 'draft_store_unavailable',
         typedErrorCode: 'draft_store_unavailable',
         draftStoreAvailable: false,
       };
@@ -163,15 +186,10 @@ export async function decideWithIntentExtraction(
         message: DRAFT_CANCELLED_MESSAGE,
         reason: 'intent_draft_cancelled',
       },
-      fallbackUsed: false,
+      extractionOutcome: 'skipped_deterministic',
       draftOutcome: 'draft_cleared',
       draftStoreAvailable: true,
     };
-  }
-
-  if (!enabled || options.forceRegexFallback) {
-    const decision = decideBusinessTool(text, { now, pendingChanges: pending });
-    return { decision, fallbackUsed: !enabled };
   }
 
   const draftLoad = await safeLoadDraft(draftStore, options);
@@ -201,12 +219,23 @@ export async function decideWithIntentExtraction(
       resolveTaskFn: options.resolveTaskFn,
     });
 
+    const extractionOutcome: ExtractionOutcome =
+      enforced.decision.reason === 'draft_store_unavailable'
+        ? 'draft_store_unavailable'
+        : enforced.decision.action === 'call_tool'
+          ? 'business_tool_selected'
+          : enforced.decision.action === 'clarify'
+            ? 'clarification_required'
+            : enforced.decision.reason === 'general_conversation'
+              ? 'general_conversation'
+              : 'extraction_succeeded';
+
     logIntent({
       message: 'intent_enforced',
       requestId: options.requestId,
       eventId: options.eventId,
       conversationId: options.conversationId,
-      extractionOutcome: 'ok',
+      extractionOutcome: 'extraction_succeeded',
       extractedIntent: extracted.intent,
       confidence: extracted.confidence,
       missingFields: extracted.missingFields,
@@ -218,7 +247,6 @@ export async function decideWithIntentExtraction(
         enforced.decision.action === 'clarify'
           ? enforced.decision.reason
           : undefined,
-      fallbackUsed: false,
       toolResultStatus: enforced.decision.action,
       draftStoreAvailable: enforced.draftStoreAvailable ?? draftLoad.available,
       draftOutcome: enforced.draftOutcome,
@@ -230,7 +258,7 @@ export async function decideWithIntentExtraction(
 
     return {
       decision: enforced.decision,
-      fallbackUsed: false,
+      extractionOutcome,
       extractedIntent: extracted,
       draftStoreAvailable: enforced.draftStoreAvailable ?? draftLoad.available,
       draftOutcome: enforced.draftOutcome,
@@ -246,39 +274,20 @@ export async function decideWithIntentExtraction(
         : 'extraction_failed';
 
     logIntent({
-      message: 'intent_extraction_fallback',
+      message: 'intent_extraction_failed',
       requestId: options.requestId,
       eventId: options.eventId,
       conversationId: options.conversationId,
-      extractionOutcome: 'failed',
+      extractionOutcome: 'extraction_failed',
       typedErrorCode,
-      fallbackUsed: true,
       draftStoreAvailable: draftLoad.available,
       error: error instanceof Error ? error.message : 'unknown',
     });
 
-    const decision = decideBusinessTool(text, { now, pendingChanges: pending });
-
-    if (
-      decision.action === 'none' &&
-      looksLikeBusinessTimesheetText(text)
-    ) {
-      return {
-        decision: {
-          action: 'clarify',
-          message:
-            'ต้องการทำรายการ Timesheet แบบไหนครับ โปรดระบุวันที่ Project งาน และจำนวนชั่วโมง',
-          reason: 'fallback_business_clarify',
-        },
-        fallbackUsed: true,
-        typedErrorCode,
-        draftStoreAvailable: draftLoad.available,
-      };
-    }
-
+    // Fail closed — never call decideBusinessTool / Business Tools / invent identity errors
     return {
-      decision,
-      fallbackUsed: true,
+      decision: extractionFailureDecision(),
+      extractionOutcome: 'extraction_failed',
       typedErrorCode,
       draftStoreAvailable: draftLoad.available,
     };

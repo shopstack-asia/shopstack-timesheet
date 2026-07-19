@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   decideWithIntentExtraction,
   enforceStructuredIntent,
   parseStructuredIntent,
   createInMemoryIntentDraftStore,
   looksLikeBusinessTimesheetText,
-  isAiIntentExtractionEnabled,
+  EXTRACTION_FAILED_MESSAGE_TH,
   type ExtractIntentFn,
   type StructuredIntent,
 } from '@/lib/ai/intent';
@@ -54,9 +56,9 @@ function createIntent(partial: Partial<StructuredIntent>): StructuredIntent {
   };
 }
 
-/** Test double for enforcement unit coverage only — not production NLU verification.
+/** Fixture extractor for deterministic enforcement unit coverage only.
  * Production extraction boundary tests live in intent-draft-safety.test.ts (mocked OpenAI).
- * Live model quality requires staging Slack with AI_INTENT_EXTRACTION_ENABLED=true.
+ * Live model quality is verified in production Slack after deploy (no staging).
  */
 const fixtureExtractor: ExtractIntentFn = async ({ userMessage, draftSummary }) => {
   const t = userMessage.trim();
@@ -288,15 +290,101 @@ describe('AI intent schema', () => {
   });
 });
 
-describe('feature flag', () => {
-  it('is disabled unless explicitly enabled', () => {
-    expect(isAiIntentExtractionEnabled({})).toBe(false);
-    expect(
-      isAiIntentExtractionEnabled({ AI_INTENT_EXTRACTION_ENABLED: 'true' })
-    ).toBe(true);
-    expect(
-      isAiIntentExtractionEnabled({ AI_INTENT_EXTRACTION_ENABLED: 'false' })
-    ).toBe(false);
+describe('AI-first is unconditional', () => {
+  const removedFlagName = ['AI', 'INTENT', 'EXTRACTION', 'ENABLED'].join('_');
+
+  it('removed intent flag name is absent from production source', () => {
+    const srcRoot = join(process.cwd(), 'src');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (
+          /\.(ts|tsx|js|mjs)$/.test(entry.name) &&
+          !entry.name.includes('.test.')
+        ) {
+          files.push(p);
+        }
+      }
+    };
+    walk(srcRoot);
+    for (const file of files) {
+      const body = readFileSync(file, 'utf8');
+      expect(body).not.toContain(removedFlagName);
+      expect(body).not.toMatch(/forceRegexFallback/);
+      expect(body).not.toMatch(/isAiIntentExtractionEnabled/);
+    }
+  });
+
+  it('runs structured extraction with no env flag set', async () => {
+    delete process.env[removedFlagName];
+    const extractIntent = vi.fn(async () =>
+      createIntent({ intent: 'general_conversation', domain: 'general' })
+    );
+    const result = await decideWithIntentExtraction('ขอบคุณ', {
+      now: FIXED_NOW,
+      extractIntent,
+      conversationId: 'C-flag',
+      slackUserId: 'U1',
+    });
+    expect(extractIntent).toHaveBeenCalled();
+    expect(result.extractionOutcome).toBe('general_conversation');
+    expect(result.decision.action).toBe('none');
+  });
+
+  it('legacy false env value has no effect because the flag is unread', async () => {
+    process.env[removedFlagName] = 'false';
+    const extractIntent = vi.fn(async () =>
+      createIntent({ intent: 'general_conversation', domain: 'general' })
+    );
+    await decideWithIntentExtraction('สวัสดี', {
+      now: FIXED_NOW,
+      extractIntent,
+    });
+    expect(extractIntent).toHaveBeenCalled();
+    delete process.env[removedFlagName];
+  });
+
+  it('runConversation always calls extractor for non-bare messages', async () => {
+    const extractIntent = vi.fn(async () =>
+      createIntent({ intent: 'general_conversation', domain: 'general' })
+    );
+    const generate = vi.fn(async () => ({ text: 'ok', model: 'm' }));
+    await runConversation(
+      {
+        userMessage: 'สวัสดี',
+        conversationId: 'c',
+        metadata: { slackUserId: 'U1' },
+      },
+      { extractIntent, generate, enableTools: false }
+    );
+    expect(extractIntent).toHaveBeenCalled();
+  });
+
+  it('natural Timesheet language never calls decideBusinessTool', async () => {
+    const spy = vi.spyOn(
+      await import('@/lib/ai/decision-engine'),
+      'decideBusinessTool'
+    );
+    const extractIntent = vi.fn(async () =>
+      createIntent({
+        hours: null,
+        taskHint: null,
+        missingFields: ['task', 'hours'],
+      })
+    );
+    await decideWithIntentExtraction('ลงเวลา RMS วันนี้', {
+      now: FIXED_NOW,
+      extractIntent,
+      resolveProjectFn,
+      resolveTaskFn,
+      draftStore: createInMemoryIntentDraftStore(),
+      conversationId: 'C-nl',
+      slackUserId: 'U1',
+    });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 
@@ -445,7 +533,6 @@ describe('follow-up drafts', () => {
 
     const second = await decideWithIntentExtraction('PM', {
       now: FIXED_NOW,
-      intentExtractionEnabled: true,
       extractIntent: fixtureExtractor,
       draftStore: store,
       conversationId: 'C-draft',
@@ -568,7 +655,71 @@ describe('safety and enforcement', () => {
   });
 });
 
-describe('error integrity', () => {
+describe('extraction failure (fail-closed)', () => {
+  const failureCases = [
+    ['timeout', 'extraction_failed: timeout'],
+    ['network', 'extraction_failed: network'],
+    ['rate limit', 'extraction_failed: rate_limited'],
+    ['invalid JSON', 'extraction_failed: invalid_json'],
+    ['empty response', 'extraction_failed: empty_response'],
+    ['malformed intent', 'malformed_intent: bad'],
+    ['forbidden identity field', 'malformed_intent: forbidden identity'],
+  ] as const;
+
+  for (const [label, errMsg] of failureCases) {
+    it(`${label} returns controlled clarification and zero tools`, async () => {
+      const decideSpy = vi.spyOn(
+        await import('@/lib/ai/decision-engine'),
+        'decideBusinessTool'
+      );
+      const result = await decideWithIntentExtraction(
+        'ลงเวลางาน RMS วันนี้ 3 ชม. เป็น PM',
+        {
+          now: FIXED_NOW,
+          extractIntent: async () => {
+            throw new Error(errMsg);
+          },
+        }
+      );
+      expect(result.extractionOutcome).toBe('extraction_failed');
+      expect(result.decision.action).toBe('clarify');
+      if (result.decision.action === 'clarify') {
+        expect(result.decision.message).toBe(EXTRACTION_FAILED_MESSAGE_TH);
+        expect(result.decision.message).not.toMatch(
+          /identity|employee|access|Redis|OpenAI|Project not found/i
+        );
+      }
+      expect(decideSpy).not.toHaveBeenCalled();
+      decideSpy.mockRestore();
+    });
+  }
+
+  it('runConversation on extraction failure never invents identity wording', async () => {
+    const generate = vi.fn(async () => ({
+      text: 'You are employee S1',
+      model: 'm',
+    }));
+    const result = await runConversation(
+      {
+        userMessage: 'ลงเวลา RMS วันนี้',
+        conversationId: 'c-fail',
+        metadata: { slackUserId: 'U1' },
+      },
+      {
+        extractIntent: async () => {
+          throw new Error('extraction_failed: boom');
+        },
+        generate,
+        enableTools: true,
+        toolRegistry: createDefaultToolRegistry(),
+      }
+    );
+    expect(generate).not.toHaveBeenCalled();
+    expect(result.text).toBe(EXTRACTION_FAILED_MESSAGE_TH);
+    expect(result.toolRounds).toBe(0);
+    expect(result.text).not.toMatch(/identity|employee|access/i);
+  });
+
   it('project/task failures never mention identity', async () => {
     const d = await enforceStructuredIntent(
       createIntent({ projectHint: 'unknown', taskHint: 'PM' }),
@@ -580,39 +731,10 @@ describe('error integrity', () => {
       );
     }
   });
-
-  it('fallback for business text does not invent identity error', async () => {
-    const result = await decideWithIntentExtraction(
-      'ลงเวลางาน RMS วันนี้ 3 ชม. เป็น PM',
-      {
-        now: FIXED_NOW,
-        intentExtractionEnabled: true,
-        extractIntent: async () => {
-          throw new Error('extraction_failed: boom');
-        },
-      }
-    );
-    expect(result.fallbackUsed).toBe(true);
-    if (result.decision.action === 'clarify') {
-      expect(result.decision.message).not.toMatch(/identity|access/i);
-    }
-  });
-
-  it('malformed intent does not become identity error', async () => {
-    const result = await decideWithIntentExtraction('ลงเวลา RMS', {
-      now: FIXED_NOW,
-      intentExtractionEnabled: true,
-      extractIntent: async () => {
-        throw new Error('malformed_intent: bad');
-      },
-    });
-    expect(result.typedErrorCode).toBe('malformed_intent');
-    expect(result.fallbackUsed).toBe(true);
-  });
 });
 
-describe('regression: regex Decision Engine still works when flag off', () => {
-  it('preserves bare confirm and general none', () => {
+describe('deterministic helpers remain for bare confirm/cancel (isolated)', () => {
+  it('preserves bare confirm via write-decision path through decideBusinessTool helper', () => {
     expect(
       decideBusinessTool('ยืนยัน', {
         pendingChanges: [{ confirmationId: 'c1', summary: 's' }],
@@ -621,33 +743,32 @@ describe('regression: regex Decision Engine still works when flag off', () => {
       action: 'call_tool',
       toolName: 'confirm_timesheet_change',
     });
-    expect(decideBusinessTool('ขอบคุณ').action).toBe('none');
   });
 
-  it('runConversation with flag off uses decideTool path', async () => {
-    const decideTool = vi.fn(() => ({
-      action: 'none' as const,
-      reason: 'general_conversation',
-    }));
-    const generate = vi.fn(async () => ({
-      text: 'hello',
-      model: 'test',
-    }));
-    const result = await runConversation(
-      {
-        userMessage: 'hi',
-        conversationId: 'c',
-        metadata: { slackUserId: 'U1' },
-      },
-      {
-        decideTool,
-        generate,
-        intentExtractionEnabled: false,
-        enableTools: false,
-      }
-    );
-    expect(decideTool).toHaveBeenCalled();
-    expect(result.text).toBe('hello');
+  it('bare confirm skips extractor in production orchestrator', async () => {
+    const extractIntent = vi.fn(async () => createIntent({}));
+    const result = await decideWithIntentExtraction('ยืนยัน', {
+      now: FIXED_NOW,
+      extractIntent,
+      pendingChanges: [{ confirmationId: 'c1', summary: 'create RMS' }],
+    });
+    expect(extractIntent).not.toHaveBeenCalled();
+    expect(result.extractionOutcome).toBe('skipped_deterministic');
+    expect(result.decision).toMatchObject({
+      action: 'call_tool',
+      toolName: 'confirm_timesheet_change',
+    });
+  });
+
+  it('bare cancel skips extractor when pending exists', async () => {
+    const extractIntent = vi.fn(async () => createIntent({}));
+    const result = await decideWithIntentExtraction('ยกเลิก', {
+      now: FIXED_NOW,
+      extractIntent,
+      pendingChanges: [{ confirmationId: 'c1', summary: 'create RMS' }],
+    });
+    expect(extractIntent).not.toHaveBeenCalled();
+    expect(result.extractionOutcome).toBe('skipped_deterministic');
   });
 });
 

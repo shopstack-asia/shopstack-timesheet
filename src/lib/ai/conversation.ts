@@ -1,12 +1,8 @@
 import { createOpenAIClient } from '@/lib/ai/client';
-import {
-  decideBusinessTool,
-  type BusinessToolDecision,
-} from '@/lib/ai/decision-engine';
+import type { BusinessToolDecision } from '@/lib/ai/decision-engine';
 import { AiError, FRIENDLY_AI_FALLBACK } from '@/lib/ai/errors';
 import {
   decideWithIntentExtraction,
-  isAiIntentExtractionEnabled,
   type DecideWithIntentResult,
   type ExtractIntentFn,
   type IntentDraftStore,
@@ -55,11 +51,9 @@ export type RunConversationDeps = {
   /** Disable tool calling for this run (tests / text-only). */
   enableTools?: boolean;
   /**
-   * Injected sync Decision Engine (used when AI intent extraction is disabled,
-   * or as override when `decideWithIntent` is not provided).
+   * Test-only: inject AI-first decision orchestrator.
+   * Production always uses decideWithIntentExtraction (never regex NL routing).
    */
-  decideTool?: typeof decideBusinessTool;
-  /** Injected AI-first decision orchestrator (tests). */
   decideWithIntent?: (
     userMessage: string,
     options: Parameters<typeof decideWithIntentExtraction>[1]
@@ -68,9 +62,7 @@ export type RunConversationDeps = {
   extractIntent?: ExtractIntentFn;
   /** Intent draft store (tests). */
   intentDraftStore?: IntentDraftStore;
-  /** Override feature flag. */
-  intentExtractionEnabled?: boolean;
-  /** Fixed "now" for Bangkok date resolution in the decision engine. */
+  /** Fixed "now" for Bangkok date resolution. */
   decisionNow?: Date;
 };
 
@@ -221,53 +213,19 @@ export async function runConversation(
     }
   }
 
-  const intentEnabled =
-    deps?.intentExtractionEnabled ?? isAiIntentExtractionEnabled();
+  const intentDecide = deps?.decideWithIntent ?? decideWithIntentExtraction;
+  const intentResult = await intentDecide(userMessage, {
+    now: deps?.decisionNow,
+    pendingChanges,
+    conversationId,
+    slackUserId,
+    requestId: input.requestId,
+    eventId: input.eventId,
+    extractIntent: deps?.extractIntent,
+    draftStore: deps?.intentDraftStore,
+  });
+  const decision: BusinessToolDecision = intentResult.decision;
 
-  let decision: BusinessToolDecision;
-  let intentFallbackUsed = false;
-
-  // Explicit decideTool injection (tests) bypasses AI extraction unless
-  // extractIntent / decideWithIntent is also provided.
-  if (deps?.decideWithIntent) {
-    const intentResult = await deps.decideWithIntent(userMessage, {
-      now: deps?.decisionNow,
-      pendingChanges,
-      conversationId,
-      slackUserId,
-      requestId: input.requestId,
-      eventId: input.eventId,
-      extractIntent: deps?.extractIntent,
-      draftStore: deps?.intentDraftStore,
-      intentExtractionEnabled: intentEnabled,
-    });
-    decision = intentResult.decision;
-    intentFallbackUsed = intentResult.fallbackUsed;
-  } else if (deps?.decideTool) {
-    decision = deps.decideTool(userMessage, {
-      now: deps?.decisionNow,
-      pendingChanges,
-    });
-  } else if (intentEnabled) {
-    const intentResult = await decideWithIntentExtraction(userMessage, {
-      now: deps?.decisionNow,
-      pendingChanges,
-      conversationId,
-      slackUserId,
-      requestId: input.requestId,
-      eventId: input.eventId,
-      extractIntent: deps?.extractIntent,
-      draftStore: deps?.intentDraftStore,
-      intentExtractionEnabled: true,
-    });
-    decision = intentResult.decision;
-    intentFallbackUsed = intentResult.fallbackUsed;
-  } else {
-    decision = decideBusinessTool(userMessage, {
-      now: deps?.decisionNow,
-      pendingChanges,
-    });
-  }
   if (decision.action === 'clarify') {
     console.log(
       JSON.stringify({
@@ -276,7 +234,8 @@ export async function runConversation(
         message: 'conversation completed',
         requestId: input.requestId,
         eventId: input.eventId,
-        usedFallback: intentFallbackUsed,
+        extractionOutcome: intentResult.extractionOutcome,
+        typedErrorCode: intentResult.typedErrorCode,
         reason: decision.reason,
         toolRounds: 0,
         durationMs: Date.now() - started,
@@ -285,8 +244,8 @@ export async function runConversation(
     );
     return {
       text: decision.message,
-      model: intentFallbackUsed ? 'decision-engine-fallback' : 'decision-engine',
-      usedFallback: intentFallbackUsed,
+      model: 'intent-enforcement',
+      usedFallback: false,
       toolRounds: 0,
     };
   }

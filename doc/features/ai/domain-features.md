@@ -2,9 +2,9 @@
 
 | Capability | Behavior |
 |------------|----------|
-| Config | `OPENAI_API_KEY` (+ model/tokens/temperature/timeout); `AI_INTENT_EXTRACTION_ENABLED` for AI-first NLU; startup validation when key present |
+| Config | `OPENAI_API_KEY` (+ model/tokens/temperature/timeout); AI-first NLU always on (no intent flag); startup validation when key present |
 | Prompt | Reliability + Slack Response Style (mrkdwn, compact timesheet, Task≠Role); Business Tools as source of truth |
-| Intent extraction | When flag on: structured JSON intent → deterministic enforce (dates, masters, tool map, drafts). Regex Decision Engine is fallback / flag-off |
+| Intent extraction | Always on: structured JSON intent → deterministic enforce (dates, masters, tool map, drafts). Regex is not a production NL fallback |
 | Decision engine | Bare confirm/cancel + ISO/range safety stay deterministic; exact-tool round-0 enforcement |
 | Generate | Chat Completions via HTTP; optional `tools` / `response_format: json_object` for extraction; timeout; retries on 429/5xx/network |
 | Conversation | Decide (AI-first or regex) → prompt → OpenAI → tool router (forced if needed) → OpenAI → validate → plain text |

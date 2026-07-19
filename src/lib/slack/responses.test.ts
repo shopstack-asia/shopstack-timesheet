@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import type { ExtractIntentFn } from '@/lib/ai/intent';
 import { dispatchSlackEvent } from '@/lib/slack/dispatcher';
 import { handleAppMention } from '@/lib/slack/events/app-mention';
 import { handleDirectMessage } from '@/lib/slack/events/direct-message';
@@ -15,6 +16,24 @@ const mockGenerate = async () => ({
   text: 'Hello! How can I help you today?',
   model: 'gpt-4o-mini',
 });
+
+/** Test-only: classify as general so handlers reach the response model. */
+const mockExtractIntent: ExtractIntentFn = async () => ({
+  domain: 'general',
+  intent: 'general_conversation',
+  confidence: 'high',
+  missingFields: [],
+  ambiguities: [],
+  dateExpression: null,
+  projectHint: null,
+  taskHint: null,
+  hours: null,
+});
+
+const aiTestDeps = {
+  generate: mockGenerate,
+  extractIntent: mockExtractIntent,
+};
 
 function mockClient(overrides?: {
   ok?: boolean;
@@ -184,7 +203,7 @@ describe('DM / app_mention response handlers', () => {
     const { client, postMessage } = mockClient();
     await handleDirectMessage(
       { requestId: 'req', envelope: dmEnvelope() },
-      { client, generate: mockGenerate }
+      { client, ...aiTestDeps }
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -198,7 +217,7 @@ describe('DM / app_mention response handlers', () => {
     const { client, postMessage } = mockClient();
     await handleAppMention(
       { requestId: 'req', envelope: mentionEnvelope() },
-      { client, generate: mockGenerate }
+      { client, ...aiTestDeps }
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -233,7 +252,7 @@ describe('DM / app_mention response handlers', () => {
     await expect(
       handleDirectMessage(
         { requestId: 'req', envelope: dmEnvelope() },
-        { client, generate: mockGenerate }
+        { client, ...aiTestDeps }
       )
     ).resolves.toBeUndefined();
   });
@@ -243,7 +262,7 @@ describe('DM / app_mention response handlers', () => {
     await expect(
       handleAppMention(
         { requestId: 'req', envelope: mentionEnvelope() },
-        { client, generate: mockGenerate }
+        { client, ...aiTestDeps }
       )
     ).resolves.toBeUndefined();
   });
@@ -262,12 +281,12 @@ describe('dispatcher with responses', () => {
     const dm = await dispatchSlackEvent(dmEnvelope(), {
       requestId: 'r1',
       client,
-      generate: mockGenerate,
+      ...aiTestDeps,
     });
     const am = await dispatchSlackEvent(mentionEnvelope(), {
       requestId: 'r2',
       client,
-      generate: mockGenerate,
+      ...aiTestDeps,
     });
     expect(dm).toEqual({ handled: true, route: 'message.im' });
     expect(am).toEqual({ handled: true, route: 'app_mention' });

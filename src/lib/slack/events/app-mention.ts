@@ -16,8 +16,9 @@ export async function handleAppMention(
   ctx: EventHandlerContext,
   deps?: AppMentionHandlerDeps
 ): Promise<void> {
+  const { client, ...rest } = deps ?? {};
   await handleSlackConversation(ctx, 'app_mention', {
-    generate: deps?.generate,
-    slackClient: deps?.client ?? deps?.slackClient,
+    ...rest,
+    slackClient: client ?? deps?.slackClient,
   });
 }

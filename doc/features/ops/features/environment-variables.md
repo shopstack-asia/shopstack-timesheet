@@ -92,7 +92,6 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `OPENAI_TIMEOUT_MS` | Request timeout (default `30000`) |
 | `OPENAI_BASE_URL` | Optional OpenAI-compatible base URL |
 | `OPENAI_VALIDATE_ON_STARTUP` | `true` = always validate OpenAI env at process start |
-| `AI_INTENT_EXTRACTION_ENABLED` | `true` = AI structured intent extraction first (see AI-First Intent Extraction doc) |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | Legacy aliases (still accepted) |
 | `TIMESHEET_AGENT_TIMEZONE` | Agent date resolution (default `Asia/Bangkok`) |
 

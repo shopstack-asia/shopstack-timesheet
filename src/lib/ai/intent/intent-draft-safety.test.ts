@@ -260,7 +260,6 @@ describe('topic switching / no draft hijack', () => {
 
     const pendingFirst = await decideWithIntentExtraction('ยกเลิก', {
       now: FIXED_NOW,
-      intentExtractionEnabled: true,
       extractIntent: async () =>
         createIntent({ intent: 'cancel_timesheet_change' }),
       draftStore: store,
@@ -284,7 +283,6 @@ describe('topic switching / no draft hijack', () => {
     });
     const draftCancel = await decideWithIntentExtraction('ยกเลิก', {
       now: FIXED_NOW,
-      intentExtractionEnabled: true,
       extractIntent: async () =>
         createIntent({ intent: 'cancel_timesheet_change' }),
       draftStore: store,
@@ -305,7 +303,6 @@ describe('topic switching / no draft hijack', () => {
     });
     const explicit = await decideWithIntentExtraction('ยกเลิกคำขอนี้', {
       now: FIXED_NOW,
-      intentExtractionEnabled: true,
       extractIntent: async () =>
         createIntent({ intent: 'general_conversation' }),
       draftStore: store,
@@ -339,7 +336,6 @@ describe('follow-up merge semantics', () => {
 
     const afterPm = await decideWithIntentExtraction('PM', {
       now: FIXED_NOW,
-      intentExtractionEnabled: true,
       extractIntent: async () =>
         createIntent({
           taskHint: 'PM',
@@ -361,7 +357,6 @@ describe('follow-up merge semantics', () => {
 
     const afterHours = await decideWithIntentExtraction('3 ชม.', {
       now: FIXED_NOW,
-      intentExtractionEnabled: true,
       extractIntent: async () =>
         createIntent({
           hours: 3,
@@ -449,8 +444,7 @@ describe('Redis draft failure', () => {
       'ลงเวลางาน RMS วันนี้ 3 ชม. เป็น PM',
       {
         now: FIXED_NOW,
-        intentExtractionEnabled: true,
-        extractIntent: async () => createIntent(),
+          extractIntent: async () => createIntent(),
         draftStore: brokenStore,
         conversationId: 'C-fail',
         slackUserId: 'U1',
@@ -507,7 +501,6 @@ describe('Redis draft failure', () => {
     };
     const result = await decideWithIntentExtraction('PM', {
       now: FIXED_NOW,
-      intentExtractionEnabled: true,
       extractIntent: async () =>
         createIntent({
           taskHint: 'PM',

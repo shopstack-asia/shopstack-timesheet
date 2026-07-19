@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runConversation } from '@/lib/ai/conversation';
+import { decideWithIntentViaRegexForTests } from '@/lib/ai/intent/test-regex-decide';
 import { AI_TIMESHEET_SYSTEM_PROMPT } from '@/lib/ai/prompt';
 import type { GenerateResponseInput } from '@/lib/ai/types';
 import { createContextManager } from '@/lib/conversation/context/context-manager';
@@ -15,6 +16,17 @@ import { mapTimeLogRowToEntry } from '@/lib/timesheet/canonical-read';
 import type { TimeLogRow } from '@/types';
 
 const FIXED_NOW = new Date('2026-07-18T17:00:00.000Z');
+
+/** Test-only: legacy regex decide — not production NL routing. */
+async function runConversationForTest(
+  input: Parameters<typeof runConversation>[0],
+  deps?: Parameters<typeof runConversation>[1]
+) {
+  return runConversation(input, {
+    ...deps,
+    decideWithIntent: deps?.decideWithIntent ?? decideWithIntentViaRegexForTests,
+  });
+}
 
 const july18: DailyTimesheet = {
   date: '2026-07-18',
@@ -130,7 +142,7 @@ describe('Thai / English daily response contracts', () => {
     ].join('\n');
 
     let turn = 0;
-    const result = await runConversation(
+    const result = await runConversationForTest(
       {
         userMessage: 'เมื่อวานฉันทำอะไร',
         conversationId: 'conv-style-th',
@@ -175,7 +187,7 @@ describe('Thai / English daily response contracts', () => {
     ].join('\n');
 
     let turn = 0;
-    const result = await runConversation(
+    const result = await runConversationForTest(
       {
         userMessage: 'What did I do yesterday?',
         conversationId: 'conv-style-en',
@@ -214,7 +226,7 @@ describe('Thai / English daily response contracts', () => {
     registry.register(createGetTimesheetTool(deps));
 
     let turn = 0;
-    const result = await runConversation(
+    const result = await runConversationForTest(
       {
         userMessage: 'เมื่อวานฉันทำอะไร',
         conversationId: 'conv-style-empty',
@@ -258,7 +270,7 @@ describe('Thai / English daily response contracts', () => {
     registry.register(createGetTimesheetRangeTool(deps));
 
     let turn = 0;
-    const result = await runConversation(
+    const result = await runConversationForTest(
       {
         userMessage: 'สรุปสัปดาห์นี้',
         conversationId: 'conv-style-week',

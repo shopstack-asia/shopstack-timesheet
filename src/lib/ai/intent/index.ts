@@ -1,7 +1,6 @@
 export type { StructuredIntent, IntentDraft, AgentTypedErrorCode } from '@/lib/ai/intent/types';
 export { AgentTypedError, INTENT_DRAFT_TTL_SECONDS } from '@/lib/ai/intent/types';
 export { StructuredIntentSchema, parseStructuredIntent } from '@/lib/ai/intent/schema';
-export { isAiIntentExtractionEnabled } from '@/lib/ai/intent/config';
 export {
   extractStructuredIntent,
   INTENT_EXTRACTION_SYSTEM_PROMPT,
@@ -17,8 +16,11 @@ export {
 } from '@/lib/ai/intent/enforce';
 export {
   decideWithIntentExtraction,
+  EXTRACTION_FAILED_MESSAGE_TH,
+  EXTRACTION_FAILED_MESSAGE_EN,
   type DecideWithIntentOptions,
   type DecideWithIntentResult,
+  type ExtractionOutcome,
 } from '@/lib/ai/intent/decide';
 export {
   createInMemoryIntentDraftStore,

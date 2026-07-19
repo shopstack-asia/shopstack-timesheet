@@ -2,7 +2,7 @@
 
 ### Overview
 
-Conversation layer between Slack handlers and Slack responses. Supports plain-text replies and a vendor-agnostic **tool loop** (demonstration tools only). Business APIs are not called.
+Conversation layer between Slack handlers and Slack responses. Supports plain-text replies and a vendor-agnostic **tool loop**. Natural-language business routing always uses AI-first structured intent extraction (`decideWithIntentExtraction`) before Business Tools.
 
 ### Diagram
 
