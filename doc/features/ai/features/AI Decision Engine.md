@@ -13,7 +13,9 @@ Exact-tool enforcement on round 0 remains mandatory via `enforceRequiredBusiness
 General-intent override runs **before** date and work keyword routing.
 
 1. Empty → `none`
+1b. Bare confirm/cancel (`ยืนยัน` / `confirm` / `ยกเลิก` / …) → `confirm_timesheet_change` / `cancel_timesheet_change` or clarify (pending from server store)
 2. Clearly general conversation → `none`
+2b. Timesheet write intents → `prepare_*` (before single-day read routing)
 3. Ambiguous / invalid date → `clarify`
 4. Explicit ISO date range → `get_timesheet_range` (wins over project/client words)
 5. Relative timesheet range → `get_timesheet_range` (week/month phrases only)
@@ -25,6 +27,8 @@ General-intent override runs **before** date and work keyword routing.
 11. Non-business → `none`
 
 Unresolved timesheet asks never default to today or the current week.
+
+Write helpers live in `src/lib/ai/write-decision.ts`. Conversation passes `pendingChanges` from the in-memory pending store into `decideBusinessTool`.
 
 ### Separated detectors
 
@@ -66,5 +70,6 @@ When the Decision Engine returns `call_tool`, the conversation loop requires tha
 ### Code
 
 - `src/lib/ai/decision-engine.ts`
-- `src/lib/ai/conversation.ts` (`enforceRequiredBusinessTool`)
+- `src/lib/ai/write-decision.ts`
+- `src/lib/ai/conversation.ts` (`enforceRequiredBusinessTool`, pendingChanges injection)
 - `src/lib/tools/business/timesheet/bangkok-dates.ts`

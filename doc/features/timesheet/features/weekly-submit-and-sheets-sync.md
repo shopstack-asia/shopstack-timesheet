@@ -4,6 +4,8 @@
 
 Staff submit the week so Google Sheets Time Log matches submitted entries per day for that staff member.
 
+**Note:** There is no separate Sheets “submitted” status column. Persistence is Time Log upsert/delete only. Slack AI `prepare_submit_timesheet` is therefore **unsupported**; Slack mutations use confirmation-gated prepare/confirm tools that call the same `submitDayTimesheetForStaff` day writer (`allowCustomProject: false`).
+
 ### Business Purpose
 
 Persist accurate weekly time against projects/tasks for reporting.

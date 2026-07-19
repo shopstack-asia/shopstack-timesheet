@@ -19,6 +19,7 @@ import {
   type ToolRegistry,
   type ToolRouter,
 } from '@/lib/tools';
+import { getDefaultPendingTimesheetChangeStore } from '@/lib/timesheet/write/pending-store';
 
 /** Soft limit for Slack-friendly replies (chars). */
 export const MAX_AI_RESPONSE_CHARS = 3500;
@@ -161,7 +162,22 @@ export async function runConversation(
   const router = deps?.toolRouter ?? createToolRouter(registry);
   const llmTools = enableTools ? registry.toLlmToolDefinitions() : [];
   const decide = deps?.decideTool ?? decideBusinessTool;
-  const decision = decide(userMessage, { now: deps?.decisionNow });
+  const conversationId =
+    input.conversationId?.trim() ||
+    input.metadata?.conversationId?.trim() ||
+    '';
+  const pendingChanges = conversationId
+    ? getDefaultPendingTimesheetChangeStore()
+        .findPendingByConversation(conversationId)
+        .map((c) => ({
+          confirmationId: c.confirmationId,
+          summary: c.summary,
+        }))
+    : [];
+  const decision = decide(userMessage, {
+    now: deps?.decisionNow,
+    pendingChanges,
+  });
 
   if (decision.action === 'clarify') {
     console.log(

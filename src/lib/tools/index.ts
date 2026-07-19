@@ -1,5 +1,5 @@
 import { BUILTIN_TOOLS } from '@/lib/tools/builtins';
-import { BUSINESS_READ_TOOLS } from '@/lib/tools/business';
+import { BUSINESS_TOOLS } from '@/lib/tools/business';
 import { createToolRegistry, type ToolRegistry } from '@/lib/tools/registry';
 import { createToolRouter, type ToolRouter } from '@/lib/tools/router';
 
@@ -12,9 +12,9 @@ export * from '@/lib/tools/router';
 export * from '@/lib/tools/builtins';
 export * from '@/lib/tools/business';
 
-/** Default registry: demo tools + read-only business tools. */
+/** Default registry: demo tools + business read/write (confirmation-gated) tools. */
 export function createDefaultToolRegistry(): ToolRegistry {
-  return createToolRegistry([...BUILTIN_TOOLS, ...BUSINESS_READ_TOOLS]);
+  return createToolRegistry([...BUILTIN_TOOLS, ...BUSINESS_TOOLS]);
 }
 
 export function createDefaultToolRouter(

@@ -8,6 +8,8 @@
 | [copy-yesterday.md](./features/copy-yesterday.md) | Copy previous day entries |
 | [leave-and-holiday-day-ux.md](./features/leave-and-holiday-day-ux.md) | FULL leave blocks edit; holiday/weekend editable with cues |
 
+Slack AI write path reuses the same day writer (`submitDayTimesheetForStaff`) via confirmation-gated Business Tools — see [Timesheet Write Foundation](../business-tools/Timesheet%20Write%20Foundation.md). UI Submit Week has no separate Sheets submitted flag; Slack `prepare_submit_timesheet` is unsupported.
+
 ## Related code
 
 - `src/components/WeeklyTimesheet.tsx`
