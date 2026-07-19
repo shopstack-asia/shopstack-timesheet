@@ -20,9 +20,15 @@ import {
   applyDraftMerge,
   decideDraftMerge,
   isExplicitDraftCancelPhrase,
+  isExplicitDraftContinuePhrase,
   isUnrelatedGeneralPhrase,
-  recomputeCreateMissingFields,
+  normalizeAnswerKey,
+  computeCanonicalCreateMissingFields,
+  assertCanonicalCreateReady,
+  isValidCreateHours,
+  type TargetResolution,
 } from '@/lib/ai/intent/follow-up';
+import { enrichWriteIntentSlots } from '@/lib/ai/intent/slot-enrich';
 import type {
   IntentDraft,
   IntentMissingField,
@@ -30,6 +36,7 @@ import type {
 } from '@/lib/ai/intent/types';
 import {
   formatProjectLabel,
+  formatTaskLabel,
   resolveProject,
   resolveTask,
 } from '@/lib/timesheet/write/master-resolve';
@@ -39,6 +46,7 @@ import {
   isBareConfirmPhrase,
   isBareCancelPhrase,
 } from '@/lib/ai/write-decision';
+import { getCachedTasks, getCachedProjects } from '@/lib/google-sheets';
 
 export const DRAFT_STORE_UNAVAILABLE_CLARIFY =
   'ระบบยังเก็บคำขอต่อเนื่องไม่ได้ชั่วคราว กรุณาระบุวันที่ Project งาน และจำนวนชั่วโมงในข้อความเดียวครับ';
@@ -48,6 +56,17 @@ export const DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY =
 
 export const DRAFT_CANCELLED_MESSAGE =
   'ยกเลิกคำขอแล้วครับ ยังไม่มีการเตรียมรายการ Timesheet';
+
+function logEnforce(payload: Record<string, unknown>): void {
+  console.log(
+    JSON.stringify({
+      scope: 'ai-intent-enforce',
+      level: 'info',
+      ts: new Date().toISOString(),
+      ...payload,
+    })
+  );
+}
 
 export type EnforceIntentOptions = {
   now?: Date;
@@ -67,7 +86,99 @@ export type EnforceIntentResult = {
   decision: BusinessToolDecision;
   draftOutcome?: string;
   draftStoreAvailable?: boolean;
+  typedErrorCode?: string;
 };
+
+function missingFieldsMessage(fields: IntentMissingField[]): string {
+  return clarifyMissing(fields);
+}
+
+function modelProvidedFieldNames(intent: StructuredIntent): string[] {
+  const fields: string[] = [];
+  if (intent.dateExpression?.trim()) fields.push('date');
+  if (intent.projectHint?.trim()) fields.push('project');
+  if (intent.taskHint?.trim()) fields.push('task');
+  if (intent.hours != null) fields.push('hours');
+  return fields;
+}
+
+function intentFromTrustedDraft(
+  draft: IntentDraft,
+  confidence: StructuredIntent['confidence']
+): StructuredIntent {
+  return {
+    domain: 'timesheet',
+    intent: draft.intent,
+    confidence,
+    dateExpression: draft.dateExpression || draft.resolvedDate || null,
+    projectHint: draft.projectHint ?? null,
+    taskHint: draft.taskHint ?? null,
+    hours: draft.hours ?? null,
+    missingFields: [],
+    ambiguities: [],
+    refersToPrevious: true,
+  };
+}
+
+async function clarifyFromTargetResolution(
+  resolution: Extract<TargetResolution, { status: 'ambiguous' | 'not_found' }>,
+  showCandidates: boolean,
+  options: EnforceIntentOptions
+): Promise<EnforceIntentResult> {
+  if (resolution.targetField === 'task') {
+    if (resolution.status === 'ambiguous' && showCandidates) {
+      const list = resolution.candidateLabels
+        .slice(0, 8)
+        .map((l) => `• ${l}`)
+        .join('\n');
+      return {
+        decision: {
+          action: 'clarify',
+          message: `พบหลาย Task ที่ตรงกับ “${resolution.hint}” ครับ กรุณาเลือก:\n${list}`,
+          reason: 'task_ambiguous',
+        },
+        draftOutcome: 'draft_saved',
+      };
+    }
+    const message = showCandidates
+      ? await listTaskCandidatesMessage(resolution.hint)
+      : `ทำ Task อะไรครับ เช่น Development หรือ Project Management`;
+    return {
+      decision: {
+        action: 'clarify',
+        message,
+        reason: 'task_not_found',
+      },
+      draftOutcome: 'draft_saved',
+    };
+  }
+
+  if (resolution.status === 'ambiguous' && showCandidates) {
+    const list = resolution.candidateLabels
+      .slice(0, 8)
+      .map((l) => `• ${l}`)
+      .join('\n');
+    return {
+      decision: {
+        action: 'clarify',
+        message: `พบหลายโปรเจกต์ที่ตรงกับ “${resolution.hint}” ครับ กรุณาเลือก:\n${list}`,
+        reason: 'project_ambiguous',
+      },
+      draftOutcome: 'draft_saved',
+    };
+  }
+  const message = showCandidates
+    ? await listProjectCandidatesMessage(resolution.hint)
+    : 'ต้องการลงเวลาให้โปรเจกต์ไหนครับ';
+  return {
+    decision: {
+      action: 'clarify',
+      message,
+      reason: 'project_not_found',
+    },
+    draftOutcome: 'draft_saved',
+  };
+}
 
 function clarifyMissing(fields: IntentMissingField[]): string {
   const set = new Set(fields);
@@ -75,22 +186,63 @@ function clarifyMissing(fields: IntentMissingField[]): string {
     return 'ข้อมูล Timesheet ยังไม่ครบ กรุณาระบุวันที่ Project งาน และจำนวนชั่วโมงครับ';
   }
   if (set.has('task') && set.has('hours') && !set.has('project') && !set.has('date')) {
-    return 'ต้องการลงงานอะไร และกี่ชั่วโมงครับ';
+    return 'ต้องการลง Task อะไร และกี่ชั่วโมงครับ เช่น Development หรือ Project Management';
   }
   if (set.has('date') && (set.has('project') || set.has('task'))) {
     return 'ต้องการลงวันที่ไหน และให้ Project/งานอะไรครับ';
   }
   if (set.has('date')) return 'ต้องการลงวันที่ไหนครับ';
   if (set.has('project') && set.has('task')) {
-    return 'ต้องการลงเวลาให้ Project และงานอะไรครับ';
+    return 'ต้องการลงเวลาให้ Project และ Task อะไรครับ';
   }
-  if (set.has('project')) return 'ต้องการลงเวลาให้ Project อะไรครับ';
-  if (set.has('task')) return 'ต้องการลงงานอะไรครับ';
+  if (set.has('project')) return 'ต้องการลงเวลาให้โปรเจกต์ไหนครับ';
+  if (set.has('task')) {
+    return 'ทำ Task อะไรครับ เช่น Development หรือ Project Management';
+  }
   if (set.has('hours')) return 'ต้องการลงกี่ชั่วโมงครับ';
   if (set.has('matchEntry')) {
     return 'ต้องการแก้รายการวันที่ไหน และเปลี่ยนเป็นกี่ชั่วโมงครับ';
   }
   return 'ข้อมูล Timesheet ยังไม่ครบ กรุณาระบุรายละเอียดเพิ่มเติมครับ';
+}
+
+function primaryMissingField(
+  fields: IntentMissingField[]
+): IntentMissingField | undefined {
+  const order: IntentMissingField[] = ['date', 'project', 'task', 'hours'];
+  return order.find((f) => fields.includes(f));
+}
+
+async function listTaskCandidatesMessage(hint: string): Promise<string> {
+  try {
+    const tasks = await getCachedTasks();
+    const list = tasks
+      .slice(0, 8)
+      .map((t) => `• ${formatTaskLabel(t)}`)
+      .join('\n');
+    if (list) {
+      return `ยังไม่พบ Task ชื่อ ${hint} ครับ Task ที่เลือกได้มี:\n${list}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return `ยังไม่พบ Task ชื่อ “${hint}” ครับ ลองระบุชื่องานตามรายการในระบบอีกครั้ง`;
+}
+
+async function listProjectCandidatesMessage(hint: string): Promise<string> {
+  try {
+    const projects = await getCachedProjects();
+    const list = projects
+      .slice(0, 8)
+      .map((p) => `• ${formatProjectLabel(p)}`)
+      .join('\n');
+    if (list) {
+      return `ยังไม่พบ Project ที่ตรงกับ ${hint} ครับ ตัวอย่างที่เลือกได้:\n${list}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return `ยังไม่พบ Project ที่ตรงกับ “${hint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`;
 }
 
 async function persistDraft(
@@ -219,44 +371,272 @@ export async function enforceStructuredIntentDetailed(
     };
   }
 
-  let intent = rawIntent;
+  let intent = enrichWriteIntentSlots(rawIntent, userMessage, now);
   let draftOutcome: string | undefined;
+  let mergeReason: string | undefined;
+  let workingDraft: IntentDraft | null | undefined = options.draft;
 
   if (options.draft) {
     const merge = await decideDraftMerge({
-      intent: rawIntent,
+      intent,
       draft: options.draft,
       userMessage,
       now,
       resolveProjectFn: options.resolveProjectFn,
       resolveTaskFn: options.resolveTaskFn,
     });
+    mergeReason = merge.reason;
+    const outcome = merge.outcome;
+    const outstandingFields = options.draft.missingFields.filter((f) =>
+      ['date', 'project', 'task', 'hours'].includes(f)
+    );
 
-    if (merge.merge) {
-      intent = applyDraftMerge(rawIntent, options.draft, merge.fill);
+    const logMerge = (extra: Record<string, unknown>) => {
+      logEnforce({
+        message: 'draft_merge',
+        conversationId: options.conversationId,
+        draftFound: true,
+        modelIntent: rawIntent.intent,
+        modelRefersToPrevious: Boolean(rawIntent.refersToPrevious),
+        explicitContinue: isExplicitDraftContinuePhrase(userMessage),
+        outstandingFields,
+        mergeDecision: outcome.kind,
+        mergeReason: outcome.reason,
+        DraftMutated: 'draftMutated' in outcome ? outcome.draftMutated : true,
+        ignoredModelFields: modelProvidedFieldNames(rawIntent),
+        ...extra,
+      });
+    };
+
+    if (outcome.kind === 'merge_resolved') {
+      const merged = applyDraftMerge(intent, options.draft, outcome.resolution, {
+        mergeReason: outcome.reason,
+      });
+      intent = merged.intent;
+      workingDraft = {
+        ...options.draft,
+        ...merged.draftPatch,
+      };
+      workingDraft.missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDraft.resolvedDate,
+        hours: workingDraft.hours,
+        resolvedProjectId: workingDraft.resolvedProjectId,
+        resolvedTaskId: workingDraft.resolvedTaskId,
+      });
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: outcome.candidateResolution,
+        modelClassificationOverridden: Boolean(
+          outcome.modelClassificationOverridden
+        ),
+        appliedField: merged.appliedField,
+        resolutionOutcome: 'resolved',
+      });
+    } else if (outcome.kind === 'clarify_with_hint') {
+      const merged = applyDraftMerge(intent, options.draft, outcome.resolution, {
+        mergeReason: outcome.reason,
+      });
+      // Spread patch first so cleared resolved IDs (undefined) win over draft
+      workingDraft = {
+        ...options.draft,
+        ...merged.draftPatch,
+        lastClarificationField: outcome.targetField,
+        lastClarificationReason:
+          outcome.resolution.targetField === 'task'
+            ? outcome.candidateResolution === 'ambiguous'
+              ? 'task_ambiguous'
+              : 'task_not_found'
+            : outcome.candidateResolution === 'ambiguous'
+              ? 'project_ambiguous'
+              : 'project_not_found',
+        clarificationCount: (options.draft.clarificationCount ?? 0) + 1,
+        lastUserAnswerNorm: normalizeAnswerKey(userMessage),
+        lastResolutionOutcome: outcome.candidateResolution,
+      };
+      if (
+        outcome.resolution.targetField === 'task' &&
+        'resolvedTaskId' in merged.draftPatch
+      ) {
+        workingDraft.resolvedTaskId = merged.draftPatch.resolvedTaskId;
+      }
+      if (
+        outcome.resolution.targetField === 'project' &&
+        'resolvedProjectId' in merged.draftPatch
+      ) {
+        workingDraft.resolvedProjectId = merged.draftPatch.resolvedProjectId;
+      }
+      workingDraft.missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDraft.resolvedDate,
+        hours: workingDraft.hours,
+        resolvedProjectId: workingDraft.resolvedProjectId,
+        resolvedTaskId: workingDraft.resolvedTaskId,
+      });
+      await persistDraft(options, {
+        intent: workingDraft.intent,
+        dateExpression: workingDraft.dateExpression,
+        resolvedDate: workingDraft.resolvedDate,
+        projectHint: workingDraft.projectHint,
+        resolvedProjectId: workingDraft.resolvedProjectId,
+        taskHint: workingDraft.taskHint,
+        resolvedTaskId: workingDraft.resolvedTaskId,
+        hours: workingDraft.hours,
+        missingFields: workingDraft.missingFields,
+        ambiguities:
+          outcome.resolution.status === 'ambiguous'
+            ? outcome.resolution.candidateIds
+            : workingDraft.ambiguities,
+        lastClarificationField: workingDraft.lastClarificationField,
+        lastClarificationReason: workingDraft.lastClarificationReason,
+        clarificationCount: workingDraft.clarificationCount,
+        lastUserAnswerNorm: workingDraft.lastUserAnswerNorm,
+        lastResolutionOutcome: workingDraft.lastResolutionOutcome,
+        previous: options.draft,
+      });
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: outcome.candidateResolution,
+        modelClassificationOverridden: Boolean(
+          outcome.modelClassificationOverridden
+        ),
+        appliedField: outcome.targetField,
+        resolutionOutcome: outcome.candidateResolution,
+        DraftMutated: true,
+      });
+      return await clarifyFromTargetResolution(
+        outcome.resolution,
+        outcome.showCandidates,
+        options
+      );
+    } else if (outcome.kind === 'clarify_target') {
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: outcome.candidateResolution,
+        appliedField: null,
+        DraftMutated: false,
+        resolutionOutcome: outcome.candidateResolution,
+      });
+      // Re-clarify from trusted draft — do not mutate slots
+      intent = intentFromTrustedDraft(options.draft, rawIntent.confidence);
+      workingDraft = options.draft;
+    } else if (outcome.kind === 'clarify_missing_list') {
+      logMerge({
+        targetField: null,
+        appliedField: null,
+        DraftMutated: false,
+        missingFields: outcome.missingFields,
+      });
+      const saved = await persistDraft(options, {
+        intent: options.draft.intent,
+        resolvedDate: options.draft.resolvedDate,
+        dateExpression: options.draft.dateExpression,
+        projectHint: options.draft.projectHint,
+        resolvedProjectId: options.draft.resolvedProjectId,
+        taskHint: options.draft.taskHint,
+        resolvedTaskId: options.draft.resolvedTaskId,
+        hours: options.draft.hours,
+        missingFields: outcome.missingFields,
+        lastClarificationField: outcome.missingFields[0],
+        clarificationCount: (options.draft.clarificationCount ?? 0) + 1,
+        previous: options.draft,
+      });
+      return {
+        decision: {
+          action: 'clarify',
+          message: missingFieldsMessage(outcome.missingFields),
+          reason: 'missing_fields',
+        },
+        draftOutcome: saved.outcome,
+        draftStoreAvailable: saved.outcome !== 'draft_store_unavailable',
+      };
+    } else if (outcome.kind === 'dependency') {
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: 'unavailable',
+        DraftMutated: false,
+        resolutionOutcome: 'unavailable',
+      });
+      return {
+        decision: {
+          action: 'clarify',
+          message:
+            'ระบบยังโหลดรายการ Project/Task ไม่ได้ชั่วคราว ลองใหม่อีกครั้งครับ',
+          reason: 'master_data_unavailable',
+        },
+        draftOutcome: 'draft_preserved',
+        typedErrorCode: 'read_failed',
+        draftStoreAvailable: true,
+      };
     } else if (
-      rawIntent.intent === 'general_conversation' ||
-      isUnrelatedGeneralPhrase(userMessage) ||
-      merge.reason === 'unrelated_general_phrase' ||
-      merge.reason === 'general_conversation'
+      outcome.kind === 'general' ||
+      outcome.kind === 'explicit_cancel' ||
+      outcome.kind === 'empty'
     ) {
-      // Preserve incomplete draft — do not clear, do not mutate
+      if (outcome.kind === 'explicit_cancel') {
+        // handled earlier by isExplicitDraftCancelPhrase — keep as safety
+        const cleared = await clearDraft(options);
+        return {
+          decision: {
+            action: 'clarify',
+            message: DRAFT_CANCELLED_MESSAGE,
+            reason: 'intent_draft_cancelled',
+          },
+          draftOutcome: cleared?.outcome ?? 'draft_cleared',
+        };
+      }
+      logMerge({
+        targetField:
+          outcome.kind === 'general' ? outcome.targetField ?? null : null,
+        candidateResolution:
+          outcome.kind === 'general' ? outcome.candidateResolution : undefined,
+        DraftMutated: false,
+        appliedField: null,
+      });
       return {
         decision: { action: 'none', reason: 'general_conversation' },
         draftOutcome: 'draft_preserved',
         draftStoreAvailable: true,
       };
-    } else if (
-      rawIntent.intent === 'unknown' &&
-      !looksLikeBusinessTimesheetText(userMessage)
-    ) {
+    } else if (outcome.kind === 'intent_mismatch') {
+      logMerge({ DraftMutated: false, appliedField: null });
       return {
-        decision: { action: 'none', reason: 'unknown_intent' },
+        decision: {
+          action: 'clarify',
+          message:
+            'คำขอนี้ต่างจากรายการที่ค้างไว้ครับ ถ้าต้องการเริ่มใหม่ให้ยกเลิกคำขอก่อน หรือส่งรายละเอียดครบในข้อความเดียว',
+          reason: 'intent_mismatch',
+        },
         draftOutcome: 'draft_preserved',
       };
+    } else if (outcome.kind === 'no_merge') {
+      logMerge({ DraftMutated: false, appliedField: null });
+      if (
+        intent.intent === 'unknown' &&
+        !looksLikeBusinessTimesheetText(userMessage)
+      ) {
+        return {
+          decision: { action: 'none', reason: 'unknown_intent' },
+          draftOutcome: 'draft_preserved',
+        };
+      }
+      // fall through — may replace draft with new write intent
     }
-    // else: new timesheet intent may replace draft via normal create path
   }
+
+  // Use working draft (possibly patched) for create enforcement
+  const enforceOptions: EnforceIntentOptions = {
+    ...options,
+    draft: workingDraft,
+  };
+
+  logEnforce({
+    message: 'intent_enforcement',
+    requestId: undefined,
+    conversationId: options.conversationId,
+    intent: intent.intent,
+    draftFound: Boolean(options.draft),
+    draftMergeReason: mergeReason,
+    missingFields: intent.missingFields,
+  });
 
   switch (intent.intent) {
     case 'general_conversation':
@@ -393,17 +773,17 @@ export async function enforceStructuredIntentDetailed(
     }
 
     case 'create_timesheet_entry': {
-      const created = await enforceCreate(intent, options, now);
+      const created = await enforceCreate(intent, enforceOptions, now);
       return { ...created, draftOutcome: created.draftOutcome ?? draftOutcome };
     }
 
     case 'update_timesheet_entry': {
-      const updated = await enforceUpdate(intent, options, now);
+      const updated = await enforceUpdate(intent, enforceOptions, now);
       return { ...updated, draftOutcome: updated.draftOutcome ?? draftOutcome };
     }
 
     case 'delete_timesheet_entry': {
-      const deleted = await enforceDelete(intent, options, now);
+      const deleted = await enforceDelete(intent, enforceOptions, now);
       return { ...deleted, draftOutcome: deleted.draftOutcome ?? draftOutcome };
     }
 
@@ -426,40 +806,108 @@ async function enforceCreate(
 ): Promise<EnforceIntentResult> {
   const resolveProj = options.resolveProjectFn ?? resolveProject;
   const resolveTk = options.resolveTaskFn ?? resolveTask;
+  const draft = options.draft;
+  const answerNorm = normalizeAnswerKey(options.userMessage || '');
 
   const date =
-    resolveDateExpression(intent.dateExpression, now) ||
-    options.draft?.resolvedDate;
+    resolveDateExpression(intent.dateExpression, now) || draft?.resolvedDate;
 
-  const hours = parseHoursValue(intent.hours, options.userMessage);
+  const hours =
+    parseHoursValue(intent.hours, options.userMessage) ??
+    (isValidCreateHours(draft?.hours) ? draft!.hours : undefined);
 
-  const projectHint =
-    intent.projectHint?.trim() || options.draft?.projectHint || '';
-  const taskHint = intent.taskHint?.trim() || options.draft?.taskHint || '';
+  let projectHint = intent.projectHint?.trim() || draft?.projectHint || '';
+  let taskHint = intent.taskHint?.trim() || draft?.taskHint || '';
 
-  let resolvedProjectId = options.draft?.resolvedProjectId;
-  let resolvedTaskId = options.draft?.resolvedTaskId;
+  let resolvedProjectId =
+    draft?.resolvedProjectId &&
+    (!intent.projectHint ||
+      normalizeAnswerKey(intent.projectHint) ===
+        normalizeAnswerKey(draft.projectHint || ''))
+      ? draft.resolvedProjectId
+      : undefined;
+  let resolvedTaskId =
+    draft?.resolvedTaskId &&
+    (!intent.taskHint ||
+      normalizeAnswerKey(intent.taskHint) ===
+        normalizeAnswerKey(draft.taskHint || ''))
+      ? draft.resolvedTaskId
+      : undefined;
 
-  const missing = recomputeCreateMissingFields({
-    date,
-    hours,
-    projectHint,
-    resolvedProjectId,
-    taskHint,
-    resolvedTaskId,
-  });
+  // Clear resolved IDs when the corresponding hint changed
+  if (
+    draft?.projectHint &&
+    projectHint &&
+    normalizeAnswerKey(projectHint) !== normalizeAnswerKey(draft.projectHint)
+  ) {
+    resolvedProjectId = undefined;
+  }
+  if (
+    draft?.taskHint &&
+    taskHint &&
+    normalizeAnswerKey(taskHint) !== normalizeAnswerKey(draft.taskHint)
+  ) {
+    resolvedTaskId = undefined;
+  }
 
-  if (missing.length > 0) {
+  // Prefer draft-resolved date when expression already resolved
+  const resolvedDate =
+    (date && isValidIsoDate(date) ? date : undefined) ||
+    (draft?.resolvedDate && isValidIsoDate(draft.resolvedDate)
+      ? draft.resolvedDate
+      : undefined);
+
+  // Early clarify only when we cannot attempt Project/Task resolution
+  // (no hint and no ID). Date/hours must already be valid or missing.
+  const earlyMissing: IntentMissingField[] = [];
+  if (!resolvedDate) earlyMissing.push('date');
+  if (!isValidCreateHours(hours)) earlyMissing.push('hours');
+  if (!resolvedProjectId && !projectHint) earlyMissing.push('project');
+  if (!resolvedTaskId && !taskHint) earlyMissing.push('task');
+
+  if (earlyMissing.length > 0) {
+    const canonicalMissing = computeCanonicalCreateMissingFields({
+      resolvedDate,
+      hours,
+      resolvedProjectId,
+      resolvedTaskId,
+    });
+    const field = primaryMissingField(earlyMissing) || 'task';
+    const prevCount = draft?.clarificationCount ?? 0;
+    const sameField = draft?.lastClarificationField === field;
+    const sameAnswer =
+      Boolean(draft?.lastUserAnswerNorm) &&
+      draft?.lastUserAnswerNorm === answerNorm &&
+      sameField;
+    const clarificationCount = sameField ? prevCount + 1 : 1;
+
+    let message = clarifyMissing(earlyMissing);
+    if (sameAnswer && clarificationCount >= 2) {
+      if (field === 'task') {
+        message = await listTaskCandidatesMessage(taskHint || answerNorm || 'Task');
+      } else if (field === 'project') {
+        message = await listProjectCandidatesMessage(
+          projectHint || answerNorm || 'Project'
+        );
+      }
+    }
+
     const saved = await persistDraft(options, {
       intent: 'create_timesheet_entry',
       dateExpression: intent.dateExpression || undefined,
-      resolvedDate: date,
+      resolvedDate,
       projectHint: projectHint || undefined,
       resolvedProjectId,
       taskHint: taskHint || undefined,
       resolvedTaskId,
-      hours,
-      missingFields: missing,
+      hours: isValidCreateHours(hours) ? hours : undefined,
+      missingFields: canonicalMissing,
+      lastClarificationField: field,
+      lastClarificationReason: 'missing_fields',
+      clarificationCount,
+      lastUserAnswerNorm: answerNorm || undefined,
+      lastResolutionOutcome: 'missing',
+      previous: draft || undefined,
     });
     const fail = incompleteNeedsDraftMessage(saved);
     if (fail) {
@@ -469,16 +917,37 @@ async function enforceCreate(
         draftStoreAvailable: false,
       };
     }
+    logEnforce({
+      message: 'clarification_required',
+      conversationId: options.conversationId,
+      intent: 'create_timesheet_entry',
+      filledFields: {
+        date: Boolean(resolvedDate),
+        project: Boolean(resolvedProjectId),
+        task: Boolean(resolvedTaskId),
+        hours: isValidCreateHours(hours),
+      },
+      missingFields: canonicalMissing,
+      clarificationField: field,
+      clarificationCount,
+      projectResolutionOutcome: 'not_called',
+      taskResolutionOutcome: 'not_called',
+    });
     return {
       decision: {
         action: 'clarify',
-        message: clarifyMissing(missing),
-        reason: 'ai_intent_create_missing_fields',
+        message,
+        reason: 'task_missing',
       },
       draftOutcome: saved.outcome,
       draftStoreAvailable: true,
     };
   }
+
+  let projectOutcome = 'not_called';
+  let taskOutcome = 'not_called';
+  let workingDate = resolvedDate;
+  let workingHours = hours;
 
   if (!resolvedProjectId && projectHint) {
     let proj: Awaited<ReturnType<typeof resolveProj>>;
@@ -492,28 +961,83 @@ async function enforceCreate(
             'ยังไม่สามารถค้นหา Project ได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
           reason: 'read_failed',
         },
+        typedErrorCode: 'read_failed',
+        draftOutcome: 'draft_preserved',
       };
     }
+    projectOutcome = proj.status;
     if (proj.status === 'not_found') {
+      const count = (draft?.clarificationCount ?? 0) + 1;
+      const message =
+        count >= 2
+          ? await listProjectCandidatesMessage(projectHint)
+          : `ยังไม่พบ Project ที่ตรงกับ “${projectHint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`;
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId: undefined,
+        resolvedTaskId,
+      });
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: workingDate,
+        projectHint,
+        resolvedProjectId: undefined,
+        taskHint: taskHint || undefined,
+        resolvedTaskId,
+        hours: workingHours,
+        missingFields,
+        lastClarificationField: 'project',
+        lastClarificationReason: 'project_not_found',
+        clarificationCount: count,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'not_found',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `ไม่พบ Project ที่ตรงกับ “${projectHint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`,
+          message,
           reason: 'project_not_found',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     if (proj.status === 'ambiguous') {
       const list = proj.candidates
         .slice(0, 5)
-        .map((p, i) => `${i + 1}. ${formatProjectLabel(p)}`)
+        .map((p) => `• ${formatProjectLabel(p)}`)
         .join('\n');
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId: undefined,
+        resolvedTaskId,
+      });
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: workingDate,
+        projectHint,
+        resolvedProjectId: undefined,
+        taskHint: taskHint || undefined,
+        resolvedTaskId,
+        hours: workingHours,
+        missingFields,
+        ambiguities: proj.candidates.map((p) => p.ProjectID),
+        lastClarificationField: 'project',
+        lastClarificationReason: 'project_ambiguous',
+        clarificationCount: (draft?.clarificationCount ?? 0) + 1,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'ambiguous',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `พบหลาย Project ที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
-          reason: 'ambiguous_project',
+          message: `พบหลายโปรเจกต์ที่ตรงกับ ${projectHint} กรุณาเลือก:\n${list}`,
+          reason: 'project_ambiguous',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     resolvedProjectId = proj.value.ProjectID;
@@ -531,51 +1055,118 @@ async function enforceCreate(
             'ยังไม่สามารถค้นหางานได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
           reason: 'read_failed',
         },
+        typedErrorCode: 'read_failed',
+        draftOutcome: 'draft_preserved',
       };
     }
+    taskOutcome = task.status;
     if (task.status === 'not_found') {
+      const count = (draft?.clarificationCount ?? 0) + 1;
+      const message = await listTaskCandidatesMessage(taskHint);
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId,
+        resolvedTaskId: undefined,
+      });
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: workingDate,
+        projectHint: projectHint || undefined,
+        resolvedProjectId,
+        taskHint,
+        resolvedTaskId: undefined,
+        hours: workingHours,
+        missingFields,
+        lastClarificationField: 'task',
+        lastClarificationReason: 'task_not_found',
+        clarificationCount: count,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'not_found',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `ไม่พบงานที่ตรงกับ “${taskHint}” ครับ ลองระบุชื่องานอีกครั้ง`,
+          message,
           reason: 'task_not_found',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     if (task.status === 'ambiguous') {
       const list = task.candidates
         .slice(0, 5)
-        .map((t, i) => `${i + 1}. ${t.Task}`)
+        .map((t) => `• ${formatTaskLabel(t)}`)
         .join('\n');
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId,
+        resolvedTaskId: undefined,
+      });
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: workingDate,
+        projectHint: projectHint || undefined,
+        resolvedProjectId,
+        taskHint,
+        resolvedTaskId: undefined,
+        hours: workingHours,
+        missingFields,
+        ambiguities: task.candidates.map((t) => t.TaskID),
+        lastClarificationField: 'task',
+        lastClarificationReason: 'task_ambiguous',
+        clarificationCount: (draft?.clarificationCount ?? 0) + 1,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'ambiguous',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `พบหลายงานที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
-          reason: 'ambiguous_task',
+          message: `พบหลาย Task ที่ตรงกับ ${taskHint} กรุณาเลือก:\n${list}`,
+          reason: 'task_ambiguous',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     resolvedTaskId = task.value.TaskID;
   }
 
-  if (!date || hours === undefined || !resolvedProjectId || !resolvedTaskId) {
+  const ready = assertCanonicalCreateReady({
+    resolvedDate: workingDate,
+    hours: workingHours,
+    resolvedProjectId,
+    resolvedTaskId,
+  });
+  if (!ready.ok) {
     return {
       decision: {
         action: 'clarify',
-        message: clarifyMissing(['date', 'project', 'task', 'hours']),
+        message: clarifyMissing(ready.missingFields),
         reason: 'validation_failed',
       },
     };
   }
 
   await clearDraft(options);
+  logEnforce({
+    message: 'business_tool_selected',
+    conversationId: options.conversationId,
+    intent: 'create_timesheet_entry',
+    selectedTool: 'prepare_create_timesheet_entry',
+    projectResolutionOutcome: projectOutcome,
+    taskResolutionOutcome: taskOutcome,
+    missingFields: [],
+  });
   return {
     decision: {
       action: 'call_tool',
       toolName: 'prepare_create_timesheet_entry',
       arguments: {
-        date,
-        hours,
+        date: workingDate,
+        hours: workingHours,
         projectId: resolvedProjectId,
         taskId: resolvedTaskId,
         ...(projectHint ? { projectName: projectHint } : {}),

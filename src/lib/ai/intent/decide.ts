@@ -251,9 +251,10 @@ export async function decideWithIntentExtraction(
       draftStoreAvailable: enforced.draftStoreAvailable ?? draftLoad.available,
       draftOutcome: enforced.draftOutcome,
       typedErrorCode:
-        enforced.decision.reason === 'draft_store_unavailable'
+        enforced.typedErrorCode ??
+        (enforced.decision.reason === 'draft_store_unavailable'
           ? 'draft_store_unavailable'
-          : undefined,
+          : undefined),
     });
 
     return {
@@ -263,9 +264,10 @@ export async function decideWithIntentExtraction(
       draftStoreAvailable: enforced.draftStoreAvailable ?? draftLoad.available,
       draftOutcome: enforced.draftOutcome,
       typedErrorCode:
-        enforced.decision.reason === 'draft_store_unavailable'
+        enforced.typedErrorCode ??
+        (enforced.decision.reason === 'draft_store_unavailable'
           ? 'draft_store_unavailable'
-          : undefined,
+          : undefined),
     };
   } catch (error) {
     const typedErrorCode =

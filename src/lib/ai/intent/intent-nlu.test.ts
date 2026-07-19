@@ -432,7 +432,7 @@ describe('clarifications', () => {
     );
     expect(d.action).toBe('clarify');
     if (d.action !== 'clarify') return;
-    expect(d.message).toMatch(/งาน|ชั่วโมง/);
+    expect(d.message).toMatch(/Task|งาน|Development|Project Management/i);
     expect(d.reason).not.toMatch(/identity/);
   });
 
@@ -478,7 +478,7 @@ describe('clarifications', () => {
     );
     expect(proj.action).toBe('clarify');
     if (proj.action === 'clarify') {
-      expect(proj.reason).toBe('ambiguous_project');
+      expect(proj.reason).toBe('project_ambiguous');
       expect(proj.message).not.toMatch(/identity|access/i);
     }
 
@@ -493,7 +493,7 @@ describe('clarifications', () => {
     );
     expect(task.action).toBe('clarify');
     if (task.action === 'clarify') {
-      expect(task.reason).toBe('ambiguous_task');
+      expect(task.reason).toBe('task_ambiguous');
     }
   });
 

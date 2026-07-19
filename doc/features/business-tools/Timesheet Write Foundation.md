@@ -6,18 +6,20 @@ Confirmation-gated Timesheet mutations for the Slack AI assistant. Prepare tools
 
 ## Flow
 
-1. Understand request (Decision Engine)
+1. Understand request (AI structured intent → deterministic enforce; Intent Draft for incomplete slots)
 2. Resolve date (Asia/Bangkok → `YYYY-MM-DD`)
-3. Resolve Project / Task from canonical master data
+3. Resolve Project / Task from canonical master data only (no invented IDs; abbreviations derived from masters)
 4. Read current persisted day (canonical reader) and build a lossless snapshot; incomplete rows fail closed
 5. Validate business rules
-6. Store `PendingTimesheetChange` (TTL 10 minutes)
+6. Store `PendingTimesheetChange` (TTL 10 minutes); clear Intent Draft after successful prepare
 7. Show confirmation summary (no Sheets write)
 8. User confirms → `confirm_timesheet_change({ confirmationId })`
 9. Ownership + expiry + snapshot-hash checks; Redis unavailability fails closed
 10. Canonical write (full day snapshot)
 11. Canonical read-back verify
 12. Report success only after verification
+
+Project/Task resolution failures use typed reasons (`project_not_found`, `task_not_found`, ambiguous variants) — never identity or Timesheet-access wording. See [AI-First Intent Extraction](../ai/features/AI-First%20Intent%20Extraction.md).
 
 ## AI-visible tools
 

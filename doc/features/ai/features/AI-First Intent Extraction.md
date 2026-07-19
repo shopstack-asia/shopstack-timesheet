@@ -58,26 +58,106 @@ timesheet:intent-draft:{encodeURIComponent(conversationId)}:{encodeURIComponent(
 - Distinct from pending write confirmations (`timesheet:pending-change:*`).
 - Never stores employeeId / email / Zoho identity.
 
-## Follow-up merge rules
+## Follow-up merge rules (deterministic state machine)
 
-Merge with an existing draft **only** when at least one is true:
+The AI model proposes semantic intent. Deterministic code decides whether a message continues an Intent Draft, which single slot is targeted, and whether to merge, clarify, preserve the Draft, or treat the message as general conversation.
 
-1. Extractor returns `refersToPrevious=true`
-2. Message deterministically matches a missing field (hours / date / unique Project / unique Task)
-3. Explicit continue phrase (e.g. ต่อจากเมื่อกี้)
-4. Same write intent with new slot values
+**Target selection** (trusted Draft only — never model `missingFields`):
 
-**Do not** auto-fill the first missing field from any short message.
+1. Exactly one primary field in `draft.missingFields` → that field
+2. Else `draft.lastClarificationField` if still missing → that field
+3. Else no safe target (never silently multi-merge)
 
-`general_conversation` (ขอบคุณ, เล่าเรื่องแมว, What is a timesheet?, …) while a draft exists:
+Primary fields: `date` | `project` | `task` | `hours`
 
-- Return no Business Tool
-- Do **not** convert to a Timesheet intent
-- Do **not** mutate the draft
+**Decision order:**
+
+1. Empty message → preserve Draft (`empty_message`)
+2. Explicit Draft cancellation → clear Draft (`explicit_cancel`)
+3. Known unrelated phrase (conservative safety layer) without continuation → general (`unrelated_general_phrase`)
+4. Resolve target from Draft; if none → general / `no_merge_signal` / list missing fields (same write) — never multi-merge
+5. Evaluate raw user answer for that target via Bangkok date/hours parsers or **canonical Project/Task masters**
+6. Apply model-intent × resolution table (below)
+
+**Continuation signal** = `refersToPrevious` OR explicit continue phrase.
+
+| Model / signal | resolved | ambiguous | not_found | invalid | unavailable |
+|----------------|----------|-----------|-----------|---------|-------------|
+| Continuation | merge target | hint + candidates | hint + candidates | re-clarify target | dependency |
+| `general_conversation` | override merge | override + candidates | **general** (no Draft change, no candidates) | **general** | dependency |
+| `unknown` | override merge | hint + candidates | re-clarify target (no generic question) | re-clarify | dependency |
+| Same write intent | merge target | hint + candidates | hint + candidates (when clear answer) | re-clarify | dependency |
+| Different write | `intent_mismatch` (unless continuation) | — | — | — | — |
+
+Canonical resolution is the evidence that a short Task/Project answer is a valid follow-up. Message length alone is not evidence.
+
+**General + not_found + no continuation = general conversation** (Draft unchanged). Do not expand `UNRELATED_GENERAL_RE` into the primary NLU.
+
+**Explicit continuation + not_found = targeted business clarification** with canonical candidates.
+
+**Target-only mutation:** `applyDraftMerge` copies trusted Draft state and applies only `TargetResolution.targetField`. Non-target slots and resolved IDs stay authoritative. Model multi-field output is ignored. Model `missingFields` are never final.
+
+**Dependency failure:** resolver throw → `master_data_unavailable` / `read_failed`, Draft preserved, no prepare, no identity wording.
 
 If extraction fails technically, do **not** treat the message as general conversation — return the controlled extraction-failure response.
 
-Draft intent cannot silently change (create ≠ update). Model `missingFields` are recomputed deterministically.
+Draft intent cannot silently change (create ≠ update). Model `missingFields` are **never** final — enforcement recomputes them after every merge.
+
+## Canonical create-slot completion (hint ≠ resolved)
+
+`computeCanonicalCreateMissingFields` (alias `recomputeCreateMissingFields`) is the only completion authority for `create_timesheet_entry` Drafts.
+
+| Slot | Completes only when | Does **not** complete |
+|------|----------------------|------------------------|
+| Date | Valid `resolvedDate` (YYYY-MM-DD) | Bare `dateExpression` |
+| Project | Non-empty trusted `resolvedProjectId` from master resolve | `projectHint` alone |
+| Task | Non-empty trusted `resolvedTaskId` from master resolve | `taskHint` alone |
+| Hours | Finite hours in `(0, 24]` per existing validation | `0`, negative, `NaN`, `Infinity`, missing |
+
+**Hint does not mean resolved.** Hints are diagnostic / clarification state only. The model must never supply `resolvedProjectId` or `resolvedTaskId` — those IDs come only from canonical master resolution (`allowCustomProject` remains false).
+
+**not_found / ambiguous:** preserve the target hint, clear the target resolved ID, keep the target in `missingFields`, set clarification metadata (`lastClarificationField`, reason, `lastResolutionOutcome`), increment `clarificationCount` for that business clarification, show candidates when policy requires — **no prepare**.
+
+**Resolved merge:** set hint + resolved ID for the target only, then recompute `missingFields` from the full working Draft via canonical rules. Non-target slots and resolved IDs are preserved (strict target-only merge).
+
+**Draft load normalization:** `normalizeIntentDraft` runs on Redis/in-memory `get` and on `buildDraftFromSlots`. Legacy Drafts with hint-but-no-ID (or invalid date/hours) and empty `missingFields` are repaired before decision processing. Hints are kept; IDs are never invented.
+
+**Prepare authorization:** before `prepare_create_timesheet_entry`, `assertCanonicalCreateReady` requires valid `resolvedDate`, `resolvedProjectId`, `resolvedTaskId`, valid hours, and empty canonical `missingFields`. Fail closed with targeted clarification if any invariant fails. Do not authorize prepare from hints, model `missingFields`, or model confidence alone.
+
+**Sequential correction examples:**
+
+1. Draft waits for Task → user `ต่อจากเมื่อกี้ ใช้ ZZZ` → Task `not_found`, `taskHint=ZZZ`, `resolvedTaskId` absent, `missingFields` still contains `task` → user `PM` → resolve `T-PM` → prepare once with preserved Project/date/hours.
+2. Task `ambiguous` → candidates, Task still missing → unique selection → prepare.
+3. Same pattern for Project (`ZZZ` → `RMS` / ambiguous → unique Project).
+
+## Soft slot enrichment
+
+After the model classifies a write intent, deterministic enrichment may fill **null** slots still present in the same message (e.g. `เป็น PM` → `taskHint`, hours, today). This does not classify business intent and does not invent Project/Task IDs.
+
+## Canonical Project / Task resolution
+
+`src/lib/timesheet/write/master-resolve.ts` resolves hints against Sheets masters only:
+
+- exact ID / code / name
+- normalized name
+- unique abbreviation / initials derived from canonical names (e.g. `PM` → Project Management when unique)
+- token/stem match (`Project Manager` → Project Management)
+- conservative unique fuzzy match
+
+Never invent IDs. Ambiguous → targeted candidate list. Not found → candidate list after repeated attempts. Failures use typed reasons (`project_not_found`, `task_not_found`, `project_ambiguous`, `task_ambiguous`) — never identity/access wording.
+
+## Targeted clarification and loop prevention
+
+Clarifications name the actual missing/ambiguous field (Project / Task / hours / date). Avoid the generic “ต้องการลงงานอะไรครับ” when the outstanding slot is known.
+
+Draft loop fields: `lastClarificationField`, `lastClarificationReason`, `clarificationCount`, `lastUserAnswerNorm`, `lastResolutionOutcome`.
+
+Rules:
+
+- Never ask the same empty-slot question indefinitely after a new answer is received
+- After failed resolution, explain why and list canonical candidates
+- One Slack event → at most one user-facing decision path (no recursive conversation)
+- Clear draft after successful prepare or explicit draft cancel
 
 ## Cancel precedence
 
@@ -131,4 +211,4 @@ If testing fails: **revert the deployment**. Do not reintroduce regex business-i
 
 ## Required tests
 
-Unconditional AI-first path, extraction failure (zero tools / no regex fallback), draft isolation, topic switching, follow-ups, Redis failure, production extraction boundary, cancel precedence — see `intent-draft-safety.test.ts` and `intent-nlu.test.ts`.
+Unconditional AI-first path, extraction failure (zero tools / no regex fallback), draft isolation, topic switching, follow-ups, Redis failure, production extraction boundary, cancel precedence, **clarification-loop regression**, canonical PM/RMS resolve, **canonical missingFields / sequential not_found→correction / ambiguous→selection / Draft load normalization** — see `intent-draft-safety.test.ts`, `intent-nlu.test.ts`, `intent-clarification-loop.test.ts`, `intent-draft-matrix.test.ts`, `intent-draft-lifecycle.test.ts`.

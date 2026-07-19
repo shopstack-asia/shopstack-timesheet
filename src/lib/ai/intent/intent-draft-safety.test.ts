@@ -424,11 +424,19 @@ describe('follow-up merge semantics', () => {
         taskHint: 'PM',
         refersToPrevious: true,
       }),
-      draft
+      draft,
+      {
+        status: 'resolved',
+        targetField: 'task',
+        taskHint: 'PM',
+        resolvedTaskId: 'T-PM',
+      }
     );
-    expect(merged.intent).toBe('create_timesheet_entry');
-    expect(merged.projectHint).toBe('RMS');
-    expect(merged.taskHint).toBe('PM');
+    expect(merged.intent.intent).toBe('create_timesheet_entry');
+    expect(merged.intent.projectHint).toBe('RMS');
+    expect(merged.intent.taskHint).toBe('PM');
+    expect(merged.mergeMode).toBe('targeted_follow_up');
+    expect(merged.targetField).toBe('task');
   });
 });
 

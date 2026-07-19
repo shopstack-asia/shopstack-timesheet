@@ -5,6 +5,7 @@ import {
   type IntentMissingField,
   type StructuredIntentName,
 } from '@/lib/ai/intent/types';
+import { normalizeIntentDraft } from '@/lib/ai/intent/follow-up';
 
 export type DraftStoreOutcome =
   | 'draft_store_unavailable'
@@ -88,7 +89,10 @@ export function createRedisIntentDraftStore(
           await client().del(key);
           return { outcome: 'draft_expired' };
         }
-        return { outcome: 'draft_found', draft: raw };
+        return {
+          outcome: 'draft_found',
+          draft: normalizeIntentDraft(raw),
+        };
       } catch (error) {
         if (error instanceof DraftStoreError) {
           return { outcome: 'draft_store_unavailable' };
@@ -144,7 +148,10 @@ export function createInMemoryIntentDraftStore(): IntentDraftStore {
       }
       return {
         outcome: 'draft_found',
-        draft: { ...raw, missingFields: [...raw.missingFields] },
+        draft: normalizeIntentDraft({
+          ...raw,
+          missingFields: [...raw.missingFields],
+        }),
       };
     },
     async set(draft) {
@@ -179,10 +186,19 @@ export function buildDraftFromSlots(input: {
   resolvedTaskId?: string;
   hours?: number;
   missingFields: IntentMissingField[];
+  ambiguities?: string[];
+  lastClarificationField?: string;
+  lastClarificationReason?: string;
+  clarificationCount?: number;
+  lastUserAnswerNorm?: string;
+  lastResolutionOutcome?: string;
+  /** Preserve createdAt when updating an existing draft. */
+  previous?: IntentDraft;
   now?: Date;
 }): IntentDraft {
+  // TTL must use wall clock — `now` is only for Bangkok date resolution in callers.
   const wall = new Date();
-  return {
+  const base: IntentDraft = {
     intent: input.intent,
     conversationId: input.conversationId,
     slackUserId: input.slackUserId,
@@ -194,11 +210,18 @@ export function buildDraftFromSlots(input: {
     resolvedTaskId: input.resolvedTaskId,
     hours: input.hours,
     missingFields: input.missingFields,
-    createdAt: wall.toISOString(),
+    ambiguities: input.ambiguities,
+    lastClarificationField: input.lastClarificationField,
+    lastClarificationReason: input.lastClarificationReason,
+    clarificationCount: input.clarificationCount,
+    lastUserAnswerNorm: input.lastUserAnswerNorm,
+    lastResolutionOutcome: input.lastResolutionOutcome,
+    createdAt: input.previous?.createdAt ?? wall.toISOString(),
     expiresAt: new Date(
       wall.getTime() + INTENT_DRAFT_TTL_SECONDS * 1000
     ).toISOString(),
   };
+  return normalizeIntentDraft(base);
 }
 
 export function draftSummary(draft: IntentDraft): string {
@@ -210,5 +233,9 @@ export function draftSummary(draft: IntentDraft): string {
     taskHint: draft.taskHint,
     hours: draft.hours,
     missingFields: draft.missingFields,
+    ambiguities: draft.ambiguities,
+    lastClarificationField: draft.lastClarificationField,
+    lastClarificationReason: draft.lastClarificationReason,
+    clarificationCount: draft.clarificationCount ?? 0,
   });
 }

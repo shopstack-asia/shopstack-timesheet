@@ -30,13 +30,21 @@ Rules:
 - Understand conversational Thai/English, mixed language, abbreviations (RMS, PM, Dev, QA), typos, missing spaces, and alternate word order.
 - projectHint / taskHint are short hints only — never invent IDs.
 - NEVER include employeeId, email, slackUserId, staffId, timesheetStaffId, or Zoho IDs.
-- For incomplete timesheet writes, set intent to the write type and list missingFields (date, project, task, hours).
+- For create/update/delete timesheet entries, extract EVERY present slot from the same message:
+  - dateExpression: วันนี้ / today / yesterday / ISO date
+  - projectHint: project code or name (e.g. RMS)
+  - taskHint: task name or abbreviation after เป็น / as / under / งาน (e.g. เป็น PM → taskHint "PM", Project Manager → "Project Manager")
+  - hours: numeric hours (3 ชม. / 3 hours / สามชั่วโมง → 3)
+- Example: "ลงเวลางาน RMS วันนี้ 3 ชม. เป็น PM" → create_timesheet_entry with projectHint=RMS, dateExpression=วันนี้, hours=3, taskHint=PM, missingFields=[].
+- For incomplete timesheet writes, set intent to the write type and list only truly missing slots in missingFields.
+- When a pending draft summary is provided, fill the outstanding missingFields from short answers (PM, 3, RMS, วันนี้). Set refersToPrevious=true for those answers.
 - Bare confirm/cancel phrases → confirm_timesheet_change / cancel_timesheet_change.
 - General chit-chat (ขอบคุณ, สวัสดี, เล่าเรื่อง…, What is…) → general_conversation with refersToPrevious=false. Never treat thanks or off-topic chat as Project/Task/hours.
-- Set refersToPrevious=true ONLY when the user is clearly answering a missing field from the pending draft summary (e.g. "PM", "3 ชม.", "วันนี้").
+- Set refersToPrevious=true when the user is answering a missing field from the pending draft summary.
 - If clearly timesheet-related but unclear which write → create_timesheet_entry with missingFields, not general_conversation.
 - hours must be a number when present (e.g. สามชั่วโมง → 3).
-- dateExpression may be "วันนี้", "yesterday", ISO date, etc.`;
+- dateExpression may be "วันนี้", "yesterday", ISO date, etc.
+- Do not put Project codes into taskHint or Task abbreviations into projectHint when both appear.`;
 
 export type ExtractIntentInput = {
   userMessage: string;
@@ -55,7 +63,7 @@ function buildMessages(input: ExtractIntentInput): ChatMessage[] {
   ];
   if (input.draftSummary) {
     parts.push(
-      `Pending incomplete draft (same conversation; fill missing fields from the user message):\n${input.draftSummary}`
+      `Pending incomplete draft (same conversation). Fill ONLY the missingFields from the user message; keep other slots. Last clarification and counts are included for context:\n${input.draftSummary}`
     );
   }
   return [

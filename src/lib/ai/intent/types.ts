@@ -58,6 +58,13 @@ export type IntentDraft = {
   resolvedTaskId?: string;
   hours?: number;
   missingFields: IntentMissingField[];
+  ambiguities?: string[];
+  /** Loop prevention — last asked slot */
+  lastClarificationField?: string;
+  lastClarificationReason?: string;
+  clarificationCount?: number;
+  lastUserAnswerNorm?: string;
+  lastResolutionOutcome?: string;
   conversationId: string;
   slackUserId: string;
   createdAt: string;
@@ -71,8 +78,14 @@ export type AgentTypedErrorCode =
   | 'draft_store_unavailable'
   | 'project_not_found'
   | 'task_not_found'
+  | 'project_ambiguous'
+  | 'task_ambiguous'
   | 'ambiguous_project'
   | 'ambiguous_task'
+  | 'project_missing'
+  | 'task_missing'
+  | 'hours_missing'
+  | 'date_missing'
   | 'validation_failed'
   | 'confirmation_expired'
   | 'confirmation_conflict'
