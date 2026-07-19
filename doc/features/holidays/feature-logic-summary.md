@@ -2,7 +2,7 @@
 
 | Doc | Description |
 |-----|-------------|
-| [holiday-cache-and-read-api.md](./features/holiday-cache-and-read-api.md) | Redis populate/read + cron refresh + location resolution |
+| [holiday-cache-and-read-api.md](./features/holiday-cache-and-read-api.md) | Redis cache-aside + Zoho canonical + cron warmup + location resolution |
 
 ## Related code
 

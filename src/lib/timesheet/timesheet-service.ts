@@ -125,6 +125,7 @@ export type SubmitDayOptions = {
   holidayAcknowledged?: boolean;
   futureAcknowledged?: boolean;
   over24Acknowledged?: boolean;
+  requestId?: string;
 };
 
 type SheetsDayMutator = {
@@ -212,7 +213,7 @@ export async function submitDayTimesheetForStaff(
       holidayAcknowledged: options.holidayAcknowledged,
       futureAcknowledged: options.futureAcknowledged,
       over24Acknowledged: options.over24Acknowledged,
-    });
+    }, { requestId: options.requestId });
   } catch (error) {
     if (error instanceof SubmitPolicyError) {
       throw error;
@@ -364,15 +365,9 @@ export async function submitDayTimesheetForStaff(
       }
     });
   } catch (error) {
+    // Preserve typed lock identity for confirm / API mapping
     if (error instanceof SheetsWriteLockError) {
-      const message =
-        error.code === 'LOCK_TIMEOUT'
-          ? 'Timesheet is busy, please try again'
-          : 'Timesheet write lock unavailable, please try again';
-      const err = new Error(message) as Error & { statusCode: number; code: string };
-      err.statusCode = 503;
-      err.code = error.code;
-      throw err;
+      throw error;
     }
     throw error;
   }

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Populate and read Zoho holidays via Redis cache; expose holidays to the timesheet; cron refresh endpoint.
+Populate and read Zoho holidays via Redis **cache-aside** (Zoho reload on miss); expose holidays to the timesheet; optional cron warmup.
 
 ## Scope
 

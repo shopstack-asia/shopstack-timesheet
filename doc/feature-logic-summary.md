@@ -35,7 +35,7 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 |---------|---------------|-------|
 | Google Sheets Time Log R/W | `timesheet`, `master-data` | `src/lib/google-sheets.ts` — in-process master cache 5 min |
 | Zoho People | `auth`, `staff`, `holidays`, `reminders` | `src/lib/zoho-people.ts`, `src/lib/zoho/` |
-| Redis | `staff`, `holidays`, `timesheet` | Leave TTL 21600s; holidays TTL ~1 year; Time Log write lock on submit |
+| Redis | `staff`, `holidays`, `timesheet` | Leave TTL 21600s; holidays cache-aside TTL ~1 year (Zoho reload on miss); Time Log write lock on submit |
 | NextAuth + middleware | `auth`, `layout` | Matcher: `/timesheet`, `/api/timesheet`, `/api/master`, `/api/staff` |
 | Cron bearer secret | `reminders`, `holidays` | `Authorization: Bearer ${CRON_SECRET}` |
 | Theme / view prefs | `layout` | `localStorage` keys `theme`, `timesheetViewMode` |
