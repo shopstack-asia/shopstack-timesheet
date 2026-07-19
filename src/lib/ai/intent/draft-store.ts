@@ -179,8 +179,17 @@ export function buildDraftFromSlots(input: {
   resolvedTaskId?: string;
   hours?: number;
   missingFields: IntentMissingField[];
+  ambiguities?: string[];
+  lastClarificationField?: string;
+  lastClarificationReason?: string;
+  clarificationCount?: number;
+  lastUserAnswerNorm?: string;
+  lastResolutionOutcome?: string;
+  /** Preserve createdAt when updating an existing draft. */
+  previous?: IntentDraft;
   now?: Date;
 }): IntentDraft {
+  // TTL must use wall clock — `now` is only for Bangkok date resolution in callers.
   const wall = new Date();
   return {
     intent: input.intent,
@@ -194,7 +203,13 @@ export function buildDraftFromSlots(input: {
     resolvedTaskId: input.resolvedTaskId,
     hours: input.hours,
     missingFields: input.missingFields,
-    createdAt: wall.toISOString(),
+    ambiguities: input.ambiguities,
+    lastClarificationField: input.lastClarificationField,
+    lastClarificationReason: input.lastClarificationReason,
+    clarificationCount: input.clarificationCount,
+    lastUserAnswerNorm: input.lastUserAnswerNorm,
+    lastResolutionOutcome: input.lastResolutionOutcome,
+    createdAt: input.previous?.createdAt ?? wall.toISOString(),
     expiresAt: new Date(
       wall.getTime() + INTENT_DRAFT_TTL_SECONDS * 1000
     ).toISOString(),
@@ -210,5 +225,9 @@ export function draftSummary(draft: IntentDraft): string {
     taskHint: draft.taskHint,
     hours: draft.hours,
     missingFields: draft.missingFields,
+    ambiguities: draft.ambiguities,
+    lastClarificationField: draft.lastClarificationField,
+    lastClarificationReason: draft.lastClarificationReason,
+    clarificationCount: draft.clarificationCount ?? 0,
   });
 }

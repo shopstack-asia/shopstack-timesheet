@@ -60,14 +60,17 @@ timesheet:intent-draft:{encodeURIComponent(conversationId)}:{encodeURIComponent(
 
 ## Follow-up merge rules
 
-Merge with an existing draft **only** when at least one is true:
+Merge with an existing draft when at least one is true:
 
 1. Extractor returns `refersToPrevious=true`
-2. Message deterministically matches a missing field (hours / date / unique Project / unique Task)
+2. Message deterministically matches a missing field (hours / date / Project / Task — including unresolved hints so enforcement can show candidates)
 3. Explicit continue phrase (e.g. ต่อจากเมื่อกี้)
 4. Same write intent with new slot values
+5. **Structural follow-up:** active draft + outstanding slot(s) + short plausible answer that is not general chat or cancel (does **not** depend only on the model’s `refersToPrevious`)
 
-**Do not** auto-fill the first missing field from any short message.
+When a single slot is outstanding (e.g. only `task`), short answers such as `PM`, `Project Manager`, or `RMS เป็น PM` merge into that slot even if canonical resolve has not succeeded yet. Enforcement then resolves or returns a targeted not-found / ambiguous list.
+
+**Do not** erase resolved Project/Task IDs unless the corresponding hint changes.
 
 `general_conversation` (ขอบคุณ, เล่าเรื่องแมว, What is a timesheet?, …) while a draft exists:
 
@@ -77,7 +80,36 @@ Merge with an existing draft **only** when at least one is true:
 
 If extraction fails technically, do **not** treat the message as general conversation — return the controlled extraction-failure response.
 
-Draft intent cannot silently change (create ≠ update). Model `missingFields` are recomputed deterministically.
+Draft intent cannot silently change (create ≠ update). Model `missingFields` are **never** final — enforcement recomputes them after every merge.
+
+## Soft slot enrichment
+
+After the model classifies a write intent, deterministic enrichment may fill **null** slots still present in the same message (e.g. `เป็น PM` → `taskHint`, hours, today). This does not classify business intent and does not invent Project/Task IDs.
+
+## Canonical Project / Task resolution
+
+`src/lib/timesheet/write/master-resolve.ts` resolves hints against Sheets masters only:
+
+- exact ID / code / name
+- normalized name
+- unique abbreviation / initials derived from canonical names (e.g. `PM` → Project Management when unique)
+- token/stem match (`Project Manager` → Project Management)
+- conservative unique fuzzy match
+
+Never invent IDs. Ambiguous → targeted candidate list. Not found → candidate list after repeated attempts. Failures use typed reasons (`project_not_found`, `task_not_found`, `project_ambiguous`, `task_ambiguous`) — never identity/access wording.
+
+## Targeted clarification and loop prevention
+
+Clarifications name the actual missing/ambiguous field (Project / Task / hours / date). Avoid the generic “ต้องการลงงานอะไรครับ” when the outstanding slot is known.
+
+Draft loop fields: `lastClarificationField`, `lastClarificationReason`, `clarificationCount`, `lastUserAnswerNorm`, `lastResolutionOutcome`.
+
+Rules:
+
+- Never ask the same empty-slot question indefinitely after a new answer is received
+- After failed resolution, explain why and list canonical candidates
+- One Slack event → at most one user-facing decision path (no recursive conversation)
+- Clear draft after successful prepare or explicit draft cancel
 
 ## Cancel precedence
 
@@ -131,4 +163,4 @@ If testing fails: **revert the deployment**. Do not reintroduce regex business-i
 
 ## Required tests
 
-Unconditional AI-first path, extraction failure (zero tools / no regex fallback), draft isolation, topic switching, follow-ups, Redis failure, production extraction boundary, cancel precedence — see `intent-draft-safety.test.ts` and `intent-nlu.test.ts`.
+Unconditional AI-first path, extraction failure (zero tools / no regex fallback), draft isolation, topic switching, follow-ups, Redis failure, production extraction boundary, cancel precedence, **clarification-loop regression** (screenshot conversation), canonical PM/RMS resolve — see `intent-draft-safety.test.ts`, `intent-nlu.test.ts`, `intent-clarification-loop.test.ts`.

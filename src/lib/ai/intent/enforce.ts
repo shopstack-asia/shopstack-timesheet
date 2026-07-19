@@ -21,8 +21,10 @@ import {
   decideDraftMerge,
   isExplicitDraftCancelPhrase,
   isUnrelatedGeneralPhrase,
+  normalizeAnswerKey,
   recomputeCreateMissingFields,
 } from '@/lib/ai/intent/follow-up';
+import { enrichWriteIntentSlots } from '@/lib/ai/intent/slot-enrich';
 import type {
   IntentDraft,
   IntentMissingField,
@@ -30,6 +32,7 @@ import type {
 } from '@/lib/ai/intent/types';
 import {
   formatProjectLabel,
+  formatTaskLabel,
   resolveProject,
   resolveTask,
 } from '@/lib/timesheet/write/master-resolve';
@@ -39,6 +42,7 @@ import {
   isBareConfirmPhrase,
   isBareCancelPhrase,
 } from '@/lib/ai/write-decision';
+import { getCachedTasks, getCachedProjects } from '@/lib/google-sheets';
 
 export const DRAFT_STORE_UNAVAILABLE_CLARIFY =
   'ระบบยังเก็บคำขอต่อเนื่องไม่ได้ชั่วคราว กรุณาระบุวันที่ Project งาน และจำนวนชั่วโมงในข้อความเดียวครับ';
@@ -48,6 +52,17 @@ export const DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY =
 
 export const DRAFT_CANCELLED_MESSAGE =
   'ยกเลิกคำขอแล้วครับ ยังไม่มีการเตรียมรายการ Timesheet';
+
+function logEnforce(payload: Record<string, unknown>): void {
+  console.log(
+    JSON.stringify({
+      scope: 'ai-intent-enforce',
+      level: 'info',
+      ts: new Date().toISOString(),
+      ...payload,
+    })
+  );
+}
 
 export type EnforceIntentOptions = {
   now?: Date;
@@ -75,22 +90,63 @@ function clarifyMissing(fields: IntentMissingField[]): string {
     return 'ข้อมูล Timesheet ยังไม่ครบ กรุณาระบุวันที่ Project งาน และจำนวนชั่วโมงครับ';
   }
   if (set.has('task') && set.has('hours') && !set.has('project') && !set.has('date')) {
-    return 'ต้องการลงงานอะไร และกี่ชั่วโมงครับ';
+    return 'ต้องการลง Task อะไร และกี่ชั่วโมงครับ เช่น Development หรือ Project Management';
   }
   if (set.has('date') && (set.has('project') || set.has('task'))) {
     return 'ต้องการลงวันที่ไหน และให้ Project/งานอะไรครับ';
   }
   if (set.has('date')) return 'ต้องการลงวันที่ไหนครับ';
   if (set.has('project') && set.has('task')) {
-    return 'ต้องการลงเวลาให้ Project และงานอะไรครับ';
+    return 'ต้องการลงเวลาให้ Project และ Task อะไรครับ';
   }
-  if (set.has('project')) return 'ต้องการลงเวลาให้ Project อะไรครับ';
-  if (set.has('task')) return 'ต้องการลงงานอะไรครับ';
+  if (set.has('project')) return 'ต้องการลงเวลาให้โปรเจกต์ไหนครับ';
+  if (set.has('task')) {
+    return 'ทำ Task อะไรครับ เช่น Development หรือ Project Management';
+  }
   if (set.has('hours')) return 'ต้องการลงกี่ชั่วโมงครับ';
   if (set.has('matchEntry')) {
     return 'ต้องการแก้รายการวันที่ไหน และเปลี่ยนเป็นกี่ชั่วโมงครับ';
   }
   return 'ข้อมูล Timesheet ยังไม่ครบ กรุณาระบุรายละเอียดเพิ่มเติมครับ';
+}
+
+function primaryMissingField(
+  fields: IntentMissingField[]
+): IntentMissingField | undefined {
+  const order: IntentMissingField[] = ['date', 'project', 'task', 'hours'];
+  return order.find((f) => fields.includes(f));
+}
+
+async function listTaskCandidatesMessage(hint: string): Promise<string> {
+  try {
+    const tasks = await getCachedTasks();
+    const list = tasks
+      .slice(0, 8)
+      .map((t) => `• ${formatTaskLabel(t)}`)
+      .join('\n');
+    if (list) {
+      return `ยังไม่พบ Task ชื่อ ${hint} ครับ Task ที่เลือกได้มี:\n${list}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return `ยังไม่พบ Task ชื่อ “${hint}” ครับ ลองระบุชื่องานตามรายการในระบบอีกครั้ง`;
+}
+
+async function listProjectCandidatesMessage(hint: string): Promise<string> {
+  try {
+    const projects = await getCachedProjects();
+    const list = projects
+      .slice(0, 8)
+      .map((p) => `• ${formatProjectLabel(p)}`)
+      .join('\n');
+    if (list) {
+      return `ยังไม่พบ Project ที่ตรงกับ ${hint} ครับ ตัวอย่างที่เลือกได้:\n${list}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return `ยังไม่พบ Project ที่ตรงกับ “${hint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`;
 }
 
 async function persistDraft(
@@ -219,23 +275,29 @@ export async function enforceStructuredIntentDetailed(
     };
   }
 
-  let intent = rawIntent;
+  let intent = enrichWriteIntentSlots(rawIntent, userMessage, now);
   let draftOutcome: string | undefined;
+  let mergeReason: string | undefined;
 
   if (options.draft) {
     const merge = await decideDraftMerge({
-      intent: rawIntent,
+      intent,
       draft: options.draft,
       userMessage,
       now,
       resolveProjectFn: options.resolveProjectFn,
       resolveTaskFn: options.resolveTaskFn,
     });
+    mergeReason = merge.reason;
 
     if (merge.merge) {
-      intent = applyDraftMerge(rawIntent, options.draft, merge.fill);
+      intent = enrichWriteIntentSlots(
+        applyDraftMerge(intent, options.draft, merge.fill),
+        userMessage,
+        now
+      );
     } else if (
-      rawIntent.intent === 'general_conversation' ||
+      intent.intent === 'general_conversation' ||
       isUnrelatedGeneralPhrase(userMessage) ||
       merge.reason === 'unrelated_general_phrase' ||
       merge.reason === 'general_conversation'
@@ -247,7 +309,7 @@ export async function enforceStructuredIntentDetailed(
         draftStoreAvailable: true,
       };
     } else if (
-      rawIntent.intent === 'unknown' &&
+      intent.intent === 'unknown' &&
       !looksLikeBusinessTimesheetText(userMessage)
     ) {
       return {
@@ -257,6 +319,16 @@ export async function enforceStructuredIntentDetailed(
     }
     // else: new timesheet intent may replace draft via normal create path
   }
+
+  logEnforce({
+    message: 'intent_enforcement',
+    requestId: undefined,
+    conversationId: options.conversationId,
+    intent: intent.intent,
+    draftFound: Boolean(options.draft),
+    draftMergeReason: mergeReason,
+    missingFields: intent.missingFields,
+  });
 
   switch (intent.intent) {
     case 'general_conversation':
@@ -426,21 +498,49 @@ async function enforceCreate(
 ): Promise<EnforceIntentResult> {
   const resolveProj = options.resolveProjectFn ?? resolveProject;
   const resolveTk = options.resolveTaskFn ?? resolveTask;
+  const draft = options.draft;
+  const answerNorm = normalizeAnswerKey(options.userMessage || '');
 
   const date =
-    resolveDateExpression(intent.dateExpression, now) ||
-    options.draft?.resolvedDate;
+    resolveDateExpression(intent.dateExpression, now) || draft?.resolvedDate;
 
   const hours = parseHoursValue(intent.hours, options.userMessage);
 
-  const projectHint =
-    intent.projectHint?.trim() || options.draft?.projectHint || '';
-  const taskHint = intent.taskHint?.trim() || options.draft?.taskHint || '';
+  let projectHint = intent.projectHint?.trim() || draft?.projectHint || '';
+  let taskHint = intent.taskHint?.trim() || draft?.taskHint || '';
 
-  let resolvedProjectId = options.draft?.resolvedProjectId;
-  let resolvedTaskId = options.draft?.resolvedTaskId;
+  let resolvedProjectId =
+    draft?.resolvedProjectId &&
+    (!intent.projectHint ||
+      normalizeAnswerKey(intent.projectHint) ===
+        normalizeAnswerKey(draft.projectHint || ''))
+      ? draft.resolvedProjectId
+      : undefined;
+  let resolvedTaskId =
+    draft?.resolvedTaskId &&
+    (!intent.taskHint ||
+      normalizeAnswerKey(intent.taskHint) ===
+        normalizeAnswerKey(draft.taskHint || ''))
+      ? draft.resolvedTaskId
+      : undefined;
 
-  const missing = recomputeCreateMissingFields({
+  // Clear resolved IDs when the corresponding hint changed
+  if (
+    draft?.projectHint &&
+    projectHint &&
+    normalizeAnswerKey(projectHint) !== normalizeAnswerKey(draft.projectHint)
+  ) {
+    resolvedProjectId = undefined;
+  }
+  if (
+    draft?.taskHint &&
+    taskHint &&
+    normalizeAnswerKey(taskHint) !== normalizeAnswerKey(draft.taskHint)
+  ) {
+    resolvedTaskId = undefined;
+  }
+
+  const missingBeforeResolve = recomputeCreateMissingFields({
     date,
     hours,
     projectHint,
@@ -449,7 +549,27 @@ async function enforceCreate(
     resolvedTaskId,
   });
 
-  if (missing.length > 0) {
+  if (missingBeforeResolve.length > 0) {
+    const field = primaryMissingField(missingBeforeResolve) || 'task';
+    const prevCount = draft?.clarificationCount ?? 0;
+    const sameField = draft?.lastClarificationField === field;
+    const sameAnswer =
+      Boolean(draft?.lastUserAnswerNorm) &&
+      draft?.lastUserAnswerNorm === answerNorm &&
+      sameField;
+    const clarificationCount = sameField ? prevCount + 1 : 1;
+
+    let message = clarifyMissing(missingBeforeResolve);
+    if (sameAnswer && clarificationCount >= 2) {
+      if (field === 'task') {
+        message = await listTaskCandidatesMessage(taskHint || answerNorm || 'Task');
+      } else if (field === 'project') {
+        message = await listProjectCandidatesMessage(
+          projectHint || answerNorm || 'Project'
+        );
+      }
+    }
+
     const saved = await persistDraft(options, {
       intent: 'create_timesheet_entry',
       dateExpression: intent.dateExpression || undefined,
@@ -459,7 +579,13 @@ async function enforceCreate(
       taskHint: taskHint || undefined,
       resolvedTaskId,
       hours,
-      missingFields: missing,
+      missingFields: missingBeforeResolve,
+      lastClarificationField: field,
+      lastClarificationReason: 'missing_fields',
+      clarificationCount,
+      lastUserAnswerNorm: answerNorm || undefined,
+      lastResolutionOutcome: 'missing',
+      previous: draft || undefined,
     });
     const fail = incompleteNeedsDraftMessage(saved);
     if (fail) {
@@ -469,16 +595,35 @@ async function enforceCreate(
         draftStoreAvailable: false,
       };
     }
+    logEnforce({
+      message: 'clarification_required',
+      conversationId: options.conversationId,
+      intent: 'create_timesheet_entry',
+      filledFields: {
+        date: Boolean(date),
+        project: Boolean(projectHint || resolvedProjectId),
+        task: Boolean(taskHint || resolvedTaskId),
+        hours: hours !== undefined,
+      },
+      missingFields: missingBeforeResolve,
+      clarificationField: field,
+      clarificationCount,
+      projectResolutionOutcome: 'not_called',
+      taskResolutionOutcome: 'not_called',
+    });
     return {
       decision: {
         action: 'clarify',
-        message: clarifyMissing(missing),
-        reason: 'ai_intent_create_missing_fields',
+        message,
+        reason: 'task_missing',
       },
       draftOutcome: saved.outcome,
       draftStoreAvailable: true,
     };
   }
+
+  let projectOutcome = 'not_called';
+  let taskOutcome = 'not_called';
 
   if (!resolvedProjectId && projectHint) {
     let proj: Awaited<ReturnType<typeof resolveProj>>;
@@ -494,11 +639,32 @@ async function enforceCreate(
         },
       };
     }
+    projectOutcome = proj.status;
     if (proj.status === 'not_found') {
+      const count = (draft?.clarificationCount ?? 0) + 1;
+      const message =
+        count >= 2
+          ? await listProjectCandidatesMessage(projectHint)
+          : `ยังไม่พบ Project ที่ตรงกับ “${projectHint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`;
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: date,
+        projectHint,
+        taskHint: taskHint || undefined,
+        resolvedTaskId,
+        hours,
+        missingFields: ['project'],
+        lastClarificationField: 'project',
+        lastClarificationReason: 'project_not_found',
+        clarificationCount: count,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'not_found',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `ไม่พบ Project ที่ตรงกับ “${projectHint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`,
+          message,
           reason: 'project_not_found',
         },
       };
@@ -506,13 +672,29 @@ async function enforceCreate(
     if (proj.status === 'ambiguous') {
       const list = proj.candidates
         .slice(0, 5)
-        .map((p, i) => `${i + 1}. ${formatProjectLabel(p)}`)
+        .map((p) => `• ${formatProjectLabel(p)}`)
         .join('\n');
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: date,
+        projectHint,
+        taskHint: taskHint || undefined,
+        resolvedTaskId,
+        hours,
+        missingFields: ['project'],
+        ambiguities: proj.candidates.map((p) => p.ProjectID),
+        lastClarificationField: 'project',
+        lastClarificationReason: 'project_ambiguous',
+        clarificationCount: (draft?.clarificationCount ?? 0) + 1,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'ambiguous',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `พบหลาย Project ที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
-          reason: 'ambiguous_project',
+          message: `พบหลายโปรเจกต์ที่ตรงกับ ${projectHint} กรุณาเลือก:\n${list}`,
+          reason: 'project_ambiguous',
         },
       };
     }
@@ -533,11 +715,29 @@ async function enforceCreate(
         },
       };
     }
+    taskOutcome = task.status;
     if (task.status === 'not_found') {
+      const count = (draft?.clarificationCount ?? 0) + 1;
+      const message = await listTaskCandidatesMessage(taskHint);
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: date,
+        projectHint: projectHint || undefined,
+        resolvedProjectId,
+        taskHint,
+        hours,
+        missingFields: ['task'],
+        lastClarificationField: 'task',
+        lastClarificationReason: 'task_not_found',
+        clarificationCount: count,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'not_found',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `ไม่พบงานที่ตรงกับ “${taskHint}” ครับ ลองระบุชื่องานอีกครั้ง`,
+          message,
           reason: 'task_not_found',
         },
       };
@@ -545,13 +745,29 @@ async function enforceCreate(
     if (task.status === 'ambiguous') {
       const list = task.candidates
         .slice(0, 5)
-        .map((t, i) => `${i + 1}. ${t.Task}`)
+        .map((t) => `• ${formatTaskLabel(t)}`)
         .join('\n');
+      await persistDraft(options, {
+        intent: 'create_timesheet_entry',
+        resolvedDate: date,
+        projectHint: projectHint || undefined,
+        resolvedProjectId,
+        taskHint,
+        hours,
+        missingFields: ['task'],
+        ambiguities: task.candidates.map((t) => t.TaskID),
+        lastClarificationField: 'task',
+        lastClarificationReason: 'task_ambiguous',
+        clarificationCount: (draft?.clarificationCount ?? 0) + 1,
+        lastUserAnswerNorm: answerNorm,
+        lastResolutionOutcome: 'ambiguous',
+        previous: draft || undefined,
+      });
       return {
         decision: {
           action: 'clarify',
-          message: `พบหลายงานที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
-          reason: 'ambiguous_task',
+          message: `พบหลาย Task ที่ตรงกับ ${taskHint} กรุณาเลือก:\n${list}`,
+          reason: 'task_ambiguous',
         },
       };
     }
@@ -562,13 +778,31 @@ async function enforceCreate(
     return {
       decision: {
         action: 'clarify',
-        message: clarifyMissing(['date', 'project', 'task', 'hours']),
+        message: clarifyMissing(
+          recomputeCreateMissingFields({
+            date,
+            hours,
+            projectHint,
+            resolvedProjectId,
+            taskHint,
+            resolvedTaskId,
+          })
+        ),
         reason: 'validation_failed',
       },
     };
   }
 
   await clearDraft(options);
+  logEnforce({
+    message: 'business_tool_selected',
+    conversationId: options.conversationId,
+    intent: 'create_timesheet_entry',
+    selectedTool: 'prepare_create_timesheet_entry',
+    projectResolutionOutcome: projectOutcome,
+    taskResolutionOutcome: taskOutcome,
+    missingFields: [],
+  });
   return {
     decision: {
       action: 'call_tool',

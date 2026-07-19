@@ -38,7 +38,10 @@ export {
   isExplicitDraftCancelPhrase,
   isUnrelatedGeneralPhrase,
   recomputeCreateMissingFields,
+  structuralFillForOutstandingSlot,
+  normalizeAnswerKey,
 } from '@/lib/ai/intent/follow-up';
+export { enrichWriteIntentSlots } from '@/lib/ai/intent/slot-enrich';
 export {
   resolveDateExpression,
   parseHoursValue,
