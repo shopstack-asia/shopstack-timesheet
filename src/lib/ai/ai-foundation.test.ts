@@ -6,6 +6,7 @@ import {
   resetOpenAIClient,
 } from '@/lib/ai/client';
 import { runConversation } from '@/lib/ai/conversation';
+import type { ExtractIntentFn } from '@/lib/ai/intent';
 import { AiError, FRIENDLY_AI_FALLBACK } from '@/lib/ai/errors';
 import { AI_TIMESHEET_SYSTEM_PROMPT, buildPrompt } from '@/lib/ai/prompt';
 
@@ -193,6 +194,29 @@ describe('createOpenAIClient tool calling', () => {
   });
 });
 
+
+const generalExtractIntent: ExtractIntentFn = async () => ({
+  domain: 'general',
+  intent: 'general_conversation',
+  confidence: 'high',
+  missingFields: [],
+  ambiguities: [],
+  dateExpression: null,
+  projectHint: null,
+  taskHint: null,
+  hours: null,
+});
+
+async function runConversationForTest(
+  input: Parameters<typeof runConversation>[0],
+  deps?: Parameters<typeof runConversation>[1]
+) {
+  return runConversation(input, {
+    extractIntent: generalExtractIntent,
+    ...deps,
+  });
+}
+
 describe('runConversation', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -200,7 +224,7 @@ describe('runConversation', () => {
   });
 
   it('returns AI text', async () => {
-    const result = await runConversation(
+    const result = await runConversationForTest(
       { userMessage: 'Hello', requestId: 'r1' },
       {
         generate: async () => ({
@@ -215,7 +239,7 @@ describe('runConversation', () => {
   });
 
   it('returns friendly fallback on OpenAI failure', async () => {
-    const result = await runConversation(
+    const result = await runConversationForTest(
       { userMessage: 'Hello' },
       {
         generate: async () => {
@@ -229,7 +253,7 @@ describe('runConversation', () => {
   });
 
   it('rejects oversized responses via fallback', async () => {
-    const result = await runConversation(
+    const result = await runConversationForTest(
       { userMessage: 'Hello' },
       {
         generate: async () => ({
@@ -244,7 +268,7 @@ describe('runConversation', () => {
   });
 
   it('empty user message uses fallback', async () => {
-    const result = await runConversation(
+    const result = await runConversationForTest(
       { userMessage: '   ' },
       { enableTools: false }
     );
@@ -253,7 +277,7 @@ describe('runConversation', () => {
 
   it('executes tool then returns final AI answer (ping)', async () => {
     let round = 0;
-    const result = await runConversation(
+    const result = await runConversationForTest(
       { userMessage: 'Ping', requestId: 'r1', eventId: 'e1' },
       {
         generate: async (input) => {
@@ -291,7 +315,7 @@ describe('runConversation', () => {
 
   it('executes current_time tool then final answer', async () => {
     let round = 0;
-    const result = await runConversation(
+    const result = await runConversationForTest(
       { userMessage: 'What time is it?' },
       {
         generate: async () => {
@@ -322,7 +346,7 @@ describe('runConversation', () => {
 
   it('feeds unknown-tool failure back to the model', async () => {
     let round = 0;
-    const result = await runConversation(
+    const result = await runConversationForTest(
       { userMessage: 'Do something' },
       {
         generate: async (input) => {

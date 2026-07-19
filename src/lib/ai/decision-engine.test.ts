@@ -6,6 +6,7 @@ import {
   runConversation,
 } from '@/lib/ai/conversation';
 import { decideBusinessTool } from '@/lib/ai/decision-engine';
+import { decideWithIntentViaRegexForTests } from '@/lib/ai/intent/test-regex-decide';
 import { AI_TIMESHEET_SYSTEM_PROMPT } from '@/lib/ai/prompt';
 import type { BusinessApiClient } from '@/lib/business/client';
 import { createContextManager } from '@/lib/conversation/context/context-manager';
@@ -30,6 +31,18 @@ import { createToolRegistry } from '@/lib/tools/registry';
 import type { GenerateResponseInput } from '@/lib/ai/types';
 
 const FIXED_NOW = new Date('2026-07-18T17:00:00.000Z'); // Bangkok 2026-07-19
+
+/** Test-only: use legacy regex decide so these suites avoid live OpenAI extraction. */
+async function runConversationForTest(
+  input: Parameters<typeof runConversation>[0],
+  deps?: Parameters<typeof runConversation>[1]
+) {
+  return runConversation(input, {
+    ...deps,
+    decideWithIntent: deps?.decideWithIntent ?? decideWithIntentViaRegexForTests,
+  });
+}
+
 
 function mockClient(paths: Record<string, unknown>): BusinessApiClient {
   return {
@@ -378,7 +391,7 @@ describe('AI conversation tool selection reliability', () => {
     const executed: string[] = [];
     let turn = 0;
 
-    const result = await runConversation(
+    const result = await runConversationForTest(
       input('ฉันมี project อะไรบ้าง', 'conv-wc'),
       {
         toolRegistry: registry,
@@ -426,7 +439,7 @@ describe('AI conversation tool selection reliability', () => {
       const executedArgs: string[] = [];
       let turn = 0;
 
-      const result = await runConversation(input(msg, `conv-range-${msg}`), {
+      const result = await runConversationForTest(input(msg, `conv-range-${msg}`), {
         toolRegistry: registry,
         decisionNow: FIXED_NOW,
         generate: async (req: GenerateResponseInput) => {
@@ -465,7 +478,7 @@ describe('AI conversation tool selection reliability', () => {
       const executed: string[] = [];
       let turn = 0;
 
-      const result = await runConversation(
+      const result = await runConversationForTest(
         input('เมื่อวานฉันทำอะไร', `conv-wrong-${wrongTool ?? 'none'}`),
         {
           toolRegistry: registry,
@@ -546,7 +559,7 @@ describe('AI conversation tool selection reliability', () => {
     reg.register(wrapped);
 
     let turn = 0;
-    await runConversation(input('เมื่อวานฉันทำอะไร', 'conv-dup'), {
+    await runConversationForTest(input('เมื่อวานฉันทำอะไร', 'conv-dup'), {
       toolRegistry: reg,
       decisionNow: FIXED_NOW,
       generate: async (req: GenerateResponseInput) => {
@@ -583,7 +596,7 @@ describe('AI conversation tool selection reliability', () => {
       text: 'You logged 8 hours yesterday.',
       model: 'm',
     }));
-    const result = await runConversation(
+    const result = await runConversationForTest(
       input('เมื่อวานฉันทำอะไร', 'conv-missing'),
       {
         toolRegistry: createToolRegistry(),
@@ -601,7 +614,7 @@ describe('AI conversation tool selection reliability', () => {
       text: 'You logged 8 hours yesterday.',
       model: 'm',
     }));
-    const result = await runConversation(
+    const result = await runConversationForTest(
       input('เมื่อวานฉันทำอะไร', 'conv-disabled'),
       {
         enableTools: false,
@@ -627,7 +640,7 @@ describe('AI conversation tool selection reliability', () => {
     });
     let turn = 0;
 
-    const result = await runConversation(input('สรุปสัปดาห์นี้', 'conv-week'), {
+    const result = await runConversationForTest(input('สรุปสัปดาห์นี้', 'conv-week'), {
       toolRegistry: registry,
       decisionNow: FIXED_NOW,
       generate: async (req: GenerateResponseInput) => {
@@ -646,7 +659,7 @@ describe('AI conversation tool selection reliability', () => {
 
   it('ขอบคุณ calls no tool', async () => {
     const route = vi.fn();
-    const result = await runConversation(input('ขอบคุณ', 'conv-thanks'), {
+    const result = await runConversationForTest(input('ขอบคุณ', 'conv-thanks'), {
       decisionNow: FIXED_NOW,
       toolRegistry: createToolRegistry(),
       toolRouter: { route } as never,
@@ -658,7 +671,7 @@ describe('AI conversation tool selection reliability', () => {
 
   it('เล่าเรื่องแมวให้ฟัง calls no tool', async () => {
     const route = vi.fn();
-    const result = await runConversation(
+    const result = await runConversationForTest(
       input('เล่าเรื่องแมวให้ฟัง', 'conv-cat'),
       {
         decisionNow: FIXED_NOW,
@@ -719,7 +732,7 @@ describe('fail-closed potential work-context intents', () => {
     const executed: string[] = [];
     let turn = 0;
 
-    const result = await runConversation(
+    const result = await runConversationForTest(
       input('What am I currently working on?', 'conv-assign'),
       {
         toolRegistry: registry,
@@ -757,7 +770,7 @@ describe('fail-closed potential work-context intents', () => {
       const executed: string[] = [];
       let turn = 0;
 
-      await runConversation(
+      await runConversationForTest(
         input('Show my assignments', `conv-wrong-wc-${wrongTool}`),
         {
           toolRegistry: registry,
@@ -813,7 +826,7 @@ describe('missing timesheet period clarification', () => {
 
     const generate = vi.fn();
     const route = vi.fn();
-    const result = await runConversation(input(msg, `conv-clarify-${msg}`), {
+    const result = await runConversationForTest(input(msg, `conv-clarify-${msg}`), {
       decisionNow: FIXED_NOW,
       toolRegistry: createToolRegistry(),
       toolRouter: { route } as never,
@@ -821,7 +834,7 @@ describe('missing timesheet period clarification', () => {
     });
     expect(generate).not.toHaveBeenCalled();
     expect(route).not.toHaveBeenCalled();
-    expect(result.model).toBe('decision-engine');
+    expect(result.model).toBe('intent-enforcement');
     expect(result.text).toMatch(/date/i);
   });
 });
@@ -1004,7 +1017,7 @@ describe('runConversation general requests never hit tools', () => {
     'Will it rain tomorrow?',
   ])('%s → no Business Tool', async (msg) => {
     const route = vi.fn();
-    const result = await runConversation(input(msg, `conv-gen-${msg.slice(0, 12)}`), {
+    const result = await runConversationForTest(input(msg, `conv-gen-${msg.slice(0, 12)}`), {
       decisionNow: FIXED_NOW,
       toolRegistry: createToolRegistry(),
       toolRouter: { route } as never,
@@ -1028,7 +1041,7 @@ describe('runConversation standalone today forces get_timesheet', () => {
     const executed: string[] = [];
     let turn = 0;
 
-    const result = await runConversation(input(msg, `conv-today-${msg}`), {
+    const result = await runConversationForTest(input(msg, `conv-today-${msg}`), {
       toolRegistry: registry,
       decisionNow: FIXED_NOW,
       generate: async (req: GenerateResponseInput) => {
@@ -1105,7 +1118,7 @@ describe('runConversation get_my_profile enforcement', () => {
     const executed: string[] = [];
     let turn = 0;
 
-    const result = await runConversation(
+    const result = await runConversationForTest(
       input('Employee ID ของฉันคืออะไร', 'conv-my-profile'),
       {
         toolRegistry: registry,
@@ -1148,7 +1161,7 @@ describe('runConversation get_my_profile enforcement', () => {
       const executed: string[] = [];
       let turn = 0;
 
-      const result = await runConversation(
+      const result = await runConversationForTest(
         input('ตรวจสอบ Timesheet identity ของฉัน', `conv-prof-wrong-${wrongTool}`),
         {
           toolRegistry: registry,
@@ -1224,7 +1237,7 @@ describe('runConversation get_my_profile enforcement', () => {
     reg.register(wrapped);
 
     let turn = 0;
-    await runConversation(
+    await runConversationForTest(
       input('Who am I?', 'conv-profile-dedupe'),
       {
         toolRegistry: reg,

@@ -43,6 +43,10 @@ export interface GenerateResponseInput {
   eventId?: string;
   /** When set, enables model tool calling for this turn */
   tools?: LlmToolDefinition[];
+  /** OpenAI response_format — used for structured intent extraction */
+  responseFormat?: 'json_object' | 'text';
+  /** Optional per-request temperature override (e.g. 0 for extraction) */
+  temperature?: number;
 }
 
 export interface GenerateResponseResult {

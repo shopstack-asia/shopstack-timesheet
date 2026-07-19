@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runConversation } from '@/lib/ai/conversation';
+import { decideWithIntentViaRegexForTests } from '@/lib/ai/intent/test-regex-decide';
 import { AI_TIMESHEET_SYSTEM_PROMPT } from '@/lib/ai/prompt';
 import type { GenerateResponseInput } from '@/lib/ai/types';
 import {
@@ -22,6 +23,17 @@ import type { ConversationIdentity } from '@/lib/tools/business/helpers';
 
 /** Fixed instant: Saturday 2026-07-18 17:00 UTC = Sunday 2026-07-19 morning Bangkok. */
 const FIXED_NOW = new Date('2026-07-18T17:00:00.000Z');
+
+/** Test-only: legacy regex decide — not production NL routing. */
+async function runConversationForTest(
+  input: Parameters<typeof runConversation>[0],
+  deps?: Parameters<typeof runConversation>[1]
+) {
+  return runConversation(input, {
+    ...deps,
+    decideWithIntent: deps?.decideWithIntent ?? decideWithIntentViaRegexForTests,
+  });
+}
 
 const july18Day: DailyTimesheet = {
   date: '2026-07-18',
@@ -194,7 +206,7 @@ describe('AI conversation date → tool calls', () => {
 
     let turn = 0;
     let executedTools: string[] = [];
-    const result = await runConversation(
+    const result = await runConversationForTest(
       conversationInput('เมื่อวานฉันทำงานอะไรไปบ้าง', 'conv-nl-july18'),
       {
         toolRegistry: registry,
@@ -283,7 +295,7 @@ describe('AI conversation date → tool calls', () => {
 
       let turn = 0;
       let capturedArgs: Record<string, unknown> | undefined;
-      const result = await runConversation(
+      const result = await runConversationForTest(
         conversationInput(message, `conv-${tool}-${message.slice(0, 8)}`),
         {
           toolRegistry: registry,
@@ -324,7 +336,7 @@ describe('AI conversation date → tool calls', () => {
       model: 'm',
     }));
 
-    const result = await runConversation(
+    const result = await runConversationForTest(
       conversationInput('วันที่ 15 ฉันทำอะไร', 'conv-ambiguous'),
       {
         toolRegistry: createToolRegistry(),
@@ -336,6 +348,6 @@ describe('AI conversation date → tool calls', () => {
     expect(generate).not.toHaveBeenCalled();
     expect(result.text).toMatch(/date|month|year|2026/i);
     expect(result.toolRounds ?? 0).toBe(0);
-    expect(result.model).toBe('decision-engine');
+    expect(result.model).toBe('intent-enforcement');
   });
 });

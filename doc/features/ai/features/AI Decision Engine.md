@@ -2,13 +2,19 @@
 
 ### Overview
 
-Deterministic router that maps user intent to Business Tools or clarification — never an LLM classifier.
+Legacy deterministic helpers historically used for regex business-intent routing. **Production natural-language business routing always uses AI-first structured intent extraction** ([AI-First Intent Extraction.md](./AI-First%20Intent%20Extraction.md)).
 
-Recognized and potential employee-business requests must route to a Business Tool or clarification. Clearly general, conceptual, instructional, programming, news, weather, and external-topic questions remain direct-answer requests.
+This module may still provide:
+
+- Bare confirm/cancel helpers (also used via `write-decision`)
+- ISO date / range validation helpers
+- Isolated unit-test coverage of historical phrase maps
+
+It must **not** be called as a fallback when structured extraction fails, and must **not** classify natural-language Timesheet / profile / work-context intents on the production conversation path.
 
 Exact-tool enforcement on round 0 remains mandatory via `enforceRequiredBusinessTool()`.
 
-### Fail-closed routing order
+### Fail-closed routing order (legacy helper only)
 
 General-intent override runs **before** date and work keyword routing.
 
@@ -28,7 +34,7 @@ General-intent override runs **before** date and work keyword routing.
 
 Unresolved timesheet asks never default to today or the current week.
 
-Write helpers live in `src/lib/ai/write-decision.ts`. Conversation asynchronously loads `pendingChanges` from the Redis-backed pending store into `decideBusinessTool`. If Redis is unavailable while resolving a bare confirm/cancel, it returns the safe store-unavailable message rather than claiming no pending change.
+Write helpers live in `src/lib/ai/write-decision.ts`. Conversation asynchronously loads `pendingChanges` from the Redis-backed pending store into `decideWithIntentExtraction`. If Redis is unavailable while resolving a bare confirm/cancel, it returns the safe store-unavailable message rather than claiming no pending change.
 
 ### Separated detectors
 

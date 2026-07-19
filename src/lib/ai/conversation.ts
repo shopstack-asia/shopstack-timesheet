@@ -1,9 +1,12 @@
 import { createOpenAIClient } from '@/lib/ai/client';
-import {
-  decideBusinessTool,
-  type BusinessToolDecision,
-} from '@/lib/ai/decision-engine';
+import type { BusinessToolDecision } from '@/lib/ai/decision-engine';
 import { AiError, FRIENDLY_AI_FALLBACK } from '@/lib/ai/errors';
+import {
+  decideWithIntentExtraction,
+  type DecideWithIntentResult,
+  type ExtractIntentFn,
+  type IntentDraftStore,
+} from '@/lib/ai/intent';
 import { buildPrompt } from '@/lib/ai/prompt';
 import type {
   AssistantToolCall,
@@ -47,9 +50,19 @@ export type RunConversationDeps = {
   toolRouter?: ToolRouter;
   /** Disable tool calling for this run (tests / text-only). */
   enableTools?: boolean;
-  /** Injected decision engine (defaults to decideBusinessTool). */
-  decideTool?: typeof decideBusinessTool;
-  /** Fixed "now" for Bangkok date resolution in the decision engine. */
+  /**
+   * Test-only: inject AI-first decision orchestrator.
+   * Production always uses decideWithIntentExtraction (never regex NL routing).
+   */
+  decideWithIntent?: (
+    userMessage: string,
+    options: Parameters<typeof decideWithIntentExtraction>[1]
+  ) => Promise<DecideWithIntentResult>;
+  /** Injected structured intent extractor (tests). */
+  extractIntent?: ExtractIntentFn;
+  /** Intent draft store (tests). */
+  intentDraftStore?: IntentDraftStore;
+  /** Fixed "now" for Bangkok date resolution. */
   decisionNow?: Date;
 };
 
@@ -167,11 +180,11 @@ export async function runConversation(
   const registry = deps?.toolRegistry ?? createDefaultToolRegistry();
   const router = deps?.toolRouter ?? createToolRouter(registry);
   const llmTools = enableTools ? registry.toLlmToolDefinitions() : [];
-  const decide = deps?.decideTool ?? decideBusinessTool;
   const conversationId =
     input.conversationId?.trim() ||
     input.metadata?.conversationId?.trim() ||
     '';
+  const slackUserId = input.metadata?.slackUserId?.trim() || '';
   let pendingChanges: Array<{ confirmationId: string; summary: string }> = [];
   try {
     pendingChanges = conversationId
@@ -199,10 +212,19 @@ export async function runConversation(
       throw error;
     }
   }
-  const decision = decide(userMessage, {
+
+  const intentDecide = deps?.decideWithIntent ?? decideWithIntentExtraction;
+  const intentResult = await intentDecide(userMessage, {
     now: deps?.decisionNow,
     pendingChanges,
+    conversationId,
+    slackUserId,
+    requestId: input.requestId,
+    eventId: input.eventId,
+    extractIntent: deps?.extractIntent,
+    draftStore: deps?.intentDraftStore,
   });
+  const decision: BusinessToolDecision = intentResult.decision;
 
   if (decision.action === 'clarify') {
     console.log(
@@ -212,7 +234,8 @@ export async function runConversation(
         message: 'conversation completed',
         requestId: input.requestId,
         eventId: input.eventId,
-        usedFallback: false,
+        extractionOutcome: intentResult.extractionOutcome,
+        typedErrorCode: intentResult.typedErrorCode,
         reason: decision.reason,
         toolRounds: 0,
         durationMs: Date.now() - started,
@@ -221,7 +244,7 @@ export async function runConversation(
     );
     return {
       text: decision.message,
-      model: 'decision-engine',
+      model: 'intent-enforcement',
       usedFallback: false,
       toolRounds: 0,
     };

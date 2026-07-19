@@ -16,8 +16,9 @@ export async function handleDirectMessage(
   ctx: EventHandlerContext,
   deps?: DirectMessageHandlerDeps
 ): Promise<void> {
+  const { client, ...rest } = deps ?? {};
   await handleSlackConversation(ctx, 'dm', {
-    generate: deps?.generate,
-    slackClient: deps?.client ?? deps?.slackClient,
+    ...rest,
+    slackClient: client ?? deps?.slackClient,
   });
 }

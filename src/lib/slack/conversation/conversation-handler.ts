@@ -72,6 +72,7 @@ export async function handleSlackConversation(
   });
 
   try {
+    const { slackClient, ...conversationDeps } = deps ?? {};
     const result = await runConversation(
       {
         userMessage,
@@ -85,13 +86,13 @@ export async function handleSlackConversation(
           conversationId,
         },
       },
-      { generate: deps?.generate }
+      conversationDeps
     );
 
     const sendOpts = {
       requestId: ctx.requestId,
       eventId: ctx.envelope.event_id,
-      client: deps?.slackClient,
+      client: slackClient,
     };
 
     if (threadTs) {
