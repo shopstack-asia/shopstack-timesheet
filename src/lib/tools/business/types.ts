@@ -33,7 +33,17 @@ export type TimesheetEntry = {
   clientName?: string;
   projectId?: string;
   projectName?: string;
+  /** Google Sheets Time Log "Task ID" */
+  taskId?: string;
+  /** Google Sheets Time Log "Task" (work type — not employee Role) */
+  taskName?: string;
+  /**
+   * @deprecated Use taskId. Kept temporarily for compatibility with older tool consumers.
+   */
   roleId?: string;
+  /**
+   * @deprecated Use taskName. Sheets Task was previously mislabeled as Role.
+   */
   roleName?: string;
   hours: number;
   description?: string;

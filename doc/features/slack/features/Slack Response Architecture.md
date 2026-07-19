@@ -20,11 +20,18 @@ flowchart LR
 
 | Module | Responsibility |
 |--------|----------------|
-| `src/lib/slack/responses.ts` | `sendMessage`, `sendThreadReply`, typed `SlackResponseError` |
+| `src/lib/slack/responses.ts` | `sendMessage`, `sendThreadReply`, typed `SlackResponseError`; applies `normalizeSlackMrkdwn` before post |
+| `src/lib/slack/mrkdwn.ts` | Presentation adapter: GitHub `**bold**` → Slack `*bold*`, list markers → `•`, headings → bold; preserves code/URLs/mentions |
 | `src/lib/slack/client.ts` | WebClient singleton; legacy `postSlackMessage` delegates to responses |
 | `events/direct-message.ts` | Foundation DM reply text |
 | `events/app-mention.ts` | Foundation mention reply (threaded when `ts` present) |
 | `events/handler-utils.ts` | Loop prevention + reply templates |
+
+### Slack mrkdwn (not GitHub Markdown)
+
+- Bold: `*text*` (never `**text**` in the wire payload)
+- Bullets: `• item`
+- Final AI reply text is normalized only at the Slack adapter boundary (not in tools, prompts, or Conversation Context)
 
 ### Response APIs
 

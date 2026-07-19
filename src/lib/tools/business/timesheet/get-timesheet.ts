@@ -85,6 +85,7 @@ export function createGetTimesheetTool(deps?: BusinessToolDeps): Tool {
     description: [
       'Return timesheet entries for one calendar date (YYYY-MM-DD) for the resolved conversation employee.',
       'Reads the same Google Sheets Time Log data as the Weekly Timesheet UI.',
+      'Entries use taskName/taskId (Sheets Task) — not employee Role.',
       'Resolve relative phrases (today, yesterday, Thai equivalents) to YYYY-MM-DD in Asia/Bangkok before calling.',
       'Never pass employeeId. Never pass relative date words.',
       'Empty entries mean no work was logged that day (not an API failure).',

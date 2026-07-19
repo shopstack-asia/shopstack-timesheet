@@ -25,6 +25,18 @@ function parseEntry(raw: unknown): TimesheetEntry {
       'validation_error'
     );
   }
+  const taskId =
+    typeof raw.taskId === 'string'
+      ? raw.taskId
+      : typeof raw.roleId === 'string'
+        ? raw.roleId
+        : undefined;
+  const taskName =
+    typeof raw.taskName === 'string'
+      ? raw.taskName
+      : typeof raw.roleName === 'string'
+        ? raw.roleName
+        : undefined;
   return {
     id: typeof raw.id === 'string' ? raw.id : undefined,
     clientId: typeof raw.clientId === 'string' ? raw.clientId : undefined,
@@ -32,8 +44,10 @@ function parseEntry(raw: unknown): TimesheetEntry {
     projectId: typeof raw.projectId === 'string' ? raw.projectId : undefined,
     projectName:
       typeof raw.projectName === 'string' ? raw.projectName : undefined,
-    roleId: typeof raw.roleId === 'string' ? raw.roleId : undefined,
-    roleName: typeof raw.roleName === 'string' ? raw.roleName : undefined,
+    taskId,
+    taskName,
+    roleId: taskId,
+    roleName: taskName,
     hours,
     description:
       typeof raw.description === 'string' ? raw.description : undefined,

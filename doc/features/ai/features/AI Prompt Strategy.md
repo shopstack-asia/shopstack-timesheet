@@ -18,8 +18,16 @@ The builder always starts with a Tool Calling Reliability prompt that:
 - Maps identity / work context / single-day / range intents to Business Tools  
 - Documents `get_my_profile` (empty args; Conversation Context only; reports canonical Time Log Staff ID; no Zoho re-verify)  
 - Resolves relative dates in `Asia/Bangkok`  
+- **Slack Response Style**: same language as user; Slack mrkdwn (`*bold*`, `•` lists); compact daily/range answers; Task ≠ Role; expected/remaining hours only when asked  
 
 Canonical text lives in `src/lib/ai/prompt.ts` (`AI_TIMESHEET_SYSTEM_PROMPT`).
+
+### Slack presentation
+
+- Slack uses **mrkdwn**, not GitHub Markdown (`**bold**` is wrong for Slack).
+- Final AI text is passed through `normalizeSlackMrkdwn()` in `src/lib/slack/mrkdwn.ts` immediately before `chat.postMessage` (`src/lib/slack/responses.ts`).
+- Compact daily example (Thai): total hours first, then `• *Client* — Project: Task Hours`.
+- See [Slack Response Architecture.md](../../slack/features/Slack%20Response%20Architecture.md).
 
 See also [AI Decision Engine.md](./AI%20Decision%20Engine.md) for:
 

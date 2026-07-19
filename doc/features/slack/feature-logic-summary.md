@@ -16,6 +16,7 @@ Conversation replies are driven by [ai/](../ai/) Phase 7 (OpenAI). Hardcoded fou
 - `src/lib/slack/verifier.ts`
 - `src/lib/slack/dispatcher.ts`
 - `src/lib/slack/responses.ts`
+- `src/lib/slack/mrkdwn.ts` — Slack mrkdwn normalization before `chat.postMessage`
 - `src/lib/slack/conversation/conversation-handler.ts`
 - `src/lib/slack/events/*`
 - `src/lib/slack/types.ts`

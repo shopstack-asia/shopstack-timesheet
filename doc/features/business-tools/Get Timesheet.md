@@ -63,7 +63,7 @@ Draft/unsubmitted rows in the Time Log are readable. `submitted: false` must not
 | Field | Meaning |
 |-------|---------|
 | `date` | ISO date |
-| `entries` | Work logged that day (`clientName`, `projectName` = `Project Name (Project Code)` when both exist, `roleName`←Task, `hours`) |
+| `entries` | Work logged that day (`clientName`, `projectName` = `Project Name (Project Code)` when both exist, `taskName`←Sheets Task, `taskId`←Task ID, `hours`). Deprecated aliases: `roleName`/`roleId` mirror Task for compatibility — AI must present Task as work/task, never “บทบาท”. |
 | `totalHours` | Sum of entry hours |
 | `expectedHours` | Default 8 |
 | `remainingHours` | Expected minus total |

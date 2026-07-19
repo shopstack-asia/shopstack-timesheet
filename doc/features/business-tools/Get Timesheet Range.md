@@ -52,6 +52,10 @@ Same as [Get Timesheet.md](./Get%20Timesheet.md): `getTimeLogRowsForStaffRange` 
 
 Dates are inclusive. Draft/unsubmitted entries are included.
 
+## Slack presentation
+
+Lead with total hours; keep day/project detail concise. Use Slack mrkdwn (`*bold*`, `•` lists). See [AI Prompt Strategy](../ai/features/AI%20Prompt%20Strategy.md).
+
 ## Response (`TimesheetRange`)
 
 | Field | Meaning |

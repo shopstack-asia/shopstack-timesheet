@@ -18,6 +18,7 @@ const july18: DailyTimesheet = {
       clientName: 'Hertz',
       projectName: 'Commerce Suite (HERTZ-PLATFORM-2026-01)',
       roleName: 'Development',
+      taskName: 'Development',
       hours: 5,
     },
     {
@@ -25,12 +26,14 @@ const july18: DailyTimesheet = {
       projectName:
         'Raw Material Supply Management System (RMS) (MIT-RMS-2025-01)',
       roleName: 'Project Management',
+      taskName: 'Project Management',
       hours: 3,
     },
     {
       clientName: 'Shopstack',
       projectName: 'Commerce Suite (SS-COMMERCE-SUTE)',
       roleName: 'Development',
+      taskName: 'Development',
       hours: 2,
     },
   ],
