@@ -15,10 +15,11 @@ The builder always starts with a Tool Calling Reliability prompt that:
 - Allows direct answers only for greeting / thanks / joke / general knowledge / programming  
 - Requires explaining actual tool failures (auth, timeout, validation, empty)  
 - Allows demonstration tools: `ping`, `current_time`, `current_date`  
-- Maps identity / work context / single-day / range intents to Business Tools  
+- Maps identity / work context / single-day / range / write-prepare / confirm / cancel intents to Business Tools  
 - Documents `get_my_profile` (empty args; Conversation Context only; reports canonical Time Log Staff ID; no Zoho re-verify)  
+- Documents confirmation-gated write tools (prepare never writes Sheets; confirm by `confirmationId` only)  
 - Resolves relative dates in `Asia/Bangkok`  
-- **Slack Response Style**: same language as user; Slack mrkdwn (`*bold*`, `•` lists); compact daily/range answers; Task ≠ Role; expected/remaining hours only when asked  
+- **Slack Response Style**: same language as user; Slack mrkdwn (`*bold*`, `•` lists); compact daily/range/confirmation answers; Task ≠ Role; expected/remaining hours only when asked  
 
 Canonical text lives in `src/lib/ai/prompt.ts` (`AI_TIMESHEET_SYSTEM_PROMPT`).
 

@@ -19,6 +19,13 @@ import {
   type ToolRegistry,
   type ToolRouter,
 } from '@/lib/tools';
+import { getDefaultPendingTimesheetChangeStore } from '@/lib/timesheet/write/pending-store';
+import { PendingStoreError } from '@/lib/timesheet/write/pending-store';
+import { STORE_UNAVAILABLE_SAFE_MESSAGE } from '@/lib/timesheet/write/pending-types';
+import {
+  isBareCancelPhrase,
+  isBareConfirmPhrase,
+} from '@/lib/ai/write-decision';
 
 /** Soft limit for Slack-friendly replies (chars). */
 export const MAX_AI_RESPONSE_CHARS = 3500;
@@ -161,7 +168,41 @@ export async function runConversation(
   const router = deps?.toolRouter ?? createToolRouter(registry);
   const llmTools = enableTools ? registry.toLlmToolDefinitions() : [];
   const decide = deps?.decideTool ?? decideBusinessTool;
-  const decision = decide(userMessage, { now: deps?.decisionNow });
+  const conversationId =
+    input.conversationId?.trim() ||
+    input.metadata?.conversationId?.trim() ||
+    '';
+  let pendingChanges: Array<{ confirmationId: string; summary: string }> = [];
+  try {
+    pendingChanges = conversationId
+      ? (await getDefaultPendingTimesheetChangeStore().findPendingByConversation(
+          conversationId
+        )).map((c) => ({
+          confirmationId: c.confirmationId,
+          summary: c.summary,
+        }))
+      : [];
+  } catch (error) {
+    if (
+      error instanceof PendingStoreError &&
+      error.code === 'REDIS_UNAVAILABLE' &&
+      (isBareConfirmPhrase(userMessage) || isBareCancelPhrase(userMessage))
+    ) {
+      return {
+        text: STORE_UNAVAILABLE_SAFE_MESSAGE,
+        model: 'decision-engine',
+        usedFallback: false,
+        toolRounds: 0,
+      };
+    }
+    if (!(error instanceof PendingStoreError) || error.code !== 'REDIS_UNAVAILABLE') {
+      throw error;
+    }
+  }
+  const decision = decide(userMessage, {
+    now: deps?.decisionNow,
+    pendingChanges,
+  });
 
   if (decision.action === 'clarify') {
     console.log(

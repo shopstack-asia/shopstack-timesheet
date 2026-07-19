@@ -44,10 +44,12 @@ describe('ToolRegistry', () => {
     ).toThrow(/description/);
   });
 
-  it('createDefaultToolRegistry includes demonstration tools only', () => {
+  it('createDefaultToolRegistry includes demonstration + business read/write tools', () => {
     const registry = createDefaultToolRegistry();
     const names = registry.list().map((t) => t.name).sort();
     expect(names).toEqual([
+      'cancel_timesheet_change',
+      'confirm_timesheet_change',
       'current_date',
       'current_time',
       'get_my_profile',
@@ -55,8 +57,13 @@ describe('ToolRegistry', () => {
       'get_timesheet_range',
       'get_work_context',
       'ping',
+      'prepare_create_timesheet_entry',
+      'prepare_delete_timesheet_entry',
+      'prepare_submit_timesheet',
+      'prepare_update_timesheet_entry',
     ]);
-    expect(registry.toLlmToolDefinitions()).toHaveLength(7);
+    expect(registry.toLlmToolDefinitions()).toHaveLength(13);
+    expect(registry.exists('submit_day_timesheet')).toBe(false);
   });
 
   it('isolates registries (no global mutable state)', () => {

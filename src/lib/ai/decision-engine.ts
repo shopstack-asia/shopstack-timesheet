@@ -3,7 +3,9 @@
  *
  * Precedence (do not reorder lightly):
  * 1. Empty → none
+ * 1b. Bare confirm/cancel when pending exists (or clarify if confirm without pending)
  * 2. Clearly general conversation → none
+ * 2b. Timesheet write intents → prepare_* / clarify
  * 3. Ambiguous / invalid date → clarify
  * 4. Explicit ISO date range → get_timesheet_range
  * 5. Relative timesheet range → get_timesheet_range
@@ -34,6 +36,20 @@ import {
   isValidCalendarDate,
 } from '@/lib/tools/business/timesheet/date-input';
 import { MAX_TIMESHEET_RANGE_DAYS } from '@/lib/tools/business/types';
+import {
+  buildCreatePrepareArgs,
+  buildDeletePrepareArgs,
+  buildSubmitPrepareArgs,
+  buildUpdatePrepareArgs,
+  isCreateTimesheetIntent,
+  isDeleteTimesheetIntent,
+  isSubmitTimesheetIntent,
+  isTimesheetWriteIntent,
+  isUpdateTimesheetIntent,
+  resolveConfirmOrCancel,
+  type PendingSummary,
+  type WriteToolName,
+} from '@/lib/ai/write-decision';
 
 export type BusinessToolDecision =
   | {
@@ -42,7 +58,8 @@ export type BusinessToolDecision =
         | 'get_my_profile'
         | 'get_work_context'
         | 'get_timesheet'
-        | 'get_timesheet_range';
+        | 'get_timesheet_range'
+        | WriteToolName;
       arguments: Record<string, unknown>;
       reason: string;
     }
@@ -58,8 +75,9 @@ export type BusinessToolDecision =
 
 export type DecideBusinessToolOptions = {
   now?: Date;
+  /** Pending Timesheet confirmations for this conversation (server-side). */
+  pendingChanges?: PendingSummary[];
 };
-
 const ISO_DATE_GLOBAL_RE = /\b(\d{4}-\d{2}-\d{2})\b/g;
 const BARE_DAY_RE = /วันที่\s*(\d{1,2})(?!\s*(เดือน|\/|-|\d))/i;
 
@@ -556,10 +574,77 @@ export function decideBusinessTool(
   }
 
   const now = options?.now ?? new Date();
+  const pending = options?.pendingChanges ?? [];
+
+  // 1b. Confirm / cancel — only when bare phrase (pending may be empty → clarify)
+  const confirmCancel = resolveConfirmOrCancel(text, pending);
+  if (confirmCancel) {
+    return confirmCancel;
+  }
 
   // 2. Clearly general — before any date / work keyword routing
   if (isClearlyGeneralConversation(text)) {
     return { action: 'none', reason: 'general_conversation' };
+  }
+
+  // 2b. Timesheet write intents (before single-day read routing)
+  if (isTimesheetWriteIntent(text)) {
+    if (isSubmitTimesheetIntent(text)) {
+      return {
+        action: 'call_tool',
+        toolName: 'prepare_submit_timesheet',
+        arguments: buildSubmitPrepareArgs(text, now),
+        reason: 'prepare_submit_intent',
+      };
+    }
+    if (isDeleteTimesheetIntent(text)) {
+      const built = buildDeletePrepareArgs(text, now);
+      if (!built.ok) {
+        return {
+          action: 'clarify',
+          message: built.message,
+          reason: 'write_delete_clarify',
+        };
+      }
+      return {
+        action: 'call_tool',
+        toolName: 'prepare_delete_timesheet_entry',
+        arguments: built.arguments,
+        reason: 'prepare_delete_intent',
+      };
+    }
+    if (isUpdateTimesheetIntent(text)) {
+      const built = buildUpdatePrepareArgs(text, now);
+      if (!built.ok) {
+        return {
+          action: 'clarify',
+          message: built.message,
+          reason: 'write_update_clarify',
+        };
+      }
+      return {
+        action: 'call_tool',
+        toolName: 'prepare_update_timesheet_entry',
+        arguments: built.arguments,
+        reason: 'prepare_update_intent',
+      };
+    }
+    if (isCreateTimesheetIntent(text)) {
+      const built = buildCreatePrepareArgs(text, now);
+      if (!built.ok) {
+        return {
+          action: 'clarify',
+          message: built.message,
+          reason: 'write_create_clarify',
+        };
+      }
+      return {
+        action: 'call_tool',
+        toolName: 'prepare_create_timesheet_entry',
+        arguments: built.arguments,
+        reason: 'prepare_create_intent',
+      };
+    }
   }
 
   // 3. Ambiguous bare day without month/year
@@ -591,6 +676,7 @@ export function decideBusinessTool(
   }
 
   // 6. Explicit or relative single date (including standalone today / วันนี้)
+  // Skip pure read routing when the message is clearly a write (already handled)
   const single = resolveSingleDay(text, now);
   if (single) {
     return single;

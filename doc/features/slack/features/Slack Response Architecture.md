@@ -32,6 +32,7 @@ flowchart LR
 - Bold: `*text*` (never `**text**` in the wire payload)
 - Bullets: `• item`
 - Final AI reply text is normalized only at the Slack adapter boundary (not in tools, prompts, or Conversation Context)
+- Confirmation summaries from Timesheet write prepare tools use the same Slack mrkdwn conventions (`*ยืนยัน*` / `*ยกเลิก*`)
 
 ### Response APIs
 
