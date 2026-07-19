@@ -6,6 +6,7 @@ import {
 import {
   PendingStoreError,
   type CreatePendingInput,
+  type FenceTransitionResult,
   type PendingTimesheetChangeStore,
 } from '@/lib/timesheet/write/pending-store-types';
 import {
@@ -14,10 +15,8 @@ import {
 } from '@/lib/timesheet/write/pending-serialize';
 
 /**
- * In-memory pending store with compare-and-set semantics.
+ * In-memory pending store with executionVersion fencing.
  * TEST DOUBLE ONLY — never used as the production default.
- * Safe for unit tests that need a shared Map across logical "instances"
- * when the same store object is injected into both prepare and confirm.
  */
 export function createInMemoryPendingTimesheetChangeStore(): PendingTimesheetChangeStore {
   const byId = new Map<string, PendingTimesheetChange>();
@@ -30,6 +29,23 @@ export function createInMemoryPendingTimesheetChangeStore(): PendingTimesheetCha
       byConversation.set(change.conversationId, set);
     }
     set.add(change.confirmationId);
+  }
+
+  function fenceFinalize(
+    confirmationId: string,
+    executionVersion: number,
+    next: PendingTimesheetChange
+  ): FenceTransitionResult {
+    const raw = byId.get(confirmationId);
+    if (!raw) return { ok: false, reason: 'missing' };
+    if (raw.status !== 'executing') {
+      return { ok: false, reason: 'wrong_status', change: clonePending(raw) };
+    }
+    if (raw.executionVersion !== executionVersion) {
+      return { ok: false, reason: 'ownership_lost', change: clonePending(raw) };
+    }
+    byId.set(confirmationId, next);
+    return { ok: true, change: clonePending(next) };
   }
 
   return {
@@ -75,6 +91,7 @@ export function createInMemoryPendingTimesheetChangeStore(): PendingTimesheetCha
         ...raw,
         status: 'executing',
         claimedAt: new Date(),
+        executionVersion: (raw.executionVersion || 0) + 1,
       };
       byId.set(confirmationId, claimed);
       return clonePending(claimed);
@@ -87,16 +104,29 @@ export function createInMemoryPendingTimesheetChangeStore(): PendingTimesheetCha
       const claimed: PendingTimesheetChange = {
         ...raw,
         claimedAt: new Date(),
+        executionVersion: (raw.executionVersion || 0) + 1,
       };
       byId.set(confirmationId, claimed);
       return clonePending(claimed);
     },
 
-    async markCompleted(confirmationId, result) {
+    async assertExecutionOwnership(confirmationId, executionVersion) {
       const raw = byId.get(confirmationId);
-      if (!raw) return undefined;
-      if (raw.status !== 'executing' && raw.status !== 'pending') {
-        return clonePending(raw);
+      return (
+        !!raw &&
+        raw.status === 'executing' &&
+        raw.executionVersion === executionVersion
+      );
+    },
+
+    async markCompleted(confirmationId, executionVersion, result) {
+      const raw = byId.get(confirmationId);
+      if (!raw) return { ok: false, reason: 'missing' };
+      if (raw.status !== 'executing') {
+        return { ok: false, reason: 'wrong_status', change: clonePending(raw) };
+      }
+      if (raw.executionVersion !== executionVersion) {
+        return { ok: false, reason: 'ownership_lost', change: clonePending(raw) };
       }
       const next: PendingTimesheetChange = {
         ...raw,
@@ -104,14 +134,12 @@ export function createInMemoryPendingTimesheetChangeStore(): PendingTimesheetCha
         completedAt: new Date(),
         resultSnapshotHash: result.resultSnapshotHash,
         completedResult: result.completedResult,
-        // Extend logical retention (in-memory keeps until process ends)
         expiresAt: new Date(
           Date.now() +
             (result.retentionSeconds ?? COMPLETED_RETENTION_SECONDS) * 1000
         ),
       };
-      byId.set(confirmationId, next);
-      return clonePending(next);
+      return fenceFinalize(confirmationId, executionVersion, next);
     },
 
     async markCancelled(confirmationId) {
@@ -123,24 +151,34 @@ export function createInMemoryPendingTimesheetChangeStore(): PendingTimesheetCha
       return clonePending(next);
     },
 
-    async markConflict(confirmationId) {
+    async markConflict(confirmationId, executionVersion) {
       const raw = byId.get(confirmationId);
-      if (!raw) return undefined;
+      if (!raw) return { ok: false, reason: 'missing' };
+      if (raw.status !== 'executing') {
+        return { ok: false, reason: 'wrong_status', change: clonePending(raw) };
+      }
+      if (raw.executionVersion !== executionVersion) {
+        return { ok: false, reason: 'ownership_lost', change: clonePending(raw) };
+      }
       const next: PendingTimesheetChange = { ...raw, status: 'conflict' };
-      byId.set(confirmationId, next);
-      return clonePending(next);
+      return fenceFinalize(confirmationId, executionVersion, next);
     },
 
-    async markFailed(confirmationId, safeError) {
+    async markFailed(confirmationId, executionVersion, safeError) {
       const raw = byId.get(confirmationId);
-      if (!raw) return undefined;
+      if (!raw) return { ok: false, reason: 'missing' };
+      if (raw.status !== 'executing') {
+        return { ok: false, reason: 'wrong_status', change: clonePending(raw) };
+      }
+      if (raw.executionVersion !== executionVersion) {
+        return { ok: false, reason: 'ownership_lost', change: clonePending(raw) };
+      }
       const next: PendingTimesheetChange = {
         ...raw,
         status: 'failed',
         safeError,
       };
-      byId.set(confirmationId, next);
-      return clonePending(next);
+      return fenceFinalize(confirmationId, executionVersion, next);
     },
 
     async findPendingByConversation(conversationId) {

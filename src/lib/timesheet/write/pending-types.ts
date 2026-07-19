@@ -55,6 +55,12 @@ export type PendingTimesheetChange = {
   sourceEventId?: string;
   /** When status became executing (lease / crash recovery). */
   claimedAt?: Date;
+  /**
+   * Fencing token for execution ownership.
+   * Incremented on each claim/reclaim. Finalizers must present the matching version.
+   * 0 while pending / never claimed.
+   */
+  executionVersion: number;
   completedAt?: Date;
   resultSnapshotHash?: string;
   safeError?: string;

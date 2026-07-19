@@ -8,15 +8,16 @@ import { SheetsWriteLockError } from '@/lib/sheets-write-lock';
 import { auditTimesheetWrite } from '@/lib/timesheet/write/audit-log';
 import {
   getDefaultPendingTimesheetChangeStore,
+  PendingStoreError,
   type PendingTimesheetChangeStore,
 } from '@/lib/timesheet/write/pending-store';
+import type { FenceTransitionResult } from '@/lib/timesheet/write/pending-store-types';
 import {
   buildDaySnapshot,
   hashDaySnapshot,
   snapshotsEqual,
   snapshotsContentEqual,
 } from '@/lib/timesheet/write/snapshot-hash';
-import { PendingStoreError } from '@/lib/timesheet/write/pending-store';
 import type {
   ConfirmTimesheetChangeResult,
   PendingTimesheetChange,
@@ -101,9 +102,52 @@ function successMessage(
   return `บันทึก Timesheet เรียบร้อยแล้วครับ รวม *${totalHours} ชั่วโมง*`;
 }
 
+async function resolveAfterFenceLoss(
+  store: PendingTimesheetChangeStore,
+  confirmationId: string,
+  fence: FenceTransitionResult
+): Promise<ConfirmTimesheetChangeResult> {
+  const change =
+    fence.ok === false && fence.change
+      ? fence.change
+      : await store.get(confirmationId);
+  if (change?.status === 'completed' && change.completedResult?.status === 'completed') {
+    return change.completedResult;
+  }
+  if (change?.status === 'executing') {
+    return {
+      status: 'already_processing',
+      message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ',
+    };
+  }
+  if (change?.status === 'conflict') {
+    return {
+      status: 'conflict',
+      message:
+        'Timesheet มีการเปลี่ยนแปลงหลังจากขอการยืนยัน กรุณาตรวจสอบข้อมูลล่าสุดแล้วลองใหม่ครับ',
+    };
+  }
+  if (change?.status === 'failed') {
+    return {
+      status: 'failed',
+      message:
+        change.safeError ||
+        'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง',
+    };
+  }
+  if (change?.status === 'cancelled') {
+    return { status: 'cancelled', message: 'รายการนี้ถูกยกเลิกแล้วครับ' };
+  }
+  return {
+    status: 'already_processing',
+    message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ',
+  };
+}
+
 /**
  * Confirm and execute a pending Timesheet change.
- * Mutation data comes only from the server-side pending store.
+ * Uses fenced executionVersion leases — idempotent confirmation with snapshot
+ * reconciliation (not absolute exactly-once across Redis + Sheets).
  */
 export async function confirmTimesheetChange(
   identity: WriteIdentity,
@@ -129,102 +173,262 @@ export async function confirmTimesheetChange(
       return { status: 'failed', message: 'ไม่พบรายการยืนยัน กรุณาเตรียมรายการใหม่ครับ' };
     }
     if (!ownershipOk(existing, identity)) {
-      auditTimesheetWrite({ message: 'confirm_rejected_ownership', confirmationId: id, conversationId: identity.conversationId, executionStatus: 'rejected' });
+      auditTimesheetWrite({
+        message: 'confirm_rejected_ownership',
+        confirmationId: id,
+        conversationId: identity.conversationId,
+        executionStatus: 'rejected',
+      });
       return { status: 'failed', message: 'ไม่สามารถยืนยันรายการนี้ได้ครับ' };
     }
     if (existing.status === 'completed') {
       return existing.completedResult?.status === 'completed'
         ? existing.completedResult
-        : { status: 'already_completed', message: 'รายการนี้ถูกดำเนินการเรียบร้อยแล้วครับ' };
+        : {
+            status: 'already_completed',
+            message: 'รายการนี้ถูกดำเนินการเรียบร้อยแล้วครับ',
+          };
     }
-    if (existing.status === 'cancelled') return { status: 'cancelled', message: 'รายการนี้ถูกยกเลิกแล้วครับ' };
-    if (existing.status === 'expired' || existing.expiresAt.getTime() <= Date.now()) {
-      return { status: 'expired', message: 'รายการยืนยันหมดอายุแล้ว กรุณาสั่งรายการใหม่ครับ' };
+    if (existing.status === 'cancelled') {
+      return { status: 'cancelled', message: 'รายการนี้ถูกยกเลิกแล้วครับ' };
     }
-    if (existing.status === 'conflict') return { status: 'conflict', message: 'Timesheet มีการเปลี่ยนแปลงหลังจากขอการยืนยัน กรุณาตรวจสอบข้อมูลล่าสุดแล้วลองใหม่ครับ' };
-    if (existing.status === 'failed') return { status: 'failed', message: existing.safeError || 'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง' };
+    if (
+      existing.status === 'expired' ||
+      existing.expiresAt.getTime() <= Date.now()
+    ) {
+      return {
+        status: 'expired',
+        message: 'รายการยืนยันหมดอายุแล้ว กรุณาสั่งรายการใหม่ครับ',
+      };
+    }
+    if (existing.status === 'conflict') {
+      return {
+        status: 'conflict',
+        message:
+          'Timesheet มีการเปลี่ยนแปลงหลังจากขอการยืนยัน กรุณาตรวจสอบข้อมูลล่าสุดแล้วลองใหม่ครับ',
+      };
+    }
+    if (existing.status === 'failed') {
+      return {
+        status: 'failed',
+        message:
+          existing.safeError ||
+          'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง',
+      };
+    }
 
     let claimed: PendingTimesheetChange | null;
     let recoveredStaleExecution = false;
     if (existing.status === 'executing') {
-      if (!existing.claimedAt || Date.now() - existing.claimedAt.getTime() < EXECUTING_LEASE_MS) {
-        return { status: 'already_processing', message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ' };
+      if (
+        !existing.claimedAt ||
+        Date.now() - existing.claimedAt.getTime() < EXECUTING_LEASE_MS
+      ) {
+        return {
+          status: 'already_processing',
+          message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ',
+        };
       }
       claimed = await store.reclaimStaleExecution(id, EXECUTING_LEASE_MS);
       if (!claimed) {
-        return { status: 'already_processing', message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ' };
+        return {
+          status: 'already_processing',
+          message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ',
+        };
       }
       recoveredStaleExecution = true;
     } else {
       claimed = await store.claimForExecution(id);
       if (!claimed) {
         existing = await store.get(id);
-        if (existing?.status === 'completed' && existing.completedResult?.status === 'completed') return existing.completedResult;
-        if (existing?.status === 'executing') return { status: 'already_processing', message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ' };
-        if (existing?.status === 'expired') return { status: 'expired', message: 'รายการยืนยันหมดอายุแล้ว กรุณาสั่งรายการใหม่ครับ' };
-        return { status: 'failed', message: 'ไม่สามารถยืนยันรายการนี้ได้ในขณะนี้ครับ' };
+        if (
+          existing?.status === 'completed' &&
+          existing.completedResult?.status === 'completed'
+        ) {
+          return existing.completedResult;
+        }
+        if (existing?.status === 'executing') {
+          return {
+            status: 'already_processing',
+            message: 'รายการกำลังดำเนินการอยู่ กรุณารอสักครู่ครับ',
+          };
+        }
+        if (existing?.status === 'expired') {
+          return {
+            status: 'expired',
+            message: 'รายการยืนยันหมดอายุแล้ว กรุณาสั่งรายการใหม่ครับ',
+          };
+        }
+        return {
+          status: 'failed',
+          message: 'ไม่สามารถยืนยันรายการนี้ได้ในขณะนี้ครับ',
+        };
       }
     }
 
+    const version = claimed.executionVersion;
     const date = claimed.date || claimed.proposedSnapshot.date;
-    const currentDay = await read({ employeeId: identity.employeeId, email: identity.email, slackUserId: identity.slackUserId }, date);
+
+    const currentDay = await read(
+      {
+        employeeId: identity.employeeId,
+        email: identity.email,
+        slackUserId: identity.slackUserId,
+      },
+      date
+    );
     const currentResult = buildDaySnapshot(date, currentDay.entries);
     if (!currentResult.ok) {
-      await store.markFailed(id, INCOMPLETE_DAY_SAFE_MESSAGE);
-      auditTimesheetWrite({ message: 'confirm_incomplete_day', confirmationId: id, conversationId: identity.conversationId, operation: claimed.operation, targetDate: date, safeErrorCode: currentResult.reason, invalidEntryCount: currentResult.invalidEntryIndexes.length });
+      const fence = await store.markFailed(
+        id,
+        version,
+        INCOMPLETE_DAY_SAFE_MESSAGE
+      );
+      if (!fence.ok) {
+        return resolveAfterFenceLoss(store, id, fence);
+      }
+      auditTimesheetWrite({
+        message: 'confirm_incomplete_day',
+        confirmationId: id,
+        conversationId: identity.conversationId,
+        operation: claimed.operation,
+        targetDate: date,
+        safeErrorCode: currentResult.reason,
+        invalidEntryCount: currentResult.invalidEntryIndexes.length,
+      });
       return { status: 'failed', message: INCOMPLETE_DAY_SAFE_MESSAGE };
     }
+
     const currentSnapshot = currentResult.snapshot;
-    const complete = async (
+
+    const finalizeCompleted = async (
       snapshot: typeof currentSnapshot,
       day: typeof currentDay
     ): Promise<ConfirmTimesheetChangeResult> => {
       const verified = {
-        entries: day.entries.map((e) => ({ clientName: e.clientName, projectName: e.projectName, taskName: e.taskName, hours: e.hours })),
+        entries: day.entries.map((e) => ({
+          clientName: e.clientName,
+          projectName: e.projectName,
+          taskName: e.taskName,
+          hours: e.hours,
+        })),
         totalHours: day.totalHours,
       };
-      const completed: ConfirmTimesheetChangeResult = { status: 'completed', operation: claimed.operation, date, verified, message: successMessage(claimed, day.totalHours, verified) };
-      await store.markCompleted(id, { resultSnapshotHash: hashDaySnapshot(snapshot), completedResult: completed, retentionSeconds: COMPLETED_RETENTION_SECONDS });
+      const completed: ConfirmTimesheetChangeResult = {
+        status: 'completed',
+        operation: claimed.operation,
+        date,
+        verified,
+        message: successMessage(claimed, day.totalHours, verified),
+      };
+      const fence = await store.markCompleted(id, version, {
+        resultSnapshotHash: hashDaySnapshot(snapshot),
+        completedResult: completed,
+        retentionSeconds: COMPLETED_RETENTION_SECONDS,
+      });
+      if (!fence.ok) {
+        return resolveAfterFenceLoss(store, id, fence);
+      }
       return completed;
     };
 
     if (snapshotsContentEqual(currentSnapshot, claimed.proposedSnapshot)) {
-      return complete(currentSnapshot, currentDay);
+      return finalizeCompleted(currentSnapshot, currentDay);
     }
+
     const equalsOriginal = recoveredStaleExecution
       ? snapshotsEqual(currentSnapshot, claimed.originalSnapshot) ||
         snapshotsContentEqual(currentSnapshot, claimed.originalSnapshot)
       : hashDaySnapshot(currentSnapshot) === claimed.originalSnapshotHash;
+
     if (!equalsOriginal) {
-      await store.markConflict(id);
-      auditTimesheetWrite({ message: 'confirm_conflict', confirmationId: id, conversationId: identity.conversationId, operation: claimed.operation, targetDate: date, executionStatus: 'conflict', durationMs: Date.now() - started });
-      return { status: 'conflict', message: 'Timesheet มีการเปลี่ยนแปลงหลังจากขอการยืนยัน กรุณาตรวจสอบข้อมูลล่าสุดแล้วลองใหม่ครับ' };
+      const fence = await store.markConflict(id, version);
+      if (!fence.ok) {
+        return resolveAfterFenceLoss(store, id, fence);
+      }
+      auditTimesheetWrite({
+        message: 'confirm_conflict',
+        confirmationId: id,
+        conversationId: identity.conversationId,
+        operation: claimed.operation,
+        targetDate: date,
+        executionStatus: 'conflict',
+        durationMs: Date.now() - started,
+      });
+      return {
+        status: 'conflict',
+        message:
+          'Timesheet มีการเปลี่ยนแปลงหลังจากขอการยืนยัน กรุณาตรวจสอบข้อมูลล่าสุดแล้วลองใหม่ครับ',
+      };
+    }
+
+    // Pre-write fencing — minimize stale Sheets writes
+    const stillOwns = await store.assertExecutionOwnership(id, version);
+    if (!stillOwns) {
+      return resolveAfterFenceLoss(store, id, {
+        ok: false,
+        reason: 'ownership_lost',
+      });
     }
 
     try {
-      const auth = agentAuthFromConversationIdentity({ employeeId: identity.employeeId, email: identity.email, slackUserId: identity.slackUserId });
-      await submit(auth, date, claimed.writeEntries, { allowCustomProject: false });
-      const verifiedDay = await read({ employeeId: identity.employeeId, email: identity.email, slackUserId: identity.slackUserId }, date);
+      const auth = agentAuthFromConversationIdentity({
+        employeeId: identity.employeeId,
+        email: identity.email,
+        slackUserId: identity.slackUserId,
+      });
+      await submit(auth, date, claimed.writeEntries, {
+        allowCustomProject: false,
+      });
+      const verifiedDay = await read(
+        {
+          employeeId: identity.employeeId,
+          email: identity.email,
+          slackUserId: identity.slackUserId,
+        },
+        date
+      );
       const verifiedResult = buildDaySnapshot(date, verifiedDay.entries);
       if (!verifiedResult.ok) {
-        await store.markFailed(id, INCOMPLETE_DAY_SAFE_MESSAGE);
-        auditTimesheetWrite({ message: 'confirm_verify_incomplete_day', confirmationId: id, conversationId: identity.conversationId, operation: claimed.operation, targetDate: date, safeErrorCode: verifiedResult.reason, invalidEntryCount: verifiedResult.invalidEntryIndexes.length });
+        const fence = await store.markFailed(
+          id,
+          version,
+          INCOMPLETE_DAY_SAFE_MESSAGE
+        );
+        if (!fence.ok) {
+          return resolveAfterFenceLoss(store, id, fence);
+        }
         return { status: 'failed', message: INCOMPLETE_DAY_SAFE_MESSAGE };
       }
-      if (!snapshotsContentEqual(verifiedResult.snapshot, claimed.proposedSnapshot)) {
-        const safe = 'ยังไม่สามารถยืนยันผลบันทึก Timesheet ได้ กรุณาตรวจสอบข้อมูลล่าสุดแล้วลองใหม่ครับ';
-        await store.markFailed(id, safe);
+      if (
+        !snapshotsContentEqual(
+          verifiedResult.snapshot,
+          claimed.proposedSnapshot
+        )
+      ) {
+        const safe =
+          'ยังไม่สามารถยืนยันผลบันทึก Timesheet ได้ กรุณาตรวจสอบข้อมูลล่าสุดแล้วลองใหม่ครับ';
+        const fence = await store.markFailed(id, version, safe);
+        if (!fence.ok) {
+          return resolveAfterFenceLoss(store, id, fence);
+        }
         return { status: 'failed', message: safe };
       }
-      return complete(verifiedResult.snapshot, verifiedDay);
+      return finalizeCompleted(verifiedResult.snapshot, verifiedDay);
     } catch (error) {
-      if (error instanceof PendingStoreError && error.code === 'REDIS_UNAVAILABLE') throw error;
-      const message = error instanceof SubmitPolicyError
-        ? error.message
-        : error instanceof SheetsWriteLockError
-          ? 'ระบบกำลังบันทึก Timesheet จากคำขออื่นอยู่ กรุณาลองใหม่อีกครั้งครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง'
-          : 'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง';
-      await store.markFailed(id, message);
+      if (error instanceof PendingStoreError && error.code === 'REDIS_UNAVAILABLE') {
+        throw error;
+      }
+      const message =
+        error instanceof SubmitPolicyError
+          ? error.message
+          : error instanceof SheetsWriteLockError
+            ? 'ระบบกำลังบันทึก Timesheet จากคำขออื่นอยู่ กรุณาลองใหม่อีกครั้งครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง'
+            : 'ยังไม่สามารถบันทึก Timesheet ได้ เนื่องจากการเชื่อมต่อกับแหล่งข้อมูลมีปัญหาครับ ข้อมูลเดิมยังไม่ถูกเปลี่ยนแปลง';
+      const fence = await store.markFailed(id, version, message);
+      if (!fence.ok) {
+        return resolveAfterFenceLoss(store, id, fence);
+      }
       return { status: 'failed', message };
     }
   } catch (error) {

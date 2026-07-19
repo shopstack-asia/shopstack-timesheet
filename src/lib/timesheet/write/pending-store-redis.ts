@@ -7,6 +7,7 @@ import {
 import {
   PendingStoreError,
   type CreatePendingInput,
+  type FenceTransitionResult,
   type PendingTimesheetChangeStore,
 } from '@/lib/timesheet/write/pending-store-types';
 import {
@@ -33,10 +34,6 @@ type RedisPending = Pick<
   'get' | 'setex' | 'setNx' | 'del' | 'expire' | 'evalScript'
 >;
 
-/**
- * Atomic create: SET NX + SADD conversation index + EXPIRE.
- * Returns 1 if created, 0 if confirmationId already exists.
- */
 const LUA_CREATE = `
 local exists = redis.call('EXISTS', KEYS[1])
 if exists == 1 then
@@ -49,9 +46,8 @@ return 1
 `;
 
 /**
- * Atomic claim pending → executing.
+ * Atomic claim pending → executing; bump executionVersion.
  * ARGV[1]=nowMs, ARGV[2]=ttlSeconds, ARGV[3]=claimedAtIso
- * Returns JSON: {ok:true,change:...} | {ok:false,status:...}
  */
 const LUA_CLAIM = `
 local raw = redis.call('GET', KEYS[1])
@@ -60,14 +56,7 @@ if not raw then
 end
 local change = cjson.decode(raw)
 local nowMs = tonumber(ARGV[1])
-local expiresAtMs = 0
-if type(change.expiresAt) == 'string' then
-  -- ISO date: approximate via stored expiresAtMs if present, else parse not available
-  expiresAtMs = tonumber(change.expiresAtMs) or 0
-end
-if change.expiresAtMs then
-  expiresAtMs = tonumber(change.expiresAtMs)
-end
+local expiresAtMs = tonumber(change.expiresAtMs) or 0
 if change.status == 'pending' and expiresAtMs > 0 and nowMs >= expiresAtMs then
   change.status = 'expired'
   redis.call('SET', KEYS[1], cjson.encode(change), 'EX', tonumber(ARGV[2]))
@@ -76,15 +65,17 @@ end
 if change.status ~= 'pending' then
   return cjson.encode({ok=false, status=change.status})
 end
+local prev = tonumber(change.executionVersion) or 0
 change.status = 'executing'
 change.claimedAt = ARGV[3]
 change.claimedAtMs = nowMs
+change.executionVersion = prev + 1
 redis.call('SET', KEYS[1], cjson.encode(change), 'EX', tonumber(ARGV[2]))
 return cjson.encode({ok=true, change=change})
 `;
 
 /**
- * Reclaim stale executing when claimedAtMs + leaseMs < nowMs.
+ * Reclaim stale executing; bump executionVersion (fencing).
  * ARGV[1]=nowMs, ARGV[2]=leaseMs, ARGV[3]=ttlSeconds, ARGV[4]=newClaimedAtIso
  */
 const LUA_RECLAIM = `
@@ -102,15 +93,14 @@ local leaseMs = tonumber(ARGV[2])
 if claimedAtMs == 0 or (nowMs - claimedAtMs) < leaseMs then
   return cjson.encode({ok=false, status='executing'})
 end
+local prev = tonumber(change.executionVersion) or 0
 change.claimedAt = ARGV[4]
 change.claimedAtMs = nowMs
+change.executionVersion = prev + 1
 redis.call('SET', KEYS[1], cjson.encode(change), 'EX', tonumber(ARGV[3]))
 return cjson.encode({ok=true, change=change})
 `;
 
-/**
- * Atomic cancel: pending → cancelled only.
- */
 const LUA_CANCEL = `
 local raw = redis.call('GET', KEYS[1])
 if not raw then
@@ -126,40 +116,83 @@ return cjson.encode({ok=true, change=change})
 `;
 
 /**
- * CAS status update when current status is in allowed list (ARGV[1] JSON array).
- * ARGV[2]=new JSON body, ARGV[3]=ttlSeconds
+ * Fenced finalize: status must be executing AND executionVersion must match.
+ * ARGV[1]=expectedVersion, ARGV[2]=new JSON body, ARGV[3]=ttlSeconds
+ * Returns JSON {ok:true,change:...} | {ok:false,reason=...,status=...,change?...}
  */
-const LUA_CAS_STATUS = `
+const LUA_FENCED_FINALIZE = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then
+  return cjson.encode({ok=false, reason='missing'})
+end
+local change = cjson.decode(raw)
+local expected = tonumber(ARGV[1])
+local currentVersion = tonumber(change.executionVersion) or 0
+if change.status ~= 'executing' then
+  return cjson.encode({ok=false, reason='wrong_status', status=change.status, change=change})
+end
+if currentVersion ~= expected then
+  return cjson.encode({ok=false, reason='ownership_lost', status=change.status, change=change})
+end
+redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
+local next = cjson.decode(ARGV[2])
+return cjson.encode({ok=true, change=next})
+`;
+
+/**
+ * Pre-write ownership check.
+ * ARGV[1]=expectedVersion → 1 if owning executing claim, else 0
+ */
+const LUA_ASSERT_OWNERSHIP = `
 local raw = redis.call('GET', KEYS[1])
 if not raw then
   return 0
 end
 local change = cjson.decode(raw)
-local allowed = cjson.decode(ARGV[1])
-local ok = false
-for _, s in ipairs(allowed) do
-  if change.status == s then
-    ok = true
-    break
-  end
+local expected = tonumber(ARGV[1])
+local currentVersion = tonumber(change.executionVersion) or 0
+if change.status == 'executing' and currentVersion == expected then
+  return 1
 end
-if not ok then
-  return 0
-end
-redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
-return 1
+return 0
 `;
 
 type LuaClaimResult =
-  | { ok: true; change: SerializedPendingChange & { expiresAtMs?: number; claimedAtMs?: number } }
+  | {
+      ok: true;
+      change: SerializedPendingChange & {
+        expiresAtMs?: number;
+        claimedAtMs?: number;
+      };
+    }
   | { ok: false; status: string; change?: SerializedPendingChange };
+
+type LuaFenceResult =
+  | {
+      ok: true;
+      change: SerializedPendingChange & {
+        expiresAtMs?: number;
+        claimedAtMs?: number;
+      };
+    }
+  | {
+      ok: false;
+      reason: string;
+      status?: string;
+      change?: SerializedPendingChange;
+    };
 
 function withEpochFields(
   serialized: SerializedPendingChange,
   change: PendingTimesheetChange
-): SerializedPendingChange & { expiresAtMs: number; claimedAtMs?: number } {
+): SerializedPendingChange & {
+  expiresAtMs: number;
+  claimedAtMs?: number;
+  executionVersion: number;
+} {
   return {
     ...serialized,
+    executionVersion: change.executionVersion,
     expiresAtMs: change.expiresAt.getTime(),
     claimedAtMs: change.claimedAt?.getTime(),
   };
@@ -180,9 +213,25 @@ function wrapRedisError(error: unknown): PendingStoreError {
   );
 }
 
+function fenceFailFromLua(
+  result: Extract<LuaFenceResult, { ok: false }>,
+  loaded?: PendingTimesheetChange
+): FenceTransitionResult {
+  const change = result.change
+    ? deserializePending(result.change)
+    : loaded;
+  if (result.reason === 'missing' && !change) {
+    return { ok: false, reason: 'missing' };
+  }
+  if (result.reason === 'ownership_lost') {
+    return { ok: false, reason: 'ownership_lost', change };
+  }
+  return { ok: false, reason: 'wrong_status', change };
+}
+
 /**
  * Production pending store backed by the shared Redis adapter.
- * Uses Lua for create / claim / cancel / CAS — not read-then-write.
+ * Fenced execution leases via executionVersion — not read-then-write.
  */
 export function createRedisPendingTimesheetChangeStore(
   redis?: RedisPending
@@ -211,6 +260,31 @@ export function createRedisPendingTimesheetChangeStore(
         return { ...change, status: 'expired' };
       }
       return change;
+    } catch (error) {
+      throw wrapRedisError(error);
+    }
+  }
+
+  async function fencedFinalize(
+    confirmationId: string,
+    executionVersion: number,
+    next: PendingTimesheetChange,
+    ttlSeconds: number
+  ): Promise<FenceTransitionResult> {
+    const body = JSON.stringify(withEpochFields(serializePending(next), next));
+    try {
+      const result = parseLuaJson<LuaFenceResult>(
+        await client().evalScript(
+          LUA_FENCED_FINALIZE,
+          [pendingChangeKey(confirmationId)],
+          [executionVersion, body, ttlSeconds]
+        )
+      );
+      if (result.ok) {
+        return { ok: true, change: deserializePending(result.change) };
+      }
+      const reloaded = await load(confirmationId);
+      return fenceFailFromLua(result, reloaded);
     } catch (error) {
       throw wrapRedisError(error);
     }
@@ -256,25 +330,11 @@ export function createRedisPendingTimesheetChangeStore(
           await client().evalScript(
             LUA_CLAIM,
             [pendingChangeKey(confirmationId)],
-            [
-              now.getTime(),
-              PENDING_CHANGE_TTL_SECONDS,
-              now.toISOString(),
-            ]
+            [now.getTime(), PENDING_CHANGE_TTL_SECONDS, now.toISOString()]
           )
         );
         if (!result.ok) return null;
-        const change = deserializePending(result.change);
-        const claimedAt =
-          change.claimedAt ??
-          (typeof result.change.claimedAtMs === 'number'
-            ? new Date(result.change.claimedAtMs)
-            : now);
-        return clonePending({
-          ...change,
-          status: 'executing',
-          claimedAt,
-        });
+        return clonePending(deserializePending(result.change));
       } catch (error) {
         throw wrapRedisError(error);
       }
@@ -296,21 +356,33 @@ export function createRedisPendingTimesheetChangeStore(
           )
         );
         if (!result.ok) return null;
-        return clonePending({
-          ...deserializePending(result.change),
-          status: 'executing',
-          claimedAt: now,
-        });
+        return clonePending(deserializePending(result.change));
       } catch (error) {
         throw wrapRedisError(error);
       }
     },
 
-    async markCompleted(confirmationId, result) {
+    async assertExecutionOwnership(confirmationId, executionVersion) {
+      try {
+        const ok = await client().evalScript<number>(
+          LUA_ASSERT_OWNERSHIP,
+          [pendingChangeKey(confirmationId)],
+          [executionVersion]
+        );
+        return ok === 1;
+      } catch (error) {
+        throw wrapRedisError(error);
+      }
+    },
+
+    async markCompleted(confirmationId, executionVersion, result) {
       const current = await load(confirmationId);
-      if (!current) return undefined;
-      if (current.status !== 'executing' && current.status !== 'pending') {
-        return clonePending(current);
+      if (!current) return { ok: false, reason: 'missing' };
+      if (current.status !== 'executing') {
+        return { ok: false, reason: 'wrong_status', change: current };
+      }
+      if (current.executionVersion !== executionVersion) {
+        return { ok: false, reason: 'ownership_lost', change: current };
       }
       const next: PendingTimesheetChange = {
         ...current,
@@ -319,26 +391,12 @@ export function createRedisPendingTimesheetChangeStore(
         resultSnapshotHash: result.resultSnapshotHash,
         completedResult: result.completedResult,
       };
-      const retention =
-        result.retentionSeconds ?? COMPLETED_RETENTION_SECONDS;
-      const body = JSON.stringify(withEpochFields(serializePending(next), next));
-      try {
-        const ok = await client().evalScript<number>(
-          LUA_CAS_STATUS,
-          [pendingChangeKey(confirmationId)],
-          [
-            JSON.stringify(['executing', 'pending']),
-            body,
-            retention,
-          ]
-        );
-        if (ok !== 1) {
-          return load(confirmationId);
-        }
-        return clonePending(next);
-      } catch (error) {
-        throw wrapRedisError(error);
-      }
+      return fencedFinalize(
+        confirmationId,
+        executionVersion,
+        next,
+        result.retentionSeconds ?? COMPLETED_RETENTION_SECONDS
+      );
     },
 
     async markCancelled(confirmationId) {
@@ -365,50 +423,44 @@ export function createRedisPendingTimesheetChangeStore(
       }
     },
 
-    async markConflict(confirmationId) {
+    async markConflict(confirmationId, executionVersion) {
       const current = await load(confirmationId);
-      if (!current) return undefined;
-      const next: PendingTimesheetChange = { ...current, status: 'conflict' };
-      const body = JSON.stringify(withEpochFields(serializePending(next), next));
-      try {
-        await client().evalScript<number>(
-          LUA_CAS_STATUS,
-          [pendingChangeKey(confirmationId)],
-          [
-            JSON.stringify(['executing', 'pending']),
-            body,
-            PENDING_CHANGE_TTL_SECONDS,
-          ]
-        );
-        return clonePending(next);
-      } catch (error) {
-        throw wrapRedisError(error);
+      if (!current) return { ok: false, reason: 'missing' };
+      if (current.status !== 'executing') {
+        return { ok: false, reason: 'wrong_status', change: current };
       }
+      if (current.executionVersion !== executionVersion) {
+        return { ok: false, reason: 'ownership_lost', change: current };
+      }
+      const next: PendingTimesheetChange = { ...current, status: 'conflict' };
+      return fencedFinalize(
+        confirmationId,
+        executionVersion,
+        next,
+        PENDING_CHANGE_TTL_SECONDS
+      );
     },
 
-    async markFailed(confirmationId, safeError) {
+    async markFailed(confirmationId, executionVersion, safeError) {
       const current = await load(confirmationId);
-      if (!current) return undefined;
+      if (!current) return { ok: false, reason: 'missing' };
+      if (current.status !== 'executing') {
+        return { ok: false, reason: 'wrong_status', change: current };
+      }
+      if (current.executionVersion !== executionVersion) {
+        return { ok: false, reason: 'ownership_lost', change: current };
+      }
       const next: PendingTimesheetChange = {
         ...current,
         status: 'failed',
         safeError,
       };
-      const body = JSON.stringify(withEpochFields(serializePending(next), next));
-      try {
-        await client().evalScript<number>(
-          LUA_CAS_STATUS,
-          [pendingChangeKey(confirmationId)],
-          [
-            JSON.stringify(['executing', 'pending']),
-            body,
-            PENDING_CHANGE_TTL_SECONDS,
-          ]
-        );
-        return clonePending(next);
-      } catch (error) {
-        throw wrapRedisError(error);
-      }
+      return fencedFinalize(
+        confirmationId,
+        executionVersion,
+        next,
+        PENDING_CHANGE_TTL_SECONDS
+      );
     },
 
     async findPendingByConversation(conversationId) {

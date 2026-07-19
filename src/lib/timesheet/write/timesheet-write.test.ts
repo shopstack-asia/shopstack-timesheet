@@ -172,7 +172,9 @@ describe('pending store', () => {
       summaryPayload: {},
       writeEntries: [],
     });
-    expect((await store.claimForExecution('confirm_a'))?.status).toBe('executing');
+    const claimed = await store.claimForExecution('confirm_a');
+    expect(claimed?.status).toBe('executing');
+    expect(claimed?.executionVersion).toBe(1);
     expect(await store.claimForExecution('confirm_a')).toBeNull();
   });
 });

@@ -47,7 +47,8 @@ There is **no** unconfirmed direct-write tool in the AI registry. Internal helpe
 ## Pending store
 
 - Abstraction: `PendingTimesheetChangeStore` (async)
-- Production default: **Redis** via `getRedisClient()` — Lua atomic create/claim/cancel/CAS
+- Production default: **Redis** via `getRedisClient()` — Lua atomic create/claim/reclaim/cancel/fenced finalize
+- Fencing: `executionVersion` bumped on claim/reclaim; finalizers and pre-write assert require the matching version
 - Keys: `timesheet:pending-change:{id}`, `timesheet:pending-by-conv:{conversationId}`
 - TTL **10 minutes** pending; completed retention **30 minutes** for Slack retries
 - In-memory Map is an **explicit test double only** — production never falls back to it
@@ -55,10 +56,15 @@ There is **no** unconfirmed direct-write tool in the AI registry. Internal helpe
 
 ## Concurrency and recovery
 
-- Optimistic concurrency: confirm writes only when current snapshot matches `originalSnapshotHash` (or content equals original after stale-lease reclaim)
+Design: **idempotent confirmation with snapshot reconciliation and fenced execution leases** (not absolute exactly-once across Redis + Sheets).
+
+- Each execution claim carries an `executionVersion` fencing token (integer). Claim and stale reclaim bump it atomically.
+- Finalizers (`markCompleted` / `markFailed` / `markConflict`) require `status=executing` **and** matching `executionVersion`. Redis Lua CAS is authoritative — never invent local success.
+- Optimistic concurrency: confirm writes only when current snapshot matches original (hash, or content equality after stale reclaim)
 - If current already matches **proposed** content → complete without rewriting (reconciliation)
-- Executing lease **90s**: stale claims may reclaim; fresh claims return `already_processing`
-- Prefer the phrase **idempotent confirmation with reconciliation** over “exactly-once”
+- Executing lease **90s**: stale claims may reclaim with a newer version; fresh claims return `already_processing`
+- Immediately before Sheets write, `assertExecutionOwnership` — if lost, zero writes
+- Redis and Sheets are separate systems; fencing cannot make them one transaction
 
 ## Identity
 

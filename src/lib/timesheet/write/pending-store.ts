@@ -10,7 +10,7 @@ import {
 } from '@/lib/timesheet/write/pending-store-memory';
 import type { PendingTimesheetChangeStore } from '@/lib/timesheet/write/pending-store-types';
 
-export type { PendingTimesheetChangeStore, CreatePendingInput } from '@/lib/timesheet/write/pending-store-types';
+export type { PendingTimesheetChangeStore, CreatePendingInput, FenceTransitionResult } from '@/lib/timesheet/write/pending-store-types';
 export { PendingStoreError } from '@/lib/timesheet/write/pending-store-types';
 export {
   createInMemoryPendingTimesheetChangeStore,

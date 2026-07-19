@@ -18,6 +18,7 @@ export type SerializedPendingChange = Omit<
   expiresAt: string;
   claimedAt?: string;
   completedAt?: string;
+  executionVersion: number;
 };
 
 export function serializePending(
@@ -50,6 +51,11 @@ export function deserializePending(
 ): PendingTimesheetChange {
   return {
     ...raw,
+    executionVersion:
+      typeof raw.executionVersion === 'number' &&
+      Number.isFinite(raw.executionVersion)
+        ? raw.executionVersion
+        : 0,
     createdAt: new Date(raw.createdAt),
     expiresAt: new Date(raw.expiresAt),
     claimedAt: raw.claimedAt ? new Date(raw.claimedAt) : undefined,
@@ -81,6 +87,7 @@ export function buildPendingFromCreateInput(
   return {
     ...input,
     status: input.status ?? 'pending',
+    executionVersion: input.executionVersion ?? 0,
     createdAt: now,
     expiresAt: new Date(now.getTime() + ttl),
   };

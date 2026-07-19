@@ -13,7 +13,7 @@
 | [Prepare Submit Timesheet.md](./Prepare%20Submit%20Timesheet.md) | `prepare_submit_timesheet` (unsupported) |
 | [Confirm Timesheet Change.md](./Confirm%20Timesheet%20Change.md) | `confirm_timesheet_change` |
 | [Cancel Timesheet Change.md](./Cancel%20Timesheet%20Change.md) | `cancel_timesheet_change` |
-| [Pending Timesheet Change Lifecycle.md](./Pending%20Timesheet%20Change%20Lifecycle.md) | Pending store TTL / claim / statuses |
+| [Pending Timesheet Change Lifecycle.md](./Pending%20Timesheet%20Change%20Lifecycle.md) | Pending store TTL / claim / `executionVersion` fencing / statuses |
 | [Write Security Boundary.md](./Write%20Security%20Boundary.md) | Identity + no direct-write registry |
 | [Conversation Context.md](./Conversation%20Context.md) | Ephemeral cache + invalidation |
 | [Identity Resolution.md](./Identity%20Resolution.md) | Slack → Zoho employee binding |
