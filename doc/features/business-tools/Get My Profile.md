@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Let the current Slack user verify which employee identity the Timesheet AI Agent resolved, and whether that identity matches the identifier used by the Weekly Timesheet data source (Google Sheets Time Log **Staff ID** = Zoho **EmployeeID**).
+Show the current Slack user which employee identity Conversation Context holds, and which Google Sheets Time Log **Staff ID** the canonical Timesheet reader will use.
 
 ## Input
 
@@ -14,17 +14,9 @@ Let the current Slack user verify which employee identity the Timesheet AI Agent
 {} // empty object only
 ```
 
-```json
-{
-  "type": "object",
-  "properties": {},
-  "additionalProperties": false
-}
-```
+Reject AI-supplied identity fields (`employeeId`, `email`, `slackUserId`, `zohoRecordId`, `staffId`, `timesheetStaffId`, …) with `validation_error` — without calling Context Manager.
 
-Reject any AI-supplied identity fields (`employeeId`, `email`, `slackUserId`, `zohoRecordId`, …) with `validation_error`.
-
-## Identity source
+## Flow
 
 ```mermaid
 sequenceDiagram
@@ -32,77 +24,59 @@ sequenceDiagram
   participant AI as OpenAI
   participant T as get_my_profile
   participant Ctx as Conversation Context
-  participant V as Timesheet employee verify
-  participant Z as Zoho People
 
   U->>AI: ฉันคือใคร / Employee ID ของฉันคืออะไร
   AI->>T: get_my_profile({})
   T->>Ctx: getConversationContext()
-  Ctx-->>T: slackUserId, slackEmail, employeeId
-  T->>V: verifyTimesheetEmployeeIdentity
-  V->>Z: getEmployeeByEmail(slackEmail)
-  Z-->>V: EmployeeID (Staff ID)
-  V-->>T: match / mismatch / not_found / unavailable
+  Ctx-->>T: slackUserId, slackEmail, employeeId, employeeName?
+  T->>T: deriveTimesheetStaffIdentity(employeeId)
   T-->>AI: MyEmployeeProfile
   AI-->>U: safe summary
 ```
 
-Conversation Context remains the only employee identity source for Business Tools. This tool does **not** update Conversation Context or change mappings.
+**No Zoho lookup. No Slack lookup. No Sheets lookup inside this tool.**
 
-## Timesheet employee identifier
+Identity resolution (Slack → email → Zoho) happens only when Conversation Context is first created — outside Business Tools.
 
-| Layer | Identifier |
-|-------|------------|
-| Conversation Context | Zoho `EmployeeID` (e.g. `S0005`) |
-| Weekly Timesheet UI session | `staffProfile.EmployeeID` |
-| Google Sheets Time Log | column **Staff ID** = same Zoho `EmployeeID` |
-| Diagnostic type | `zoho_EmployeeID` |
+## Canonical Staff ID
 
-Verification reuses Zoho `getEmployeeByEmail` (same path as NextAuth / Slack identity). It does **not** invent `/v1/me`, does not scan Time Log entries for a date, and does not treat zero hours as identity failure.
+| Field | Value |
+|-------|-------|
+| `identitySource` | `conversation_context` |
+| `timesheetIdentityType` | `zoho_EmployeeID` |
+| `timesheetStaffId` | Conversation Context `employeeId` |
+| Canonical reader | `AgentAuthContext.staff.EmployeeID` = same value |
+| Sheets filter | Time Log `Staff ID` === that value |
 
-## Safe response (`MyEmployeeProfile`)
+## Response (`MyEmployeeProfile`)
 
 | Field | Meaning |
 |-------|---------|
-| `slackUserId` | From Conversation Context |
-| `slackEmail` | From Conversation Context |
-| `employeeId` | From Conversation Context |
-| `employeeName` | Safe display name from Zoho verification (optional) |
-| `timesheetIdentityType` | e.g. `zoho_EmployeeID` |
-| `timesheetIdentityValue` | Identifier used as Time Log Staff ID |
-| `timesheetIdentityMatched` | boolean |
-| `timesheetIdentityStatus` | `matched` \| `not_found` \| `mismatch` \| `unavailable` |
+| `slackUserId` / `slackEmail` / `employeeId` | From Conversation Context |
+| `employeeName` | From Conversation Context if stored at identity creation |
+| `identitySource` | Always `conversation_context` |
+| `timesheetIdentityType` | `zoho_EmployeeID` |
+| `timesheetStaffId` | Present when configured |
+| `timesheetMappingStatus` | `configured` \| `missing` |
 | `diagnosticMessage` | Safe explanation |
 
-Never returned: tokens, API keys, raw Zoho payloads, salary, bank, address, phone, national ID, birth date, other employees.
-
-## Status meanings
+### Status meanings
 
 | Status | Meaning |
 |--------|---------|
-| `matched` | Context `employeeId` equals Timesheet Staff ID (Zoho EmployeeID) |
-| `mismatch` | Lookup succeeded but identifier differs |
-| `not_found` | No employee record for context email (mapping issue — not “no entries”) |
-| `unavailable` | Lookup timed out / service error (not a mismatch claim) |
+| `configured` | Context has an employeeId; the canonical reader will filter Time Log by that Staff ID. **Not** an independent Timesheet employee-master verification. |
+| `missing` | Context lacks the employeeId required for the Staff ID filter. |
 
-## Natural-language examples
-
-| User | Tool |
-|------|------|
-| ฉันคือใคร | `get_my_profile({})` |
-| Employee ID ของฉันคืออะไร | `get_my_profile({})` |
-| ตรวจสอบ Timesheet identity ของฉัน | `get_my_profile({})` |
-| Who am I? | `get_my_profile({})` |
-| What is an employee ID? | no tool (general concept) |
+There is **no** independent Timesheet employee master in this app. Do not use `matched` / `mismatch` / `timesheetIdentityMatched` for this tool.
 
 ## Security
 
-- No AI identity arguments
-- No cross-employee lookup
+- Empty args only; no AI identity override
+- No cross-employee query
 - Read-only / idempotent
-- Structured logs: requestId, conversationId, verification status, identity type — never secrets
+- Safe logs: requestId, conversationId, mappingStatus, identity type — not tokens or raw Zoho payloads
 
 ## Code
 
 - `src/lib/tools/business/profile/get-my-profile.ts`
-- `src/lib/timesheet/employee-identity.ts`
+- `src/lib/timesheet/timesheet-staff-identity.ts` (pure helper)

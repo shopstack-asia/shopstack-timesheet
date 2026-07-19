@@ -15,7 +15,6 @@ import { createGetWorkContextTool } from '@/lib/tools/business/context/get-work-
 import { createGetMyProfileTool } from '@/lib/tools/business/profile/get-my-profile';
 import { createGetTimesheetTool } from '@/lib/tools/business/timesheet/get-timesheet';
 import { createGetTimesheetRangeTool } from '@/lib/tools/business/timesheet/get-timesheet-range';
-import { TIMESHEET_STAFF_IDENTITY_TYPE } from '@/lib/timesheet/employee-identity';
 import {
   bangkokCurrentWeek,
   bangkokToday,
@@ -106,6 +105,8 @@ function makeRegistry(paths: Record<string, unknown>, extras = true) {
             staff: {
               EmployeeID: 'S1',
               Email: 'ada@shopstack.asia',
+              FirstName: 'Ada',
+              LastName: 'Lovelace',
             },
           },
         }),
@@ -154,17 +155,7 @@ function makeRegistry(paths: Record<string, unknown>, extras = true) {
     registry.register(currentDateTool);
     registry.register(currentTimeTool);
   }
-  registry.register(
-    createGetMyProfileTool({
-      ...deps,
-      lookupTimesheetEmployee: async (email) => ({
-        timesheetIdentityType: TIMESHEET_STAFF_IDENTITY_TYPE,
-        timesheetIdentityValue: 'S1',
-        email,
-        employeeName: 'Ada Lovelace',
-      }),
-    })
-  );
+  registry.register(createGetMyProfileTool(deps));
   registry.register(createGetWorkContextTool(deps));
   registry.register(createGetTimesheetTool(deps));
   registry.register(createGetTimesheetRangeTool(deps));
@@ -1131,7 +1122,10 @@ describe('runConversation get_my_profile enforcement', () => {
           expect(toolMsgs).toHaveLength(1);
           expect(toolMsgs[0]?.name).toBe('get_my_profile');
           expect(toolMsgs[0]?.content).toContain('"employeeId":"S1"');
+          expect(toolMsgs[0]?.content).toContain('"timesheetStaffId":"S1"');
+          expect(toolMsgs[0]?.content).toContain('"timesheetMappingStatus":"configured"');
           expect(toolMsgs[0]?.content).toContain('"success":true');
+          expect(toolMsgs[0]?.content).not.toContain('timesheetIdentityMatched');
           executed.push(toolMsgs[0]!.name!);
           return {
             text: 'Your employee ID is S1.',
@@ -1207,15 +1201,12 @@ describe('runConversation get_my_profile enforcement', () => {
               staff: {
                 EmployeeID: 'S1',
                 Email: 'ada@shopstack.asia',
+                FirstName: 'Ada',
+                LastName: 'Lovelace',
               },
             },
           }),
         }),
-      }),
-      lookupTimesheetEmployee: async (email) => ({
-        timesheetIdentityType: TIMESHEET_STAFF_IDENTITY_TYPE,
-        timesheetIdentityValue: 'S1',
-        email,
       }),
     });
     const wrapped = {

@@ -2,7 +2,7 @@
 
 | Tool | Purpose |
 |------|---------|
-| `get_my_profile` | Current Slack user’s Conversation Context identity + Timesheet Staff ID verification |
+| `get_my_profile` | Current user’s Conversation Context identity + canonical Time Log Staff ID (`configured` / `missing`) |
 | `get_work_context` | User + clients → projects → roles (cached via Conversation Context) |
 | `get_timesheet` | One calendar day (`YYYY-MM-DD`) via canonical Sheets Time Log read (same as Weekly Timesheet UI) |
 | `get_timesheet_range` | Inclusive date range (max 31 days) via the same canonical read |

@@ -6,7 +6,7 @@ Read-only AI Business Tools that call Timesheet API via the Business API Client.
 
 AI-visible tools:
 
-- `get_my_profile` — current employee identity diagnostic (no arguments)
+- `get_my_profile` — current employee identity from Conversation Context (canonical Time Log Staff ID; no Zoho re-lookup)
 - `get_work_context`
 - `get_timesheet` — one `YYYY-MM-DD`
 - `get_timesheet_range` — inclusive start/end, max 31 days

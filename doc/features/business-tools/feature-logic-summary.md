@@ -15,7 +15,7 @@
 
 - `src/lib/tools/business/`
 - `src/lib/tools/business/profile/get-my-profile.ts`
-- `src/lib/timesheet/employee-identity.ts` — Zoho EmployeeID ↔ Time Log Staff ID verification
+- `src/lib/timesheet/timesheet-staff-identity.ts` — pure Staff ID derivation (no Zoho)
 - `src/lib/timesheet/canonical-read.ts` — shared Sheets Time Log → `DailyTimesheet` / `TimesheetRange`
 - `src/lib/timesheet/timesheet-service.ts` — shared row load with Weekly Timesheet UI
 - `src/lib/conversation/context/`

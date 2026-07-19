@@ -14,6 +14,8 @@ export type ConversationContext = {
   slackUserId: string;
   slackEmail: string;
   employeeId: string;
+  /** Optional display name captured when identity was first resolved */
+  employeeName?: string;
   workContext?: WorkContext;
   selectedClient?: SelectedRef;
   selectedProject?: SelectedRef;

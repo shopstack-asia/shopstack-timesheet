@@ -9,28 +9,24 @@ import {
   type BusinessToolDeps,
 } from '@/lib/tools/business/helpers';
 import {
-  verifyTimesheetEmployeeIdentity,
-  type TimesheetEmployeeLookup,
-  type VerifyTimesheetEmployeeIdentityResult,
-} from '@/lib/timesheet/employee-identity';
+  deriveTimesheetStaffIdentity,
+  TIMESHEET_STAFF_IDENTITY_TYPE,
+} from '@/lib/timesheet/timesheet-staff-identity';
 import { ToolError } from '@/lib/tools/errors';
 import type { JsonValue } from '@/lib/tools/types';
+
+export type TimesheetMappingStatus = 'configured' | 'missing';
 
 export type MyEmployeeProfile = {
   slackUserId: string;
   slackEmail: string;
   employeeId: string;
   employeeName?: string;
-  timesheetIdentityType: string;
-  timesheetIdentityValue?: string;
-  timesheetIdentityMatched: boolean;
-  timesheetIdentityStatus: VerifyTimesheetEmployeeIdentityResult['timesheetIdentityStatus'];
+  identitySource: 'conversation_context';
+  timesheetIdentityType: typeof TIMESHEET_STAFF_IDENTITY_TYPE;
+  timesheetStaffId?: string;
+  timesheetMappingStatus: TimesheetMappingStatus;
   diagnosticMessage: string;
-};
-
-export type GetMyProfileDeps = BusinessToolDeps & {
-  /** Injected Timesheet employee lookup (defaults to Zoho by email). */
-  lookupTimesheetEmployee?: TimesheetEmployeeLookup;
 };
 
 const TOOL_NAME = 'get_my_profile';
@@ -43,6 +39,8 @@ const FORBIDDEN_IDENTITY_KEYS = [
   'slack_user_id',
   'zohoRecordId',
   'zoho_record_id',
+  'staffId',
+  'timesheetStaffId',
 ] as const;
 
 function assertEmptyProfileInput(input: Record<string, unknown>): void {
@@ -68,8 +66,45 @@ function logProfile(event: Record<string, unknown>): void {
   );
 }
 
+export function buildMyEmployeeProfileFromContext(conv: {
+  slackUserId: string;
+  slackEmail: string;
+  employeeId: string;
+  employeeName?: string;
+}): MyEmployeeProfile {
+  const derived = deriveTimesheetStaffIdentity({
+    employeeId: conv.employeeId,
+  });
+
+  if (!derived.ok) {
+    return {
+      slackUserId: conv.slackUserId,
+      slackEmail: conv.slackEmail,
+      employeeId: conv.employeeId?.trim() || '',
+      employeeName: conv.employeeName,
+      identitySource: 'conversation_context',
+      timesheetIdentityType: TIMESHEET_STAFF_IDENTITY_TYPE,
+      timesheetMappingStatus: 'missing',
+      diagnosticMessage:
+        'Conversation Context does not contain the employee ID required for the Google Sheets Time Log Staff ID filter.',
+    };
+  }
+
+  return {
+    slackUserId: conv.slackUserId,
+    slackEmail: conv.slackEmail,
+    employeeId: derived.identity.staffId,
+    employeeName: conv.employeeName,
+    identitySource: 'conversation_context',
+    timesheetIdentityType: derived.identity.identityType,
+    timesheetStaffId: derived.identity.staffId,
+    timesheetMappingStatus: 'configured',
+    diagnosticMessage: `The canonical Timesheet reader will filter Google Sheets Time Log using Staff ID ${derived.identity.staffId} from Conversation Context.`,
+  };
+}
+
 export async function executeGetMyProfile(
-  deps: GetMyProfileDeps | undefined,
+  deps: BusinessToolDeps | undefined,
   input: Record<string, unknown>,
   context: ToolContext
 ): Promise<ToolResult> {
@@ -88,31 +123,13 @@ export async function executeGetMyProfile(
       ensureWorkContext: false,
     });
 
-    const verification = await verifyTimesheetEmployeeIdentity(
-      {
-        employeeId: conv.employeeId,
-        slackEmail: conv.slackEmail,
-      },
-      deps?.lookupTimesheetEmployee
-    );
-
-    const profile: MyEmployeeProfile = {
-      slackUserId: conv.slackUserId,
-      slackEmail: conv.slackEmail,
-      employeeId: conv.employeeId,
-      employeeName: verification.employeeName,
-      timesheetIdentityType: verification.timesheetIdentityType,
-      timesheetIdentityValue: verification.timesheetIdentityValue,
-      timesheetIdentityMatched: verification.timesheetIdentityMatched,
-      timesheetIdentityStatus: verification.timesheetIdentityStatus,
-      diagnosticMessage: verification.diagnosticMessage,
-    };
+    const profile = buildMyEmployeeProfileFromContext(conv);
 
     logProfile({
       requestId: context.requestId,
       conversationId,
-      identityVerificationStatus: profile.timesheetIdentityStatus,
       timesheetIdentityType: profile.timesheetIdentityType,
+      mappingStatus: profile.timesheetMappingStatus,
       durationMs: Date.now() - started,
     });
 
@@ -134,17 +151,17 @@ export async function executeGetMyProfile(
   }
 }
 
-export function createGetMyProfileTool(deps?: GetMyProfileDeps): Tool {
+export function createGetMyProfileTool(deps?: BusinessToolDeps): Tool {
   return {
     name: TOOL_NAME,
     description: [
-      'Return the current Slack user’s resolved Timesheet employee identity from Conversation Context.',
-      'Verifies that identity against the same Zoho EmployeeID / Time Log Staff ID used by the Weekly Timesheet UI.',
-      'Accepts no arguments. Never pass employeeId, email, or slackUserId.',
-      'Use for Who am I? / What is my employee ID? / Verify my Timesheet identity.',
+      'Return the current Slack user’s employee identity from Conversation Context.',
+      'Reports the Google Sheets Time Log Staff ID the canonical Timesheet reader will use (Zoho EmployeeID).',
+      'Does not call Zoho or Slack. Accepts no arguments — never pass employeeId, email, or slackUserId.',
+      'Use for Who am I? / What is my employee ID? / Show my Timesheet identity.',
       'Read-only — does not change identity mappings or Conversation Context.',
     ].join(' '),
-    version: '1.0.0',
+    version: '2.0.0',
     idempotent: true,
     inputSchema: {
       type: 'object',

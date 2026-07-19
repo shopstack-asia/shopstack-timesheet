@@ -74,7 +74,7 @@ export function rejectAiEmployeeId(input: Record<string, unknown>): void {
  */
 export function rejectAiIdentityFields(
   input: Record<string, unknown>,
-  keys: readonly string[] = [
+    keys: readonly string[] = [
     'employeeId',
     'employee_id',
     'email',
@@ -82,6 +82,8 @@ export function rejectAiIdentityFields(
     'slack_user_id',
     'zohoRecordId',
     'zoho_record_id',
+    'staffId',
+    'timesheetStaffId',
   ]
 ): void {
   for (const key of keys) {

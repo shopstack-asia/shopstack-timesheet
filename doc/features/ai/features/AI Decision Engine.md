@@ -34,7 +34,7 @@ Unresolved timesheet asks never default to today or the current week.
 | `isGeneralConceptualQuestion` | What is / Explain / Define / … |
 | `isGeneralInstructionalQuestion` | How do I… (I alone ≠ employee data) |
 | `isGeneralNewsOrExternalTopic` | News, weather, holidays, events |
-| `isMyProfileRequest` | Who am I / my employee ID / Timesheet identity diagnostic |
+| `isMyProfileRequest` | Who am I / my employee ID / Timesheet identity (Conversation Context → Staff ID; no Zoho in tool) |
 | `isWorkContextRequest` | Employee assignment / projects / clients / roles |
 | `isTimesheetDomainRequest` | Employee timesheet / logged hours |
 | `isEmployeeBusinessRequest` | Phrase-level personal business structure |

@@ -5,6 +5,7 @@
  * from Google Sheets via `getTimeLogRowsForStaffRange` — no separate /v1/timesheets contract.
  */
 
+import { TIMESHEET_STAFF_IDENTITY_TYPE } from '@/lib/timesheet/timesheet-staff-identity';
 import { AgentAuthContext, AgentAuthError } from '@/lib/timesheet/agent-auth';
 import {
   getTimeLogRowsForStaffRange,
@@ -206,7 +207,7 @@ export async function readDailyTimesheetForEmployee(
       conversationId: options?.conversationId,
       operation: 'readDailyTimesheetForEmployee',
       upstream: 'google_sheets.Time_Log',
-      employeeIdentityType: 'zoho_EmployeeID',
+      employeeIdentityType: TIMESHEET_STAFF_IDENTITY_TYPE,
       date,
       entryCount: day.entries.length,
       totalHours: day.totalHours,
@@ -302,7 +303,7 @@ export async function readTimesheetRangeForEmployee(
       conversationId: options?.conversationId,
       operation: 'readTimesheetRangeForEmployee',
       upstream: 'google_sheets.Time_Log',
-      employeeIdentityType: 'zoho_EmployeeID',
+      employeeIdentityType: TIMESHEET_STAFF_IDENTITY_TYPE,
       startDate,
       endDate,
       entryCount: rows.length,
