@@ -134,6 +134,14 @@ describe('sendMessage / sendThreadReply', () => {
     );
   });
 
+  it('normalizes GitHub Markdown bold before chat.postMessage', async () => {
+    const { client, postMessage } = mockClient();
+    await sendMessage('C1', '**รวมเวลา:** 10 ชั่วโมง', { client });
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: '*รวมเวลา:* 10 ชั่วโมง' })
+    );
+  });
+
   it('posts a thread reply', async () => {
     const { client, postMessage } = mockClient();
     await sendThreadReply('C1', '1.2', 'reply', { client });

@@ -1,6 +1,7 @@
 import { WebClient } from '@slack/web-api';
 import { getSlackClient } from '@/lib/slack/client';
 import { createSlackRequestLogger, type SlackLogFields } from '@/lib/slack/logger';
+import { normalizeSlackMrkdwn } from '@/lib/slack/mrkdwn';
 
 export class SlackResponseError extends Error {
   readonly code: string;
@@ -43,7 +44,7 @@ async function postMessage(params: {
   options?: SendMessageOptions;
 }): Promise<{ ts?: string }> {
   const channel = assertNonEmpty('channel', params.channel);
-  const text = assertNonEmpty('text', params.text);
+  const text = assertNonEmpty('text', normalizeSlackMrkdwn(params.text));
   const log = createSlackRequestLogger({
     requestId: params.options?.requestId,
     eventId: params.options?.eventId,

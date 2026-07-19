@@ -112,13 +112,18 @@ export function formatProjectDisplayName(row: TimeLogRow): string | undefined {
 
 export function mapTimeLogRowToEntry(row: TimeLogRow): TimesheetEntry {
   const hours = Number(row.Hours);
+  const taskId = row['Task ID'] || undefined;
+  const taskName = row.Task || undefined;
   return {
     id: row['Time Log ID'] || undefined,
     clientName: row['Project Client'] || undefined,
     projectId: row['Project ID'] || undefined,
     projectName: formatProjectDisplayName(row),
-    roleId: row['Task ID'] || undefined,
-    roleName: row.Task || undefined,
+    taskId,
+    taskName,
+    // Deprecated aliases — same Sheets Task fields (do not invent Role semantics)
+    roleId: taskId,
+    roleName: taskName,
     hours: Number.isFinite(hours) ? hours : 0,
   };
 }

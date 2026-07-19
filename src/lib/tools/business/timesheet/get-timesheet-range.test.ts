@@ -17,9 +17,9 @@ const rangeFixture: TimesheetRange = {
     {
       date: '2026-07-18',
       entries: [
-        { clientName: 'Hertz', hours: 5, roleName: 'Development' },
-        { clientName: 'Mitrphol', hours: 3, roleName: 'Project Management' },
-        { clientName: 'Shopstack', hours: 2, roleName: 'Development' },
+        { clientName: 'Hertz', hours: 5, taskName: 'Development' },
+        { clientName: 'Mitrphol', hours: 3, taskName: 'Project Management' },
+        { clientName: 'Shopstack', hours: 2, taskName: 'Development' },
       ],
       totalHours: 10,
       expectedHours: 8,

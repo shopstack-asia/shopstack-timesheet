@@ -71,14 +71,15 @@ describe('canonical Timesheet read mapping', () => {
     expect(day.entries[0]).toMatchObject({
       clientName: 'Hertz',
       projectName: 'Commerce Suite (HERTZ-PLATFORM-2026-01)',
-      roleName: 'Development',
+      taskName: 'Development',
+      taskId: '3',
       hours: 5,
     });
     expect(day.entries[1]).toMatchObject({
       clientName: 'Mitrphol',
       projectName:
         'Raw Material Supply Management System (RMS) (MIT-RMS-2025-01)',
-      roleName: 'Project Management',
+      taskName: 'Project Management',
       hours: 3,
     });
     expect(day.entries[2]).toMatchObject({
@@ -86,6 +87,7 @@ describe('canonical Timesheet read mapping', () => {
       projectName: 'Commerce Suite (SS-COMMERCE-SUTE)',
       hours: 2,
     });
+    expect(day.entries[0]?.roleName).toBe('Development'); // deprecated alias
   });
 
   it('empty day is successful with zero hours (not an error)', () => {
