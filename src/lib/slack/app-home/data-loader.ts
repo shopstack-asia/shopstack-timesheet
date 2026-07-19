@@ -40,6 +40,18 @@ export type AppHomeLoaderDeps = {
   getTimesheetUrl?: () => string | undefined;
 };
 
+export type LoadAppHomeDashboardInput = {
+  /** Trusted Slack user from verified event/action */
+  slackUserId: string;
+  /**
+   * Trusted workspace id from envelope.team_id / payload.team.id.
+   * Empty string → explicit `unscoped` Conversation Context namespace.
+   */
+  workspaceId: string;
+  requestId?: string;
+  showHelpExpanded?: boolean;
+} & AppHomeLoaderDeps;
+
 function displayFirstName(employeeName?: string): string | undefined {
   const n = employeeName?.trim();
   if (!n) return undefined;
@@ -72,7 +84,6 @@ async function defaultLoadWorkContext(
     slackUserId: string;
   }
 ): Promise<WorkContext | undefined> {
-  // employeeId is unused — identity comes from Context Manager only
   void input.employeeId;
   const ctx = await manager.getConversationContext({
     conversationId: input.conversationId,
@@ -85,23 +96,20 @@ async function defaultLoadWorkContext(
 }
 
 /**
- * Load App Home dashboard data for a trusted Slack user.
- * `slackUserId` must come from the verified Slack event/action principal.
+ * Load App Home dashboard data.
+ * Builds a workspace-scoped Conversation Context id internally.
  */
 export async function loadAppHomeDashboard(
-  slackUserId: string,
-  options: {
-    requestId?: string;
-    showHelpExpanded?: boolean;
-  } & AppHomeLoaderDeps = {}
+  input: LoadAppHomeDashboardInput
 ): Promise<AppHomeLoadResult> {
-  const manager = options.contextManager ?? getDefaultContextManager();
-  const readRange =
-    options.readTimesheetRange ?? readTimesheetRangeForEmployee;
-  const timesheetUrl = (options.getTimesheetUrl ?? getSafeAppHomeTimesheetUrl)();
-  const now = options.now ?? new Date();
+  const slackUserId = input.slackUserId.trim();
+  const workspaceId = input.workspaceId;
+  const manager = input.contextManager ?? getDefaultContextManager();
+  const readRange = input.readTimesheetRange ?? readTimesheetRangeForEmployee;
+  const timesheetUrl = (input.getTimesheetUrl ?? getSafeAppHomeTimesheetUrl)();
+  const now = input.now ?? new Date();
   const week = bangkokMondaySundayWeek(now);
-  const conversationId = buildAppHomeConversationId(slackUserId);
+  const conversationId = buildAppHomeConversationId(workspaceId, slackUserId);
 
   let displayName: string | undefined;
   let identityEmail: string | undefined;
@@ -111,7 +119,7 @@ export async function loadAppHomeDashboard(
     const ctx = await manager.getConversationContext({
       conversationId,
       slackUserId,
-      requestId: options.requestId,
+      requestId: input.requestId,
       ensureWorkContext: false,
     });
     displayName = displayFirstName(ctx.employeeName);
@@ -136,7 +144,7 @@ export async function loadAppHomeDashboard(
   }
 
   const loadWork =
-    options.loadWorkContext ??
+    input.loadWorkContext ??
     ((empId: string, opts: {
       requestId?: string;
       conversationId: string;
@@ -144,9 +152,9 @@ export async function loadAppHomeDashboard(
     }) => defaultLoadWorkContext(manager, { employeeId: empId, ...opts }));
 
   const readOpts: CanonicalReadOptions = {
-    requestId: options.requestId,
+    requestId: input.requestId,
     conversationId,
-    loader: options.timesheetLoader,
+    loader: input.timesheetLoader,
   };
 
   const [tsSettled, wcSettled] = await Promise.allSettled([
@@ -161,7 +169,7 @@ export async function loadAppHomeDashboard(
       readOpts
     ),
     loadWork(employeeId, {
-      requestId: options.requestId,
+      requestId: input.requestId,
       conversationId,
       slackUserId,
     }),
@@ -207,7 +215,7 @@ export async function loadAppHomeDashboard(
     kind: 'dashboard',
     displayName,
     timesheetUrl,
-    showHelpExpanded: options.showHelpExpanded,
+    showHelpExpanded: input.showHelpExpanded,
     timesheet: {
       status:
         timesheetOutcome === 'failed'

@@ -35,6 +35,22 @@ export const APP_HOME_MAX_BLOCKS = 90;
 export const APP_HOME_MAX_SECTION_TEXT = 2900;
 export const APP_HOME_LOADING_DELAY_MS = 700;
 
-export function buildAppHomeConversationId(slackUserId: string): string {
-  return `slack:app_home:${slackUserId.trim()}`;
+/**
+ * Workspace-scoped App Home Conversation Context id.
+ * Components are URI-encoded so separators/whitespace cannot collide.
+ *
+ * - With workspace: `slack:app_home:{workspaceId}:{userId}`
+ * - Without workspace (allow-list unset and team missing):
+ *   `slack:app_home:unscoped:{userId}`
+ */
+export function buildAppHomeConversationId(
+  workspaceId: string | null | undefined,
+  slackUserId: string
+): string {
+  const user = encodeURIComponent(slackUserId.trim());
+  const ws = (workspaceId ?? '').trim();
+  if (!ws) {
+    return `slack:app_home:unscoped:${user}`;
+  }
+  return `slack:app_home:${encodeURIComponent(ws)}:${user}`;
 }

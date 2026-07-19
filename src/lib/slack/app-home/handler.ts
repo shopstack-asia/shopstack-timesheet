@@ -21,6 +21,10 @@ import {
   buildAppHomeView,
   type SlackHomeView,
 } from '@/lib/slack/app-home/view-builder';
+import {
+  evaluateWorkspaceAccess,
+  resolveConfiguredAllowedWorkspace,
+} from '@/lib/slack/app-home/workspace';
 import type { EventHandlerContext } from '@/lib/slack/events/handler-utils';
 import { wasEventProcessed } from '@/lib/timesheet-agent/conversation-state';
 
@@ -31,10 +35,24 @@ export type AppHomeHandlerDeps = AppHomeLoaderDeps & {
   /** When true, may publish a loading view if data is slow */
   enableLoadingView?: boolean;
   loadingDelayMs?: number;
+  /** Injected allow-list for tests; defaults to Slack config / env */
+  allowedWorkspaceId?: string | null;
 };
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveAllowed(deps: AppHomeHandlerDeps): string | undefined {
+  if (deps.allowedWorkspaceId !== undefined) {
+    const v = deps.allowedWorkspaceId?.trim();
+    return v || undefined;
+  }
+  try {
+    return resolveConfiguredAllowedWorkspace(getSlackConfig());
+  } catch {
+    return resolveConfiguredAllowedWorkspace(null);
+  }
 }
 
 /**
@@ -48,6 +66,7 @@ export async function handleAppHomeOpened(
   const event = ctx.envelope.event;
   const slackUserId = event.user?.trim();
   const eventId = ctx.envelope.event_id?.trim();
+  const actualWorkspaceId = ctx.envelope.team_id?.trim();
   const log = createAppHomeLogger({
     requestId: ctx.requestId,
     eventId,
@@ -71,6 +90,23 @@ export async function handleAppHomeOpened(
       return { published: false, reason: 'wrong_event' };
     }
 
+    const allowedWorkspaceId = resolveAllowed(deps);
+    const workspaceCheck = evaluateWorkspaceAccess({
+      actualWorkspaceId,
+      allowedWorkspaceId,
+    });
+    if (workspaceCheck.outcome !== 'allowed') {
+      log.info('workspace rejected', {
+        actualWorkspaceId: actualWorkspaceId || undefined,
+        allowedWorkspaceConfigured: Boolean(allowedWorkspaceId),
+        workspaceOutcome: workspaceCheck.outcome,
+        publishOutcome: 'skipped',
+        durationMs: Date.now() - started,
+      });
+      // Fail closed — do not publish identity/dependency views for foreign workspace
+      return { published: false, reason: workspaceCheck.outcome };
+    }
+
     const tab = (event as { tab?: string }).tab;
     if (tab && tab !== 'home') {
       log.info('non-home tab ignored', {
@@ -86,7 +122,9 @@ export async function handleAppHomeOpened(
       return { published: false, reason: 'missing_user' };
     }
 
-    const dedupeId = eventId || `app_home:${slackUserId}:${event.event_ts || ''}`;
+    const workspaceId = workspaceCheck.workspaceId;
+    const dedupeId =
+      eventId || `app_home:${workspaceId}:${slackUserId}:${event.event_ts || ''}`;
     const wasProcessed = deps.wasProcessed ?? wasEventProcessed;
     if (await wasProcessed(dedupeId)) {
       log.info('duplicate event ignored', {
@@ -96,7 +134,9 @@ export async function handleAppHomeOpened(
       return { published: false, reason: 'deduped' };
     }
 
-    const loadPromise = loadAppHomeDashboard(slackUserId, {
+    const loadPromise = loadAppHomeDashboard({
+      slackUserId,
+      workspaceId,
       requestId: ctx.requestId,
       ...deps,
     });
@@ -155,7 +195,8 @@ export async function handleAppHomeOpened(
       durationMs: Date.now() - started,
       errorClass: error instanceof Error ? error.name : 'unknown',
     });
-    // Best-effort identity/dependency error view — never throw to route
+    // Best-effort dependency error view — never throw to route
+    // (workspace rejections return earlier and never reach here)
     if (event.user) {
       try {
         const view = buildAppHomeView({ kind: 'dependency_error' });

@@ -94,6 +94,14 @@ flowchart TD
 
 - Conversation Context is the **only** employee identity source
 - Forged `employeeId` / Staff ID / email / slackUserId on action payloads are ignored
+- **Workspace isolation:** when `SLACK_ALLOWED_WORKSPACE` is set, App Home processes only that exact Slack Team ID
+  - Events: `envelope.team_id`
+  - Actions: `payload.team.id`
+  - Missing or mismatched workspace → fail closed (no identity, no reads, no `views.publish` / `views.open`)
+  - Validly signed but rejected interactions still ACK **HTTP 200** (no Slack retry storm); invalid signatures remain **401**
+- Conversation Context key is workspace-scoped: `slack:app_home:{workspaceId}:{userId}` (URI-encoded components). If no allow-list is configured and team id is missing: `slack:app_home:unscoped:{userId}`
+- Do **not** put workspace or employee identity in Block Kit button values or `private_metadata`
+- Production single-workspace deploys should set `SLACK_ALLOWED_WORKSPACE=TXXXXXXXX` (exact Team ID)
 - No OpenAI on App Home path
 - No prepare/confirm/cancel or Sheets writers from Home open/refresh
 
@@ -136,4 +144,4 @@ Existing bot scopes remain: `app_mentions:read`, `chat:write`, `im:history`, `im
 
 ### Required tests
 
-Covered in `src/lib/slack/app-home/app-home.test.ts`: event routing, dedupe, identity isolation, Bangkok week boundaries, totals, projects cap, Block Kit safety, actions, no-write/no-OpenAI path.
+Covered in `src/lib/slack/app-home/app-home.test.ts` and `app-home-workspace.test.ts`: event routing, dedupe, identity isolation, Bangkok week boundaries, totals, projects cap, Block Kit safety, actions, no-write/no-OpenAI path, **workspace allow-list (events + interactions route + handler defense in depth)**, workspace-scoped Conversation Context keys.

@@ -89,7 +89,13 @@ export async function dispatchSlackEvent(
   if (eventType === EVENT_APP_HOME_OPENED) {
     await handleAppHomeOpened(
       { requestId: options.requestId, envelope },
-      options.appHome ?? {}
+      {
+        ...options.appHome,
+        allowedWorkspaceId:
+          options.appHome?.allowedWorkspaceId !== undefined
+            ? options.appHome.allowedWorkspaceId
+            : options.allowedWorkspace,
+      }
     );
     return { handled: true, route: 'app_home_opened' };
   }

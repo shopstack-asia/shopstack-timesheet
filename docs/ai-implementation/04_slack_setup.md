@@ -29,4 +29,5 @@
 - Email must be visible to the bot for identity  
 - URL verification is handled automatically by the events route  
 - App Home does not call OpenAI and does not write Timesheet data  
+- Set **`SLACK_ALLOWED_WORKSPACE`** to your exact Slack Team ID (e.g. `T012ABCDEF`) so App Home events and Block Kit actions from other workspaces are ignored  
 - Detailed Home docs: `doc/features/slack/features/Slack App Home.md`

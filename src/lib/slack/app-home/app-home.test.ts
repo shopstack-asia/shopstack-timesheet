@@ -322,7 +322,7 @@ describe('App Home data loader', () => {
       { date: '2026-07-18', hours: 3.5, entries: 2 },
       { date: '2026-07-19', hours: 6.5 },
     ]);
-    const result = await loadAppHomeDashboard('U1', {
+    const result = await loadAppHomeDashboard({ slackUserId: 'U1', workspaceId: 'T-ALLOWED', 
       now: FIXED_NOW,
       contextManager: manager,
       readTimesheetRange: async () => range,
@@ -342,7 +342,7 @@ describe('App Home data loader', () => {
   });
 
   it('identity failure renders identity error', async () => {
-    const result = await loadAppHomeDashboard('U1', {
+    const result = await loadAppHomeDashboard({ slackUserId: 'U1', workspaceId: 'T-ALLOWED', 
       contextManager: identityManager({ fail: true }),
       readTimesheetRange: async () => {
         throw new Error('should not run');
@@ -353,7 +353,7 @@ describe('App Home data loader', () => {
   });
 
   it('timesheet failure + work context success → partial', async () => {
-    const result = await loadAppHomeDashboard('U1', {
+    const result = await loadAppHomeDashboard({ slackUserId: 'U1', workspaceId: 'T-ALLOWED', 
       now: FIXED_NOW,
       contextManager: identityManager(),
       readTimesheetRange: async () => {
@@ -370,7 +370,7 @@ describe('App Home data loader', () => {
   });
 
   it('timesheet success + work context failure → partial', async () => {
-    const result = await loadAppHomeDashboard('U1', {
+    const result = await loadAppHomeDashboard({ slackUserId: 'U1', workspaceId: 'T-ALLOWED', 
       now: FIXED_NOW,
       contextManager: identityManager(),
       readTimesheetRange: async () =>
@@ -392,7 +392,7 @@ describe('App Home data loader', () => {
   });
 
   it('both fail → dependency error', async () => {
-    const result = await loadAppHomeDashboard('U1', {
+    const result = await loadAppHomeDashboard({ slackUserId: 'U1', workspaceId: 'T-ALLOWED', 
       now: FIXED_NOW,
       contextManager: identityManager(),
       readTimesheetRange: async () => {
@@ -406,8 +406,9 @@ describe('App Home data loader', () => {
   });
 
   it('isolates users via conversation id', () => {
-    expect(buildAppHomeConversationId('U1')).toBe('slack:app_home:U1');
-    expect(buildAppHomeConversationId('U2')).toBe('slack:app_home:U2');
+    expect(buildAppHomeConversationId('T1', 'U1')).toBe('slack:app_home:T1:U1');
+    expect(buildAppHomeConversationId('T1', 'U2')).toBe('slack:app_home:T1:U2');
+    expect(buildAppHomeConversationId('T2', 'U1')).toBe('slack:app_home:T2:U1');
   });
 });
 
@@ -433,6 +434,7 @@ describe('App Home event handler', () => {
     client: viewsClient,
     enableLoadingView: false,
     wasProcessed: vi.fn(async () => false),
+    allowedWorkspaceId: null as string | null,
     contextManager: identityManager(),
     now: FIXED_NOW,
     readTimesheetRange: async () =>
@@ -545,6 +547,7 @@ describe('App Home actions', () => {
     await handleAppHomeAction(
       {
         user: { id: 'U1' },
+        team: { id: 'T1' },
         actions: [
           {
             action_id: APP_HOME_ACTION.refresh,
@@ -558,6 +561,7 @@ describe('App Home actions', () => {
       },
       {
         requestId: 'r1',
+        allowedWorkspaceId: null,
         wasProcessed: async () => false,
         client: {
           views: {
@@ -592,6 +596,7 @@ describe('App Home actions', () => {
     const publish = vi.fn(async () => ({ ok: true }));
     const payload = {
       user: { id: 'U1' },
+      team: { id: 'T1' },
       actions: [
         {
           action_id: APP_HOME_ACTION.refresh,
@@ -601,6 +606,7 @@ describe('App Home actions', () => {
       ],
     };
     const deps = {
+      allowedWorkspaceId: null as string | null,
       wasProcessed,
       client: { views: { publish } },
       contextManager: identityManager(),
@@ -624,10 +630,12 @@ describe('App Home actions', () => {
     await handleAppHomeAction(
       {
         user: { id: 'U1' },
+        team: { id: 'T1' },
         trigger_id: 'trig',
         actions: [{ action_id: APP_HOME_ACTION.help, value: APP_HOME_VALUE.help, action_ts: 'h.1' }],
       },
       {
+        allowedWorkspaceId: null,
         wasProcessed: async () => false,
         client: {
           views: {
@@ -657,12 +665,14 @@ describe('App Home no-write / no-OpenAI invariants', () => {
         requestId: 'r1',
         envelope: {
           type: 'event_callback',
+          team_id: 'T1',
           event_id: 'EvNoWrite',
           event: { type: 'app_home_opened', user: 'U1', tab: 'home' },
         },
       },
       {
         enableLoadingView: false,
+        allowedWorkspaceId: null,
         wasProcessed: async () => false,
         client: {
           views: { publish: async () => ({ ok: true }) },

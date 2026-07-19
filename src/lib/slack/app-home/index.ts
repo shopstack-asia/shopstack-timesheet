@@ -5,6 +5,10 @@ export {
   APP_HOME_VALUE,
   buildAppHomeConversationId,
 } from '@/lib/slack/app-home/constants';
+export {
+  evaluateWorkspaceAccess,
+  resolveConfiguredAllowedWorkspace,
+} from '@/lib/slack/app-home/workspace';
 export { bangkokMondaySundayWeek, thaiWeekRangeLabel, formatHoursDisplay } from '@/lib/slack/app-home/week';
 export { selectAppHomeProjects } from '@/lib/slack/app-home/projects';
 export { getSafeAppHomeTimesheetUrl } from '@/lib/slack/app-home/url';
