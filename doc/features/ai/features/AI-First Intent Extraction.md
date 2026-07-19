@@ -84,11 +84,20 @@ Deterministic `MissingFieldFill` is a discriminated union (exactly one slot valu
 
 **Do not** erase non-target resolved Project/Task IDs. Clear and re-resolve only the target hint’s ID after canonical master resolution succeeds.
 
-`general_conversation` (ขอบคุณ, เล่าเรื่องแมว, What is a timesheet?, …) while a draft exists:
+When a Draft has an **explicit outstanding clarification slot**, a plausible structural answer is evaluated against that slot **before** accepting the model’s `general_conversation` or `unknown` classification. Known unrelated phrases (`ขอบคุณ`, `เล่าเรื่องแมว`, …) and explicit cancellation remain protected and never fill slots.
 
-- Return no Business Tool
-- Do **not** convert to a Timesheet intent
-- Do **not** mutate the draft
+Decision order in `decideDraftMerge`:
+
+1. Non-empty message
+2. Explicit Draft cancellation
+3. Known unrelated/general phrases
+4–5. Outstanding-slot deterministic / structural match (may set reason `structural_follow_up_overrode_general`)
+6. `refersToPrevious` / explicit continue
+7. Same write intent with slots
+8. Accept model `general_conversation`
+9. `no_merge_signal`
+
+If the model says general/unknown but the message does not match hours/date constraints for an outstanding slot (e.g. `PM` while hours is missing), return `outstanding_slot_unmatched` and re-clarify that slot — do not answer as general chat.
 
 If extraction fails technically, do **not** treat the message as general conversation — return the controlled extraction-failure response.
 

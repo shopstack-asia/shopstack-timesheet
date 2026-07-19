@@ -670,3 +670,410 @@ describe('production phrase → prepare (no clarification loop)', () => {
     }
   });
 });
+
+describe('general_conversation must not block outstanding-slot follow-up', () => {
+  async function seedTaskDraft(
+    store: ReturnType<typeof createInMemoryIntentDraftStore>,
+    conversationId: string
+  ) {
+    await store.set({
+      intent: 'create_timesheet_entry',
+      conversationId,
+      slackUserId: 'U1',
+      resolvedDate: '2026-07-19',
+      projectHint: 'RMS',
+      resolvedProjectId: 'P-RMS',
+      hours: 3,
+      missingFields: ['task'],
+      lastClarificationField: 'task',
+      clarificationCount: 1,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+  }
+
+  const generalNoHints = (): StructuredIntent =>
+    createIntent({
+      domain: 'general',
+      intent: 'general_conversation',
+      dateExpression: null,
+      projectHint: null,
+      taskHint: null,
+      hours: null,
+      missingFields: [],
+      refersToPrevious: false,
+    });
+
+  it('TEST 1: general_conversation for PM still prepares Task follow-up', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await seedTaskDraft(store, 'C-g1');
+    const result = await decideWithIntentExtraction('PM', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g1',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.toolName).toBe('prepare_create_timesheet_entry');
+      expect(result.decision.arguments).toMatchObject({
+        date: '2026-07-19',
+        projectId: 'P-RMS',
+        taskId: 'T-PM',
+        hours: 3,
+      });
+    }
+  });
+
+  it('TEST 2: unknown for PM still prepares', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await seedTaskDraft(store, 'C-g2');
+    const result = await decideWithIntentExtraction('PM', {
+      now: FIXED_NOW,
+      extractIntent: async () =>
+        createIntent({
+          intent: 'unknown',
+          domain: 'unknown',
+          dateExpression: null,
+          projectHint: null,
+          taskHint: null,
+          hours: null,
+          refersToPrevious: false,
+        }),
+      draftStore: store,
+      conversationId: 'C-g2',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.arguments).toMatchObject({
+        projectId: 'P-RMS',
+        taskId: 'T-PM',
+        hours: 3,
+        date: '2026-07-19',
+      });
+    }
+  });
+
+  it('TEST 3: Project Manager under general_conversation resolves to T-PM', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await seedTaskDraft(store, 'C-g3');
+    const result = await decideWithIntentExtraction('Project Manager', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g3',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.arguments.taskId).toBe('T-PM');
+      expect(result.decision.arguments.projectId).toBe('P-RMS');
+      expect(result.decision.arguments.hours).toBe(3);
+    }
+  });
+
+  it('TEST 4: RMS under general_conversation fills Project only', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await store.set({
+      intent: 'create_timesheet_entry',
+      conversationId: 'C-g4',
+      slackUserId: 'U1',
+      resolvedDate: '2026-07-19',
+      taskHint: 'Project Management',
+      resolvedTaskId: 'T-PM',
+      hours: 3,
+      missingFields: ['project'],
+      lastClarificationField: 'project',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    const result = await decideWithIntentExtraction('RMS', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g4',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.arguments).toMatchObject({
+        projectId: 'P-RMS',
+        taskId: 'T-PM',
+        hours: 3,
+        date: '2026-07-19',
+      });
+    }
+  });
+
+  it('TEST 5: hours follow-up under general_conversation', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await store.set({
+      intent: 'create_timesheet_entry',
+      conversationId: 'C-g5',
+      slackUserId: 'U1',
+      resolvedDate: '2026-07-19',
+      projectHint: 'RMS',
+      resolvedProjectId: 'P-RMS',
+      taskHint: 'Project Management',
+      resolvedTaskId: 'T-PM',
+      missingFields: ['hours'],
+      lastClarificationField: 'hours',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    const result = await decideWithIntentExtraction('3', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g5',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.arguments).toMatchObject({
+        hours: 3,
+        projectId: 'P-RMS',
+        taskId: 'T-PM',
+        date: '2026-07-19',
+      });
+    }
+  });
+
+  it('TEST 6: date follow-up under general_conversation', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await store.set({
+      intent: 'create_timesheet_entry',
+      conversationId: 'C-g6',
+      slackUserId: 'U1',
+      projectHint: 'RMS',
+      resolvedProjectId: 'P-RMS',
+      taskHint: 'Project Management',
+      resolvedTaskId: 'T-PM',
+      hours: 3,
+      missingFields: ['date'],
+      lastClarificationField: 'date',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    const result = await decideWithIntentExtraction('พรุ่งนี้', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g6',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.arguments).toMatchObject({
+        date: '2026-07-20',
+        projectId: 'P-RMS',
+        taskId: 'T-PM',
+        hours: 3,
+      });
+    }
+  });
+
+  it('TEST 7: known unrelated phrases preserve Draft', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await seedTaskDraft(store, 'C-g7');
+    for (const msg of [
+      'ขอบคุณ',
+      'เล่าเรื่องแมว',
+      'What is a timesheet?',
+      'ช่วยเขียน TypeScript',
+    ]) {
+      const result = await decideWithIntentExtraction(msg, {
+        now: FIXED_NOW,
+        extractIntent: async () => generalNoHints(),
+        draftStore: store,
+        conversationId: 'C-g7',
+        slackUserId: 'U1',
+      });
+      expect(result.decision.action).toBe('none');
+      const draft = await store.get('C-g7', 'U1');
+      expect(draft.outcome).toBe('draft_found');
+      if (draft.outcome === 'draft_found') {
+        expect(draft.draft.missingFields).toEqual(['task']);
+        expect(draft.draft.projectHint).toBe('RMS');
+      }
+    }
+  });
+
+  it('TEST 8: explicit cancellation clears Draft', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await seedTaskDraft(store, 'C-g8');
+    const result = await decideWithIntentExtraction('ไม่ลงเวลาแล้ว', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g8',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('clarify');
+    expect(result.decision.reason).toBe('intent_draft_cancelled');
+    expect((await store.get('C-g8', 'U1')).outcome).toBe('draft_not_found');
+  });
+
+  it('TEST 9: invalid hours structural answer re-clarifies hours', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await store.set({
+      intent: 'create_timesheet_entry',
+      conversationId: 'C-g9',
+      slackUserId: 'U1',
+      resolvedDate: '2026-07-19',
+      projectHint: 'RMS',
+      resolvedProjectId: 'P-RMS',
+      taskHint: 'Project Management',
+      resolvedTaskId: 'T-PM',
+      missingFields: ['hours'],
+      lastClarificationField: 'hours',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    const result = await decideWithIntentExtraction('PM', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g9',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('clarify');
+    if (result.decision.action === 'clarify') {
+      expect(result.decision.message).toMatch(/ชั่วโมง/);
+      expect(result.decision.message).not.toBe('ต้องการลงงานอะไรครับ');
+    }
+    const draft = await store.get('C-g9', 'U1');
+    expect(draft.outcome).toBe('draft_found');
+    if (draft.outcome === 'draft_found') {
+      expect(draft.draft.missingFields).toContain('hours');
+      expect(draft.draft.taskHint).toBe('Project Management');
+    }
+  });
+
+  it('TEST 10: invalid date structural answer re-clarifies date', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await store.set({
+      intent: 'create_timesheet_entry',
+      conversationId: 'C-g10',
+      slackUserId: 'U1',
+      projectHint: 'RMS',
+      resolvedProjectId: 'P-RMS',
+      taskHint: 'Project Management',
+      resolvedTaskId: 'T-PM',
+      hours: 3,
+      missingFields: ['date'],
+      lastClarificationField: 'date',
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    const result = await decideWithIntentExtraction('PM', {
+      now: FIXED_NOW,
+      extractIntent: async () => generalNoHints(),
+      draftStore: store,
+      conversationId: 'C-g10',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('clarify');
+    if (result.decision.action === 'clarify') {
+      expect(result.decision.message).toMatch(/วันที่/);
+    }
+  });
+
+  it('TEST 11: adversarial general_conversation fields still target raw PM', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await seedTaskDraft(store, 'C-g11');
+    const result = await decideWithIntentExtraction('PM', {
+      now: FIXED_NOW,
+      extractIntent: async () =>
+        createIntent({
+          domain: 'general',
+          intent: 'general_conversation',
+          projectHint: 'HERTZ',
+          taskHint: 'QA',
+          dateExpression: 'พรุ่งนี้',
+          hours: 8,
+          refersToPrevious: false,
+        }),
+      draftStore: store,
+      conversationId: 'C-g11',
+      slackUserId: 'U1',
+    });
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.arguments).toMatchObject({
+        date: '2026-07-19',
+        projectId: 'P-RMS',
+        taskId: 'T-PM',
+        hours: 3,
+      });
+    }
+  });
+
+  it('TEST 12: screenshot-loop with general_conversation misclassifications', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await seedTaskDraft(store, 'C-g12');
+
+    const replies = [
+      {
+        msg: 'PM',
+        extract: () => generalNoHints(),
+      },
+      {
+        msg: 'Project Manager',
+        extract: () =>
+          createIntent({
+            intent: 'unknown',
+            domain: 'unknown',
+            projectHint: null,
+            taskHint: null,
+            hours: null,
+            dateExpression: null,
+            refersToPrevious: false,
+          }),
+      },
+    ];
+
+    // First reply should prepare; draft cleared — re-seed for second misclassification style
+    const first = await decideWithIntentExtraction(replies[0]!.msg, {
+      now: FIXED_NOW,
+      extractIntent: async () => replies[0]!.extract(),
+      draftStore: store,
+      conversationId: 'C-g12',
+      slackUserId: 'U1',
+    });
+    expect(first.decision.action).toBe('call_tool');
+    if (first.decision.action === 'call_tool') {
+      expect(first.decision.toolName).toBe('prepare_create_timesheet_entry');
+      expect(first.decision.arguments.projectId).toBe('P-RMS');
+      expect(first.decision.arguments.taskId).toBe('T-PM');
+    }
+
+    await seedTaskDraft(store, 'C-g12b');
+    const second = await decideWithIntentExtraction('RMS เป็น PM', {
+      now: FIXED_NOW,
+      extractIntent: async () =>
+        createIntent({
+          projectHint: 'HERTZ',
+          taskHint: null,
+          dateExpression: 'พรุ่งนี้',
+          hours: 8,
+          refersToPrevious: false,
+          intent: 'general_conversation',
+          domain: 'general',
+        }),
+      draftStore: store,
+      conversationId: 'C-g12b',
+      slackUserId: 'U1',
+    });
+    expect(second.decision.action).toBe('call_tool');
+    if (second.decision.action === 'call_tool') {
+      expect(second.decision.arguments.projectId).toBe('P-RMS');
+      expect(second.decision.arguments.hours).toBe(3);
+      expect(second.decision.arguments.date).toBe('2026-07-19');
+      // Raw message used as task hint when outstanding is task
+      expect(second.decision.arguments.taskId).toBe('T-PM');
+    }
+  });
+});

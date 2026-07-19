@@ -46,7 +46,7 @@ export function isUnrelatedGeneralPhrase(text: string): boolean {
   if (!t) return false;
   if (UNRELATED_GENERAL_RE.test(t)) return true;
   if (
-    /เล่าเรื่องแมว|ช่วยเขียน\s*typescript|what is a timesheet|what is project management/i.test(
+    /เล่าเรื่องแมว|ช่วยเขียน\s*typescript|what is a timesheet|what is project management|อากาศวันนี้|weather (today|now)/i.test(
       t
     )
   ) {
@@ -83,10 +83,62 @@ export type DraftMergeResult = {
 
 export type MergeDecision =
   | { merge: false; reason: string }
-  | { merge: true; reason: string; fill?: MissingFieldFill };
+  | {
+      merge: true;
+      reason: string;
+      fill?: MissingFieldFill;
+      /** True when model said general/unknown but structural match won. */
+      modelClassificationOverridden?: boolean;
+    };
+
+function primaryOutstandingFields(draft: IntentDraft): IntentMissingField[] {
+  return draft.missingFields.filter((f) =>
+    ['date', 'project', 'task', 'hours'].includes(f)
+  );
+}
+
+/**
+ * Attempt deterministic or structural fill for an outstanding Draft slot.
+ */
+export async function matchOutstandingSlot(input: {
+  draft: IntentDraft;
+  userMessage: string;
+  now: Date;
+  resolveProjectFn?: typeof resolveProject;
+  resolveTaskFn?: typeof resolveTask;
+}): Promise<MissingFieldFill | undefined> {
+  const trimmed = input.userMessage.trim();
+  if (!trimmed) return undefined;
+  if (isUnrelatedGeneralPhrase(trimmed)) return undefined;
+  if (isExplicitDraftCancelPhrase(trimmed)) return undefined;
+
+  const deterministic = await matchMissingFieldDeterministically({
+    draft: input.draft,
+    userMessage: trimmed,
+    now: input.now,
+    resolveProjectFn: input.resolveProjectFn,
+    resolveTaskFn: input.resolveTaskFn,
+  });
+  if (deterministic) return deterministic;
+
+  if (
+    primaryOutstandingFields(input.draft).length > 0 &&
+    looksLikeStructuralFollowUp(trimmed)
+  ) {
+    return structuralFillForOutstandingSlot(
+      input.draft,
+      trimmed,
+      input.now
+    );
+  }
+  return undefined;
+}
 
 /**
  * Decide whether to continue an incomplete Intent Draft with this message.
+ *
+ * Invariant: an untrusted model classification of general_conversation / unknown
+ * must not block a plausible answer to an explicit outstanding clarification slot.
  */
 export async function decideDraftMerge(input: {
   intent: StructuredIntent;
@@ -100,19 +152,22 @@ export async function decideDraftMerge(input: {
   const trimmed = userMessage.trim();
   const now = input.now ?? new Date();
 
-  if (intent.intent === 'general_conversation' && !intent.refersToPrevious) {
-    return { merge: false, reason: 'general_conversation' };
+  // 1. Non-empty message
+  if (!trimmed) {
+    return { merge: false, reason: 'empty_message' };
   }
 
-  if (isUnrelatedGeneralPhrase(trimmed) && !intent.refersToPrevious) {
+  // 2. Explicit Draft cancellation
+  if (isExplicitDraftCancelPhrase(trimmed)) {
+    return { merge: false, reason: 'explicit_cancel' };
+  }
+
+  // 3. Known unrelated / general phrases (deterministic — not model intent)
+  if (isUnrelatedGeneralPhrase(trimmed)) {
     return { merge: false, reason: 'unrelated_general_phrase' };
   }
 
-  if (isExplicitDraftCancelPhrase(trimmed)) {
-    return { merge: false, reason: 'draft_cancel' };
-  }
-
-  // Silent intent change (create → update) is not allowed
+  // Silent intent change (create → update) is not allowed unless refersToPrevious
   if (
     WRITE_INTENTS.has(intent.intent) &&
     WRITE_INTENTS.has(draft.intent) &&
@@ -122,42 +177,66 @@ export async function decideDraftMerge(input: {
     return { merge: false, reason: 'intent_mismatch' };
   }
 
-  const attachFill = async (): Promise<MissingFieldFill | undefined> => {
-    const deterministic = await matchMissingFieldDeterministically({
+  const outstanding = primaryOutstandingFields(draft);
+
+  // 4–5. Outstanding slots: deterministic / structural match BEFORE model general_conversation
+  if (outstanding.length > 0) {
+    const fill = await matchOutstandingSlot({
       draft,
       userMessage: trimmed,
       now,
       resolveProjectFn: input.resolveProjectFn,
       resolveTaskFn: input.resolveTaskFn,
     });
-    if (deterministic) return deterministic;
-    if (
-      draft.missingFields.length > 0 &&
-      looksLikeStructuralFollowUp(trimmed) &&
-      !isUnrelatedGeneralPhrase(trimmed)
-    ) {
-      return structuralFillForOutstandingSlot(draft, trimmed, now);
+    if (fill) {
+      const modelSaidGeneral =
+        intent.intent === 'general_conversation' ||
+        intent.intent === 'unknown';
+      return {
+        merge: true,
+        reason: modelSaidGeneral
+          ? 'structural_follow_up_overrode_general'
+          : 'deterministic_missing_field',
+        fill,
+        modelClassificationOverridden: modelSaidGeneral,
+      };
     }
-    return undefined;
-  };
 
+    // Plausible short text that does not match hours/date constraints:
+    // do not accept model general_conversation — re-clarify outstanding slot.
+    if (
+      (intent.intent === 'general_conversation' ||
+        intent.intent === 'unknown') &&
+      !intent.refersToPrevious
+    ) {
+      return { merge: false, reason: 'outstanding_slot_unmatched' };
+    }
+  }
+
+  // 6. Explicit continue / refersToPrevious
   if (intent.refersToPrevious === true) {
-    return {
-      merge: true,
-      reason: 'refers_to_previous',
-      fill: await attachFill(),
-    };
+    const fill = await matchOutstandingSlot({
+      draft,
+      userMessage: trimmed,
+      now,
+      resolveProjectFn: input.resolveProjectFn,
+      resolveTaskFn: input.resolveTaskFn,
+    });
+    return { merge: true, reason: 'refers_to_previous', fill };
   }
 
   if (isExplicitDraftContinuePhrase(trimmed)) {
-    return {
-      merge: true,
-      reason: 'explicit_continue',
-      fill: await attachFill(),
-    };
+    const fill = await matchOutstandingSlot({
+      draft,
+      userMessage: trimmed,
+      now,
+      resolveProjectFn: input.resolveProjectFn,
+      resolveTaskFn: input.resolveTaskFn,
+    });
+    return { merge: true, reason: 'explicit_continue', fill };
   }
 
-  // Same write intent from extractor with overlapping hints → continue
+  // 7. Same write intent with slots
   if (
     WRITE_INTENTS.has(intent.intent) &&
     intent.intent === draft.intent &&
@@ -166,39 +245,26 @@ export async function decideDraftMerge(input: {
       intent.taskHint ||
       intent.hours != null)
   ) {
+    const fill = await matchOutstandingSlot({
+      draft,
+      userMessage: trimmed,
+      now,
+      resolveProjectFn: input.resolveProjectFn,
+      resolveTaskFn: input.resolveTaskFn,
+    });
     return {
       merge: true,
       reason: 'same_write_intent_with_slots',
-      fill: await attachFill(),
+      fill,
     };
   }
 
-  const deterministic = await matchMissingFieldDeterministically({
-    draft,
-    userMessage: trimmed,
-    now,
-    resolveProjectFn: input.resolveProjectFn,
-    resolveTaskFn: input.resolveTaskFn,
-  });
-  if (deterministic) {
-    return {
-      merge: true,
-      reason: 'deterministic_missing_field',
-      fill: deterministic,
-    };
+  // 8. Accept model general_conversation / unknown only after slot checks
+  if (intent.intent === 'general_conversation') {
+    return { merge: false, reason: 'general_conversation' };
   }
 
-  if (
-    draft.missingFields.length > 0 &&
-    looksLikeStructuralFollowUp(trimmed) &&
-    !isUnrelatedGeneralPhrase(trimmed)
-  ) {
-    const structural = structuralFillForOutstandingSlot(draft, trimmed, now);
-    if (structural) {
-      return { merge: true, reason: 'structural_follow_up', fill: structural };
-    }
-  }
-
+  // 9. No merge
   return { merge: false, reason: 'no_merge_signal' };
 }
 
@@ -207,6 +273,30 @@ function looksLikeStructuralFollowUp(text: string): boolean {
   if (!t || t.length > 64) return false;
   if (isUnrelatedGeneralPhrase(t)) return false;
   return true;
+}
+
+/** Soft task hint from follow-up text (e.g. "RMS เป็น PM" → "PM"). */
+function extractTaskHintFromFollowUp(hint: string): string {
+  const asTask = hint.match(
+    /(?:เป็น|ในฐานะ|as|under)\s+([A-Za-z0-9ก-๙][A-Za-z0-9ก-๙ ._/&-]{0,40})/i
+  );
+  if (asTask?.[1]) {
+    return asTask[1].trim().replace(/[.,!?]+$/u, '');
+  }
+  return hint.trim();
+}
+
+/**
+ * Hours for an outstanding hours slot — named units or a bare 1–24 number.
+ * Bare numbers are only used when hours is the targeted outstanding slot.
+ */
+export function parseHoursForOutstandingSlot(text: string): number | undefined {
+  const named = parseHoursValue(undefined, text);
+  if (named !== undefined) return named;
+  const bare = text.trim().match(/^(\d+(?:\.\d+)?)$/);
+  if (!bare?.[1]) return undefined;
+  const n = Number(bare[1]);
+  return Number.isFinite(n) && n > 0 && n <= 24 ? n : undefined;
 }
 
 /**
@@ -228,9 +318,8 @@ export function structuralFillForOutstandingSlot(
   if (missing.length === 1) {
     const field = missing[0]!;
     if (field === 'hours') {
-      const hours = parseHoursValue(undefined, hint);
+      const hours = parseHoursForOutstandingSlot(hint);
       if (hours !== undefined) return { hours, matchedField: 'hours' };
-      // bare number already handled by parseHoursValue; otherwise still try
       return undefined;
     }
     if (field === 'date') {
@@ -239,7 +328,10 @@ export function structuralFillForOutstandingSlot(
       return undefined;
     }
     if (field === 'task') {
-      return { taskHint: hint, matchedField: 'task' };
+      return {
+        taskHint: extractTaskHintFromFollowUp(hint),
+        matchedField: 'task',
+      };
     }
     if (field === 'project') {
       return { projectHint: hint, matchedField: 'project' };
@@ -249,13 +341,16 @@ export function structuralFillForOutstandingSlot(
   // Prefer the field we last asked about when multiple remain
   const last = draft.lastClarificationField;
   if (last === 'task' && missing.includes('task')) {
-    return { taskHint: hint, matchedField: 'task' };
+    return {
+      taskHint: extractTaskHintFromFollowUp(hint),
+      matchedField: 'task',
+    };
   }
   if (last === 'project' && missing.includes('project')) {
     return { projectHint: hint, matchedField: 'project' };
   }
   if (last === 'hours' && missing.includes('hours')) {
-    const hours = parseHoursValue(undefined, hint);
+    const hours = parseHoursForOutstandingSlot(hint);
     if (hours !== undefined) return { hours, matchedField: 'hours' };
   }
   if (last === 'date' && missing.includes('date')) {
@@ -285,7 +380,7 @@ export async function matchMissingFieldDeterministically(input: {
   const resolveTk = input.resolveTaskFn ?? resolveTask;
 
   if (missing.includes('hours')) {
-    const hours = parseHoursValue(undefined, userMessage);
+    const hours = parseHoursForOutstandingSlot(userMessage);
     if (hours !== undefined) {
       return { hours, matchedField: 'hours' };
     }
@@ -304,15 +399,16 @@ export async function matchMissingFieldDeterministically(input: {
   // Prefer unique resolve when possible; also accept ambiguous as a fill so
   // enforcement can show candidates (never leave the slot empty).
   if (missing.includes('task') && !missing.includes('project')) {
+    const taskHint = extractTaskHintFromFollowUp(hint);
     try {
-      const task = await resolveTk({ taskName: hint });
+      const task = await resolveTk({ taskName: taskHint });
       if (task.status === 'resolved' || task.status === 'ambiguous') {
-        return { taskHint: hint, matchedField: 'task' };
+        return { taskHint, matchedField: 'task' };
       }
     } catch {
       /* fall through to structural */
     }
-    return { taskHint: hint, matchedField: 'task' };
+    return { taskHint, matchedField: 'task' };
   }
 
   if (missing.includes('project') && !missing.includes('task')) {
@@ -328,10 +424,11 @@ export async function matchMissingFieldDeterministically(input: {
   }
 
   if (missing.includes('task')) {
+    const taskHint = extractTaskHintFromFollowUp(hint);
     try {
-      const task = await resolveTk({ taskName: hint });
+      const task = await resolveTk({ taskName: taskHint });
       if (task.status === 'resolved' || task.status === 'ambiguous') {
-        return { taskHint: hint, matchedField: 'task' };
+        return { taskHint, matchedField: 'task' };
       }
     } catch {
       /* ignore */
@@ -512,7 +609,7 @@ function resolveHoursAnswer(input: {
     return { value: input.fill.hours, ignored };
   }
   const fromRaw = input.userMessage
-    ? parseHoursValue(undefined, input.userMessage)
+    ? parseHoursForOutstandingSlot(input.userMessage)
     : undefined;
   if (fromRaw !== undefined) return { value: fromRaw, ignored };
   if (input.intent.hours != null) return { value: input.intent.hours, ignored };

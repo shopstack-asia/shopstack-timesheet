@@ -36,6 +36,7 @@ export {
   decideDraftMerge,
   applyDraftMerge,
   outstandingMergeTarget,
+  matchOutstandingSlot,
   isExplicitDraftCancelPhrase,
   isUnrelatedGeneralPhrase,
   recomputeCreateMissingFields,

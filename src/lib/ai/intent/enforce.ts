@@ -290,6 +290,10 @@ export async function enforceStructuredIntentDetailed(
     });
     mergeReason = merge.reason;
 
+    const outstandingFields = options.draft.missingFields.filter((f) =>
+      ['date', 'project', 'task', 'hours'].includes(f)
+    );
+
     if (merge.merge) {
       const merged = applyDraftMerge(intent, options.draft, merge.fill, {
         userMessage,
@@ -301,6 +305,10 @@ export async function enforceStructuredIntentDetailed(
       logEnforce({
         message: 'draft_merge',
         conversationId: options.conversationId,
+        draftFound: true,
+        modelIntent: rawIntent.intent,
+        modelRefersToPrevious: Boolean(rawIntent.refersToPrevious),
+        outstandingFields,
         mergeMode: merged.mergeMode,
         targetField: merged.targetField,
         modelProvidedFields: merged.modelProvidedFields,
@@ -308,6 +316,45 @@ export async function enforceStructuredIntentDetailed(
         ignoredConflictingFields: merged.ignoredConflictingFields,
         preservedDraftFields: merged.preservedDraftFields,
         mergeReason: merged.mergeReason ?? merge.reason,
+        modelClassificationOverridden: Boolean(
+          merge.merge && merge.modelClassificationOverridden
+        ),
+      });
+    } else if (merge.reason === 'outstanding_slot_unmatched') {
+      // Model said general/unknown but message is not a known chat phrase and
+      // did not match the outstanding slot (e.g. "PM" while hours is missing).
+      // Re-enter create path from trusted Draft so we re-clarify the target.
+      intent = {
+        domain: 'timesheet',
+        intent: options.draft.intent,
+        confidence: rawIntent.confidence,
+        dateExpression:
+          options.draft.dateExpression || options.draft.resolvedDate || null,
+        projectHint: options.draft.projectHint ?? null,
+        taskHint: options.draft.taskHint ?? null,
+        hours: options.draft.hours ?? null,
+        missingFields: [],
+        ambiguities: [],
+        refersToPrevious: true,
+      };
+      logEnforce({
+        message: 'draft_merge',
+        conversationId: options.conversationId,
+        draftFound: true,
+        modelIntent: rawIntent.intent,
+        modelRefersToPrevious: Boolean(rawIntent.refersToPrevious),
+        outstandingFields,
+        mergeMode: 'preserve_draft',
+        targetField: outstandingFields[0] ?? null,
+        mergeReason: 'outstanding_slot_unmatched',
+        modelClassificationOverridden: false,
+        appliedField: null,
+        ignoredConflictingFields: [],
+        preservedDraftFields: outstandingFields.length
+          ? ['date', 'project', 'task', 'hours'].filter(
+              (f) => !outstandingFields.includes(f as typeof outstandingFields[number])
+            )
+          : [],
       });
     } else if (
       intent.intent === 'general_conversation' ||
