@@ -23,7 +23,9 @@ import {
   isExplicitDraftContinuePhrase,
   isUnrelatedGeneralPhrase,
   normalizeAnswerKey,
-  recomputeCreateMissingFields,
+  computeCanonicalCreateMissingFields,
+  assertCanonicalCreateReady,
+  isValidCreateHours,
   type TargetResolution,
 } from '@/lib/ai/intent/follow-up';
 import { enrichWriteIntentSlots } from '@/lib/ai/intent/slot-enrich';
@@ -415,13 +417,10 @@ export async function enforceStructuredIntentDetailed(
         ...options.draft,
         ...merged.draftPatch,
       };
-      // Clear target from missing after resolved merge
-      workingDraft.missingFields = recomputeCreateMissingFields({
-        date: workingDraft.resolvedDate || workingDraft.dateExpression,
+      workingDraft.missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDraft.resolvedDate,
         hours: workingDraft.hours,
-        projectHint: workingDraft.projectHint,
         resolvedProjectId: workingDraft.resolvedProjectId,
-        taskHint: workingDraft.taskHint,
         resolvedTaskId: workingDraft.resolvedTaskId,
       });
       logMerge({
@@ -437,30 +436,41 @@ export async function enforceStructuredIntentDetailed(
       const merged = applyDraftMerge(intent, options.draft, outcome.resolution, {
         mergeReason: outcome.reason,
       });
+      // Spread patch first so cleared resolved IDs (undefined) win over draft
       workingDraft = {
         ...options.draft,
         ...merged.draftPatch,
         lastClarificationField: outcome.targetField,
-        lastClarificationReason: outcome.candidateResolution,
+        lastClarificationReason:
+          outcome.resolution.targetField === 'task'
+            ? outcome.candidateResolution === 'ambiguous'
+              ? 'task_ambiguous'
+              : 'task_not_found'
+            : outcome.candidateResolution === 'ambiguous'
+              ? 'project_ambiguous'
+              : 'project_not_found',
         clarificationCount: (options.draft.clarificationCount ?? 0) + 1,
         lastUserAnswerNorm: normalizeAnswerKey(userMessage),
         lastResolutionOutcome: outcome.candidateResolution,
-        missingFields: recomputeCreateMissingFields({
-          date:
-            merged.draftPatch.resolvedDate ||
-            options.draft.resolvedDate ||
-            options.draft.dateExpression,
-          hours: merged.draftPatch.hours ?? options.draft.hours,
-          projectHint:
-            merged.draftPatch.projectHint ?? options.draft.projectHint,
-          resolvedProjectId:
-            merged.draftPatch.resolvedProjectId ??
-            options.draft.resolvedProjectId,
-          taskHint: merged.draftPatch.taskHint ?? options.draft.taskHint,
-          resolvedTaskId:
-            merged.draftPatch.resolvedTaskId ?? options.draft.resolvedTaskId,
-        }),
       };
+      if (
+        outcome.resolution.targetField === 'task' &&
+        'resolvedTaskId' in merged.draftPatch
+      ) {
+        workingDraft.resolvedTaskId = merged.draftPatch.resolvedTaskId;
+      }
+      if (
+        outcome.resolution.targetField === 'project' &&
+        'resolvedProjectId' in merged.draftPatch
+      ) {
+        workingDraft.resolvedProjectId = merged.draftPatch.resolvedProjectId;
+      }
+      workingDraft.missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDraft.resolvedDate,
+        hours: workingDraft.hours,
+        resolvedProjectId: workingDraft.resolvedProjectId,
+        resolvedTaskId: workingDraft.resolvedTaskId,
+      });
       await persistDraft(options, {
         intent: workingDraft.intent,
         dateExpression: workingDraft.dateExpression,
@@ -471,6 +481,10 @@ export async function enforceStructuredIntentDetailed(
         resolvedTaskId: workingDraft.resolvedTaskId,
         hours: workingDraft.hours,
         missingFields: workingDraft.missingFields,
+        ambiguities:
+          outcome.resolution.status === 'ambiguous'
+            ? outcome.resolution.candidateIds
+            : workingDraft.ambiguities,
         lastClarificationField: workingDraft.lastClarificationField,
         lastClarificationReason: workingDraft.lastClarificationReason,
         clarificationCount: workingDraft.clarificationCount,
@@ -798,7 +812,9 @@ async function enforceCreate(
   const date =
     resolveDateExpression(intent.dateExpression, now) || draft?.resolvedDate;
 
-  const hours = parseHoursValue(intent.hours, options.userMessage);
+  const hours =
+    parseHoursValue(intent.hours, options.userMessage) ??
+    (isValidCreateHours(draft?.hours) ? draft!.hours : undefined);
 
   let projectHint = intent.projectHint?.trim() || draft?.projectHint || '';
   let taskHint = intent.taskHint?.trim() || draft?.taskHint || '';
@@ -834,17 +850,29 @@ async function enforceCreate(
     resolvedTaskId = undefined;
   }
 
-  const missingBeforeResolve = recomputeCreateMissingFields({
-    date,
-    hours,
-    projectHint,
-    resolvedProjectId,
-    taskHint,
-    resolvedTaskId,
-  });
+  // Prefer draft-resolved date when expression already resolved
+  const resolvedDate =
+    (date && isValidIsoDate(date) ? date : undefined) ||
+    (draft?.resolvedDate && isValidIsoDate(draft.resolvedDate)
+      ? draft.resolvedDate
+      : undefined);
 
-  if (missingBeforeResolve.length > 0) {
-    const field = primaryMissingField(missingBeforeResolve) || 'task';
+  // Early clarify only when we cannot attempt Project/Task resolution
+  // (no hint and no ID). Date/hours must already be valid or missing.
+  const earlyMissing: IntentMissingField[] = [];
+  if (!resolvedDate) earlyMissing.push('date');
+  if (!isValidCreateHours(hours)) earlyMissing.push('hours');
+  if (!resolvedProjectId && !projectHint) earlyMissing.push('project');
+  if (!resolvedTaskId && !taskHint) earlyMissing.push('task');
+
+  if (earlyMissing.length > 0) {
+    const canonicalMissing = computeCanonicalCreateMissingFields({
+      resolvedDate,
+      hours,
+      resolvedProjectId,
+      resolvedTaskId,
+    });
+    const field = primaryMissingField(earlyMissing) || 'task';
     const prevCount = draft?.clarificationCount ?? 0;
     const sameField = draft?.lastClarificationField === field;
     const sameAnswer =
@@ -853,7 +881,7 @@ async function enforceCreate(
       sameField;
     const clarificationCount = sameField ? prevCount + 1 : 1;
 
-    let message = clarifyMissing(missingBeforeResolve);
+    let message = clarifyMissing(earlyMissing);
     if (sameAnswer && clarificationCount >= 2) {
       if (field === 'task') {
         message = await listTaskCandidatesMessage(taskHint || answerNorm || 'Task');
@@ -867,13 +895,13 @@ async function enforceCreate(
     const saved = await persistDraft(options, {
       intent: 'create_timesheet_entry',
       dateExpression: intent.dateExpression || undefined,
-      resolvedDate: date,
+      resolvedDate,
       projectHint: projectHint || undefined,
       resolvedProjectId,
       taskHint: taskHint || undefined,
       resolvedTaskId,
-      hours,
-      missingFields: missingBeforeResolve,
+      hours: isValidCreateHours(hours) ? hours : undefined,
+      missingFields: canonicalMissing,
       lastClarificationField: field,
       lastClarificationReason: 'missing_fields',
       clarificationCount,
@@ -894,12 +922,12 @@ async function enforceCreate(
       conversationId: options.conversationId,
       intent: 'create_timesheet_entry',
       filledFields: {
-        date: Boolean(date),
-        project: Boolean(projectHint || resolvedProjectId),
-        task: Boolean(taskHint || resolvedTaskId),
-        hours: hours !== undefined,
+        date: Boolean(resolvedDate),
+        project: Boolean(resolvedProjectId),
+        task: Boolean(resolvedTaskId),
+        hours: isValidCreateHours(hours),
       },
-      missingFields: missingBeforeResolve,
+      missingFields: canonicalMissing,
       clarificationField: field,
       clarificationCount,
       projectResolutionOutcome: 'not_called',
@@ -918,6 +946,8 @@ async function enforceCreate(
 
   let projectOutcome = 'not_called';
   let taskOutcome = 'not_called';
+  let workingDate = resolvedDate;
+  let workingHours = hours;
 
   if (!resolvedProjectId && projectHint) {
     let proj: Awaited<ReturnType<typeof resolveProj>>;
@@ -931,6 +961,8 @@ async function enforceCreate(
             'ยังไม่สามารถค้นหา Project ได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
           reason: 'read_failed',
         },
+        typedErrorCode: 'read_failed',
+        draftOutcome: 'draft_preserved',
       };
     }
     projectOutcome = proj.status;
@@ -940,14 +972,21 @@ async function enforceCreate(
         count >= 2
           ? await listProjectCandidatesMessage(projectHint)
           : `ยังไม่พบ Project ที่ตรงกับ “${projectHint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`;
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId: undefined,
+        resolvedTaskId,
+      });
       await persistDraft(options, {
         intent: 'create_timesheet_entry',
-        resolvedDate: date,
+        resolvedDate: workingDate,
         projectHint,
+        resolvedProjectId: undefined,
         taskHint: taskHint || undefined,
         resolvedTaskId,
-        hours,
-        missingFields: ['project'],
+        hours: workingHours,
+        missingFields,
         lastClarificationField: 'project',
         lastClarificationReason: 'project_not_found',
         clarificationCount: count,
@@ -961,6 +1000,7 @@ async function enforceCreate(
           message,
           reason: 'project_not_found',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     if (proj.status === 'ambiguous') {
@@ -968,14 +1008,21 @@ async function enforceCreate(
         .slice(0, 5)
         .map((p) => `• ${formatProjectLabel(p)}`)
         .join('\n');
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId: undefined,
+        resolvedTaskId,
+      });
       await persistDraft(options, {
         intent: 'create_timesheet_entry',
-        resolvedDate: date,
+        resolvedDate: workingDate,
         projectHint,
+        resolvedProjectId: undefined,
         taskHint: taskHint || undefined,
         resolvedTaskId,
-        hours,
-        missingFields: ['project'],
+        hours: workingHours,
+        missingFields,
         ambiguities: proj.candidates.map((p) => p.ProjectID),
         lastClarificationField: 'project',
         lastClarificationReason: 'project_ambiguous',
@@ -990,6 +1037,7 @@ async function enforceCreate(
           message: `พบหลายโปรเจกต์ที่ตรงกับ ${projectHint} กรุณาเลือก:\n${list}`,
           reason: 'project_ambiguous',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     resolvedProjectId = proj.value.ProjectID;
@@ -1007,20 +1055,29 @@ async function enforceCreate(
             'ยังไม่สามารถค้นหางานได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
           reason: 'read_failed',
         },
+        typedErrorCode: 'read_failed',
+        draftOutcome: 'draft_preserved',
       };
     }
     taskOutcome = task.status;
     if (task.status === 'not_found') {
       const count = (draft?.clarificationCount ?? 0) + 1;
       const message = await listTaskCandidatesMessage(taskHint);
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId,
+        resolvedTaskId: undefined,
+      });
       await persistDraft(options, {
         intent: 'create_timesheet_entry',
-        resolvedDate: date,
+        resolvedDate: workingDate,
         projectHint: projectHint || undefined,
         resolvedProjectId,
         taskHint,
-        hours,
-        missingFields: ['task'],
+        resolvedTaskId: undefined,
+        hours: workingHours,
+        missingFields,
         lastClarificationField: 'task',
         lastClarificationReason: 'task_not_found',
         clarificationCount: count,
@@ -1034,6 +1091,7 @@ async function enforceCreate(
           message,
           reason: 'task_not_found',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     if (task.status === 'ambiguous') {
@@ -1041,14 +1099,21 @@ async function enforceCreate(
         .slice(0, 5)
         .map((t) => `• ${formatTaskLabel(t)}`)
         .join('\n');
+      const missingFields = computeCanonicalCreateMissingFields({
+        resolvedDate: workingDate,
+        hours: workingHours,
+        resolvedProjectId,
+        resolvedTaskId: undefined,
+      });
       await persistDraft(options, {
         intent: 'create_timesheet_entry',
-        resolvedDate: date,
+        resolvedDate: workingDate,
         projectHint: projectHint || undefined,
         resolvedProjectId,
         taskHint,
-        hours,
-        missingFields: ['task'],
+        resolvedTaskId: undefined,
+        hours: workingHours,
+        missingFields,
         ambiguities: task.candidates.map((t) => t.TaskID),
         lastClarificationField: 'task',
         lastClarificationReason: 'task_ambiguous',
@@ -1063,25 +1128,23 @@ async function enforceCreate(
           message: `พบหลาย Task ที่ตรงกับ ${taskHint} กรุณาเลือก:\n${list}`,
           reason: 'task_ambiguous',
         },
+        draftOutcome: 'draft_saved',
       };
     }
     resolvedTaskId = task.value.TaskID;
   }
 
-  if (!date || hours === undefined || !resolvedProjectId || !resolvedTaskId) {
+  const ready = assertCanonicalCreateReady({
+    resolvedDate: workingDate,
+    hours: workingHours,
+    resolvedProjectId,
+    resolvedTaskId,
+  });
+  if (!ready.ok) {
     return {
       decision: {
         action: 'clarify',
-        message: clarifyMissing(
-          recomputeCreateMissingFields({
-            date,
-            hours,
-            projectHint,
-            resolvedProjectId,
-            taskHint,
-            resolvedTaskId,
-          })
-        ),
+        message: clarifyMissing(ready.missingFields),
         reason: 'validation_failed',
       },
     };
@@ -1102,8 +1165,8 @@ async function enforceCreate(
       action: 'call_tool',
       toolName: 'prepare_create_timesheet_entry',
       arguments: {
-        date,
-        hours,
+        date: workingDate,
+        hours: workingHours,
         projectId: resolvedProjectId,
         taskId: resolvedTaskId,
         ...(projectHint ? { projectName: projectHint } : {}),

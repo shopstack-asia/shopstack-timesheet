@@ -103,6 +103,33 @@ If extraction fails technically, do **not** treat the message as general convers
 
 Draft intent cannot silently change (create ≠ update). Model `missingFields` are **never** final — enforcement recomputes them after every merge.
 
+## Canonical create-slot completion (hint ≠ resolved)
+
+`computeCanonicalCreateMissingFields` (alias `recomputeCreateMissingFields`) is the only completion authority for `create_timesheet_entry` Drafts.
+
+| Slot | Completes only when | Does **not** complete |
+|------|----------------------|------------------------|
+| Date | Valid `resolvedDate` (YYYY-MM-DD) | Bare `dateExpression` |
+| Project | Non-empty trusted `resolvedProjectId` from master resolve | `projectHint` alone |
+| Task | Non-empty trusted `resolvedTaskId` from master resolve | `taskHint` alone |
+| Hours | Finite hours in `(0, 24]` per existing validation | `0`, negative, `NaN`, `Infinity`, missing |
+
+**Hint does not mean resolved.** Hints are diagnostic / clarification state only. The model must never supply `resolvedProjectId` or `resolvedTaskId` — those IDs come only from canonical master resolution (`allowCustomProject` remains false).
+
+**not_found / ambiguous:** preserve the target hint, clear the target resolved ID, keep the target in `missingFields`, set clarification metadata (`lastClarificationField`, reason, `lastResolutionOutcome`), increment `clarificationCount` for that business clarification, show candidates when policy requires — **no prepare**.
+
+**Resolved merge:** set hint + resolved ID for the target only, then recompute `missingFields` from the full working Draft via canonical rules. Non-target slots and resolved IDs are preserved (strict target-only merge).
+
+**Draft load normalization:** `normalizeIntentDraft` runs on Redis/in-memory `get` and on `buildDraftFromSlots`. Legacy Drafts with hint-but-no-ID (or invalid date/hours) and empty `missingFields` are repaired before decision processing. Hints are kept; IDs are never invented.
+
+**Prepare authorization:** before `prepare_create_timesheet_entry`, `assertCanonicalCreateReady` requires valid `resolvedDate`, `resolvedProjectId`, `resolvedTaskId`, valid hours, and empty canonical `missingFields`. Fail closed with targeted clarification if any invariant fails. Do not authorize prepare from hints, model `missingFields`, or model confidence alone.
+
+**Sequential correction examples:**
+
+1. Draft waits for Task → user `ต่อจากเมื่อกี้ ใช้ ZZZ` → Task `not_found`, `taskHint=ZZZ`, `resolvedTaskId` absent, `missingFields` still contains `task` → user `PM` → resolve `T-PM` → prepare once with preserved Project/date/hours.
+2. Task `ambiguous` → candidates, Task still missing → unique selection → prepare.
+3. Same pattern for Project (`ZZZ` → `RMS` / ambiguous → unique Project).
+
 ## Soft slot enrichment
 
 After the model classifies a write intent, deterministic enrichment may fill **null** slots still present in the same message (e.g. `เป็น PM` → `taskHint`, hours, today). This does not classify business intent and does not invent Project/Task IDs.
@@ -184,4 +211,4 @@ If testing fails: **revert the deployment**. Do not reintroduce regex business-i
 
 ## Required tests
 
-Unconditional AI-first path, extraction failure (zero tools / no regex fallback), draft isolation, topic switching, follow-ups, Redis failure, production extraction boundary, cancel precedence, **clarification-loop regression** (screenshot conversation), canonical PM/RMS resolve — see `intent-draft-safety.test.ts`, `intent-nlu.test.ts`, `intent-clarification-loop.test.ts`.
+Unconditional AI-first path, extraction failure (zero tools / no regex fallback), draft isolation, topic switching, follow-ups, Redis failure, production extraction boundary, cancel precedence, **clarification-loop regression**, canonical PM/RMS resolve, **canonical missingFields / sequential not_found→correction / ambiguous→selection / Draft load normalization** — see `intent-draft-safety.test.ts`, `intent-nlu.test.ts`, `intent-clarification-loop.test.ts`, `intent-draft-matrix.test.ts`, `intent-draft-lifecycle.test.ts`.

@@ -6,6 +6,7 @@
 import {
   parseHoursValue,
   resolveDateExpression,
+  isValidIsoDate,
 } from '@/lib/ai/intent/date-resolve';
 import type {
   IntentDraft,
@@ -840,19 +841,95 @@ export function applyDraftMerge(
 }
 
 export function recomputeCreateMissingFields(slots: {
-  date?: string;
-  hours?: number;
-  projectHint?: string;
-  resolvedProjectId?: string;
-  taskHint?: string;
-  resolvedTaskId?: string;
+  date?: string | null;
+  resolvedDate?: string | null;
+  hours?: number | null;
+  projectHint?: string | null;
+  resolvedProjectId?: string | null;
+  taskHint?: string | null;
+  resolvedTaskId?: string | null;
+}): IntentMissingField[] {
+  return computeCanonicalCreateMissingFields(slots);
+}
+
+/**
+ * Canonical create-slot completion.
+ *
+ * - Date completes only with a valid resolvedDate (YYYY-MM-DD)
+ * - Project completes only with resolvedProjectId (hints never complete)
+ * - Task completes only with resolvedTaskId (hints never complete)
+ * - Hours completes only with a finite value in (0, 24]
+ *
+ * Hints are diagnostic/clarification state only.
+ */
+export function computeCanonicalCreateMissingFields(slots: {
+  date?: string | null;
+  resolvedDate?: string | null;
+  hours?: number | null;
+  projectHint?: string | null;
+  resolvedProjectId?: string | null;
+  taskHint?: string | null;
+  resolvedTaskId?: string | null;
 }): IntentMissingField[] {
   const missing: IntentMissingField[] = [];
-  if (!slots.date) missing.push('date');
-  if (!slots.projectHint && !slots.resolvedProjectId) missing.push('project');
-  if (!slots.taskHint && !slots.resolvedTaskId) missing.push('task');
-  if (slots.hours === undefined) missing.push('hours');
+  const resolvedDate = (slots.resolvedDate || slots.date || '').trim();
+  if (!resolvedDate || !isValidIsoDate(resolvedDate)) {
+    missing.push('date');
+  }
+  if (!slots.resolvedProjectId?.trim()) {
+    missing.push('project');
+  }
+  if (!slots.resolvedTaskId?.trim()) {
+    missing.push('task');
+  }
+  if (!isValidCreateHours(slots.hours)) {
+    missing.push('hours');
+  }
   return missing;
+}
+
+export function isValidCreateHours(
+  hours: number | null | undefined
+): boolean {
+  return (
+    typeof hours === 'number' &&
+    Number.isFinite(hours) &&
+    hours > 0 &&
+    hours <= 24
+  );
+}
+
+/** True when create Draft may authorize prepare_create_timesheet_entry. */
+export function assertCanonicalCreateReady(slots: {
+  resolvedDate?: string | null;
+  date?: string | null;
+  hours?: number | null;
+  resolvedProjectId?: string | null;
+  resolvedTaskId?: string | null;
+}): { ok: true } | { ok: false; missingFields: IntentMissingField[] } {
+  const missing = computeCanonicalCreateMissingFields(slots);
+  return missing.length === 0 ? { ok: true } : { ok: false, missingFields: missing };
+}
+
+/**
+ * Normalize stored Draft missingFields from canonical slot state.
+ * Preserves hints; never invents IDs. Create intents only.
+ */
+export function normalizeIntentDraft(draft: IntentDraft): IntentDraft {
+  if (draft.intent !== 'create_timesheet_entry') return draft;
+  const missing = computeCanonicalCreateMissingFields({
+    resolvedDate: draft.resolvedDate,
+    hours: draft.hours,
+    resolvedProjectId: draft.resolvedProjectId,
+    resolvedTaskId: draft.resolvedTaskId,
+  });
+  if (
+    missing.length === draft.missingFields.length &&
+    missing.every((f, i) => f === draft.missingFields[i])
+  ) {
+    return draft;
+  }
+  return { ...draft, missingFields: missing };
 }
 
 /** @deprecated Length-based Task/Project fallback removed — use evaluateTargetAnswer. */
