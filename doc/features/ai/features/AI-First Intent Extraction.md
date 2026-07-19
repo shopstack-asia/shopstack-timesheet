@@ -70,9 +70,19 @@ Merge with an existing draft when at least one is true:
 
 When a single slot is outstanding (e.g. only `task`), short answers such as `PM`, `Project Manager`, or `RMS เป็น PM` merge into that slot even if canonical resolve has not succeeded yet. Enforcement then resolves or returns a targeted not-found / ambiguous list.
 
-**Trusted slot protection:** `applyDraftMerge` does **not** give raw model hints priority over already-filled draft slots. If the outstanding field is `task` and the model misclassifies the answer as `projectHint` (e.g. `"PM"`), the merge remaps that value into `taskHint` and keeps the trusted Project (`RMS` / `resolvedProjectId`). Deterministic `fill.matchedField` always wins for its slot. Explicit dual updates (both `projectHint` and `taskHint` provided and different from draft) are still accepted.
+**Trusted slot protection (strict target-only):** During a targeted clarification, **exactly one slot is mutable**. Every non-target Draft slot and resolved ID remains authoritative regardless of additional fields proposed by the model (including multi-field adversarial extractor output).
 
-**Do not** erase resolved Project/Task IDs unless the corresponding hint changes.
+`applyDraftMerge`:
+
+1. Starts exclusively from trusted Draft values.
+2. Determines target via `fill.matchedField` → single primary missing field → `lastClarificationField` when still missing.
+3. Updates **only** that target (wrong-slot remap allowed into the target only, e.g. lone `projectHint: "PM"` → `taskHint` while Project stays `RMS` / `P-RMS`).
+4. Never treats multiple populated model fields as an explicit multi-slot correction.
+5. Explicit multi-field correction is a **separate** merge mode (not implemented in this path; if uncertain, keep clarifying the outstanding slot).
+
+Deterministic `MissingFieldFill` is a discriminated union (exactly one slot value). Model `missingFields` are **never** final — enforcement recomputes them after every merge.
+
+**Do not** erase non-target resolved Project/Task IDs. Clear and re-resolve only the target hint’s ID after canonical master resolution succeeds.
 
 `general_conversation` (ขอบคุณ, เล่าเรื่องแมว, What is a timesheet?, …) while a draft exists:
 

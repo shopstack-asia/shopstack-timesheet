@@ -291,11 +291,24 @@ export async function enforceStructuredIntentDetailed(
     mergeReason = merge.reason;
 
     if (merge.merge) {
-      intent = enrichWriteIntentSlots(
-        applyDraftMerge(intent, options.draft, merge.fill),
+      const merged = applyDraftMerge(intent, options.draft, merge.fill, {
         userMessage,
-        now
-      );
+        now,
+        mergeReason: merge.reason,
+      });
+      // Targeted clarification: never re-enrich from model/message into non-target slots
+      intent = merged.intent;
+      logEnforce({
+        message: 'draft_merge',
+        conversationId: options.conversationId,
+        mergeMode: merged.mergeMode,
+        targetField: merged.targetField,
+        modelProvidedFields: merged.modelProvidedFields,
+        appliedField: merged.appliedField,
+        ignoredConflictingFields: merged.ignoredConflictingFields,
+        preservedDraftFields: merged.preservedDraftFields,
+        mergeReason: merged.mergeReason ?? merge.reason,
+      });
     } else if (
       intent.intent === 'general_conversation' ||
       isUnrelatedGeneralPhrase(userMessage) ||

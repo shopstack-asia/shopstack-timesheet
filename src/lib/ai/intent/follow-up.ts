@@ -59,12 +59,26 @@ export function normalizeAnswerKey(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-export type MissingFieldFill = {
-  dateExpression?: string;
-  projectHint?: string;
-  taskHint?: string;
-  hours?: number;
-  matchedField: IntentMissingField;
+export type MissingFieldFill =
+  | { matchedField: 'date'; dateExpression: string }
+  | { matchedField: 'project'; projectHint: string }
+  | { matchedField: 'task'; taskHint: string }
+  | { matchedField: 'hours'; hours: number };
+
+export type DraftMergeMode =
+  | 'targeted_follow_up'
+  | 'preserve_draft'
+  | 'no_merge';
+
+export type DraftMergeResult = {
+  intent: StructuredIntent;
+  mergeMode: DraftMergeMode;
+  targetField: IntentMissingField | null;
+  modelProvidedFields: string[];
+  appliedField: IntentMissingField | null;
+  ignoredConflictingFields: string[];
+  preservedDraftFields: string[];
+  mergeReason?: string;
 };
 
 export type MergeDecision =
@@ -344,30 +358,20 @@ const SLOT_FIELDS: IntentMissingField[] = [
   'hours',
 ];
 
-function hasTrustedProject(draft: IntentDraft): boolean {
-  return Boolean(draft.resolvedProjectId || draft.projectHint?.trim());
+function modelProvidedFields(intent: StructuredIntent): string[] {
+  const fields: string[] = [];
+  if (intent.dateExpression?.trim()) fields.push('date');
+  if (intent.projectHint?.trim()) fields.push('project');
+  if (intent.taskHint?.trim()) fields.push('task');
+  if (intent.hours != null) fields.push('hours');
+  return fields;
 }
 
-function hasTrustedTask(draft: IntentDraft): boolean {
-  return Boolean(draft.resolvedTaskId || draft.taskHint?.trim());
-}
-
-function hasTrustedDate(draft: IntentDraft): boolean {
-  return Boolean(draft.resolvedDate || draft.dateExpression?.trim());
-}
-
-function hasTrustedHours(draft: IntentDraft): boolean {
-  return draft.hours != null && Number.isFinite(draft.hours);
-}
-
-function hintsDiffer(
-  a?: string | null,
-  b?: string | null
-): boolean {
-  const left = a?.trim();
-  const right = b?.trim();
-  if (!left || !right) return Boolean(left || right);
-  return normalizeAnswerKey(left) !== normalizeAnswerKey(right);
+function plausibleSlotAnswer(text: string): boolean {
+  const t = text.trim();
+  if (!t || t.length > 64) return false;
+  if (isUnrelatedGeneralPhrase(t)) return false;
+  return true;
 }
 
 /**
@@ -394,148 +398,276 @@ export function outstandingMergeTarget(
   return null;
 }
 
+function resolveTaskAnswer(input: {
+  fill?: MissingFieldFill;
+  intent: StructuredIntent;
+  userMessage?: string;
+}): { value: string | null; source: string; ignored: string[] } {
+  const ignored: string[] = [];
+  const modelTask = input.intent.taskHint?.trim() || null;
+  const modelProject = input.intent.projectHint?.trim() || null;
+  const raw =
+    input.userMessage && plausibleSlotAnswer(input.userMessage)
+      ? input.userMessage.trim()
+      : null;
+
+  if (input.fill?.matchedField === 'task') {
+    if (modelProject) ignored.push('project');
+    if (modelTask && normalizeAnswerKey(modelTask) !== normalizeAnswerKey(input.fill.taskHint)) {
+      ignored.push('task');
+    }
+    return { value: input.fill.taskHint, source: 'fill', ignored };
+  }
+
+  // Prefer deterministic raw answer over conflicting model fields
+  if (raw) {
+    if (modelProject) ignored.push('project');
+    if (modelTask && normalizeAnswerKey(modelTask) !== normalizeAnswerKey(raw)) {
+      ignored.push('task');
+    }
+    return { value: raw, source: 'raw_user_message', ignored };
+  }
+
+  if (modelTask) {
+    if (modelProject) ignored.push('project');
+    return { value: modelTask, source: 'intent.taskHint', ignored };
+  }
+
+  // Lone wrong-slot projectHint → remap to task (never apply to Project)
+  if (modelProject) {
+    ignored.push('project');
+    return {
+      value: modelProject,
+      source: 'remapped_projectHint',
+      ignored,
+    };
+  }
+
+  return { value: null, source: 'none', ignored };
+}
+
+function resolveProjectAnswer(input: {
+  fill?: MissingFieldFill;
+  intent: StructuredIntent;
+  userMessage?: string;
+}): { value: string | null; source: string; ignored: string[] } {
+  const ignored: string[] = [];
+  const modelProject = input.intent.projectHint?.trim() || null;
+  const modelTask = input.intent.taskHint?.trim() || null;
+  const raw =
+    input.userMessage && plausibleSlotAnswer(input.userMessage)
+      ? input.userMessage.trim()
+      : null;
+
+  if (input.fill?.matchedField === 'project') {
+    if (modelTask) ignored.push('task');
+    if (
+      modelProject &&
+      normalizeAnswerKey(modelProject) !== normalizeAnswerKey(input.fill.projectHint)
+    ) {
+      ignored.push('project');
+    }
+    return { value: input.fill.projectHint, source: 'fill', ignored };
+  }
+
+  if (raw) {
+    if (modelTask) ignored.push('task');
+    if (
+      modelProject &&
+      normalizeAnswerKey(modelProject) !== normalizeAnswerKey(raw)
+    ) {
+      ignored.push('project');
+    }
+    return { value: raw, source: 'raw_user_message', ignored };
+  }
+
+  if (modelProject) {
+    if (modelTask) ignored.push('task');
+    return { value: modelProject, source: 'intent.projectHint', ignored };
+  }
+
+  if (modelTask) {
+    ignored.push('task');
+    return {
+      value: modelTask,
+      source: 'remapped_taskHint',
+      ignored,
+    };
+  }
+
+  return { value: null, source: 'none', ignored };
+}
+
+function resolveHoursAnswer(input: {
+  fill?: MissingFieldFill;
+  intent: StructuredIntent;
+  userMessage?: string;
+}): { value: number | null; ignored: string[] } {
+  const ignored: string[] = [];
+  if (input.intent.projectHint?.trim()) ignored.push('project');
+  if (input.intent.taskHint?.trim()) ignored.push('task');
+  if (input.intent.dateExpression?.trim()) ignored.push('date');
+
+  if (input.fill?.matchedField === 'hours') {
+    return { value: input.fill.hours, ignored };
+  }
+  const fromRaw = input.userMessage
+    ? parseHoursValue(undefined, input.userMessage)
+    : undefined;
+  if (fromRaw !== undefined) return { value: fromRaw, ignored };
+  if (input.intent.hours != null) return { value: input.intent.hours, ignored };
+  return { value: null, ignored };
+}
+
+function resolveDateAnswer(input: {
+  fill?: MissingFieldFill;
+  intent: StructuredIntent;
+  userMessage?: string;
+  now: Date;
+}): { value: string | null; ignored: string[] } {
+  const ignored: string[] = [];
+  if (input.intent.projectHint?.trim()) ignored.push('project');
+  if (input.intent.taskHint?.trim()) ignored.push('task');
+  if (input.intent.hours != null) ignored.push('hours');
+
+  if (input.fill?.matchedField === 'date') {
+    return { value: input.fill.dateExpression, ignored };
+  }
+  if (input.userMessage?.trim()) {
+    const resolved = resolveDateExpression(input.userMessage, input.now);
+    if (resolved) {
+      return { value: input.userMessage.trim(), ignored };
+    }
+  }
+  if (input.intent.dateExpression?.trim()) {
+    return { value: input.intent.dateExpression.trim(), ignored };
+  }
+  return { value: null, ignored };
+}
+
 /**
- * Merge draft slots into the AI proposal.
+ * Strict target-only merge.
  *
- * Trusted draft slots are not overwritten by misclassified model hints.
- * When exactly one slot is outstanding, a model value landed on the wrong
- * field is remapped to that slot (e.g. projectHint="PM" → taskHint while
- * draft already has Project RMS).
+ * Starts from trusted Draft values. During a targeted clarification, exactly
+ * one slot is mutable. Model multi-field proposals never update non-target slots.
+ * Multi-field "explicit correction" is not supported in this merge path.
  */
 export function applyDraftMerge(
   intent: StructuredIntent,
   draft: IntentDraft,
-  fill?: MissingFieldFill
-): StructuredIntent {
+  fill?: MissingFieldFill,
+  options?: { userMessage?: string; now?: Date; mergeReason?: string }
+): DraftMergeResult {
+  const now = options?.now ?? new Date();
+  const userMessage = options?.userMessage;
   const target = outstandingMergeTarget(draft, fill);
+  const provided = modelProvidedFields(intent);
 
-  let projectHint = draft.projectHint ?? null;
-  let taskHint = draft.taskHint ?? null;
-  let dateExpression =
-    draft.dateExpression || draft.resolvedDate || null;
-  let hours = draft.hours ?? null;
+  const dateExpression = draft.dateExpression || draft.resolvedDate || null;
+  const projectHint = draft.projectHint ?? null;
+  const taskHint = draft.taskHint ?? null;
+  const hours = draft.hours ?? null;
 
-  const modelProject = intent.projectHint?.trim() || null;
-  const modelTask = intent.taskHint?.trim() || null;
-  const modelDate = intent.dateExpression?.trim() || null;
-  const modelHours = intent.hours ?? null;
+  const preservedDraftFields = [
+    ...(dateExpression ? (['date'] as const) : []),
+    ...(projectHint || draft.resolvedProjectId ? (['project'] as const) : []),
+    ...(taskHint || draft.resolvedTaskId ? (['task'] as const) : []),
+    ...(hours != null ? (['hours'] as const) : []),
+  ].filter((f) => f !== target);
+
+  if (!target || !SLOT_FIELDS.includes(target)) {
+    return {
+      intent: {
+        ...intent,
+        domain: 'timesheet',
+        intent: draft.intent,
+        dateExpression,
+        projectHint,
+        taskHint,
+        hours,
+        refersToPrevious: true,
+        missingFields: [],
+        ambiguities: intent.ambiguities ?? draft.ambiguities ?? [],
+      },
+      mergeMode: 'preserve_draft',
+      targetField: null,
+      modelProvidedFields: provided,
+      appliedField: null,
+      ignoredConflictingFields: provided,
+      preservedDraftFields: [
+        ...(dateExpression ? ['date'] : []),
+        ...(projectHint || draft.resolvedProjectId ? ['project'] : []),
+        ...(taskHint || draft.resolvedTaskId ? ['task'] : []),
+        ...(hours != null ? ['hours'] : []),
+      ],
+      mergeReason: options?.mergeReason,
+    };
+  }
+
+  let nextDate = dateExpression;
+  let nextProject = projectHint;
+  let nextTask = taskHint;
+  let nextHours = hours;
+  let appliedField: IntentMissingField | null = null;
+  let ignored: string[] = [];
 
   if (target === 'task') {
-    if (modelTask && modelProject && hintsDiffer(modelProject, draft.projectHint)) {
-      // Explicit dual update: accept both
-      projectHint = modelProject;
-      taskHint = modelTask;
-    } else if (modelTask) {
-      taskHint = modelTask;
-    } else if (
-      modelProject &&
-      hasTrustedProject(draft) &&
-      hintsDiffer(modelProject, draft.projectHint)
-    ) {
-      // Misclassified: answer put in projectHint → outstanding task
-      taskHint = modelProject;
-    } else if (modelProject && !hasTrustedProject(draft)) {
-      projectHint = modelProject;
+    const answer = resolveTaskAnswer({ fill, intent, userMessage });
+    ignored = answer.ignored;
+    if (answer.value) {
+      nextTask = answer.value;
+      appliedField = 'task';
     }
-    if (modelHours != null) hours = modelHours;
-    if (modelDate && !hasTrustedDate(draft)) dateExpression = modelDate;
-    else if (modelDate && !hintsDiffer(modelDate, dateExpression)) {
-      dateExpression = modelDate;
-    }
+    if (intent.hours != null) ignored.push('hours');
+    if (intent.dateExpression?.trim()) ignored.push('date');
   } else if (target === 'project') {
-    if (modelProject && modelTask && hintsDiffer(modelTask, draft.taskHint)) {
-      projectHint = modelProject;
-      taskHint = modelTask;
-    } else if (modelProject) {
-      projectHint = modelProject;
-    } else if (
-      modelTask &&
-      hasTrustedTask(draft) &&
-      hintsDiffer(modelTask, draft.taskHint)
-    ) {
-      projectHint = modelTask;
-    } else if (modelTask && !hasTrustedTask(draft)) {
-      // Outstanding project; no trusted task — treat lone hint as project
-      projectHint = modelTask;
+    const answer = resolveProjectAnswer({ fill, intent, userMessage });
+    ignored = answer.ignored;
+    if (answer.value) {
+      nextProject = answer.value;
+      appliedField = 'project';
     }
-    if (modelHours != null) hours = modelHours;
-    if (modelDate && !hasTrustedDate(draft)) dateExpression = modelDate;
-    else if (modelDate && !hintsDiffer(modelDate, dateExpression)) {
-      dateExpression = modelDate;
-    }
+    if (intent.hours != null) ignored.push('hours');
+    if (intent.dateExpression?.trim()) ignored.push('date');
   } else if (target === 'hours') {
-    if (modelHours != null) hours = modelHours;
-    // Protect trusted project/task/date — do not accept stray model overwrites
-    if (modelProject) {
-      if (!hasTrustedProject(draft) || !hintsDiffer(modelProject, draft.projectHint)) {
-        projectHint = modelProject || projectHint;
-      }
-    }
-    if (modelTask) {
-      if (!hasTrustedTask(draft) || !hintsDiffer(modelTask, draft.taskHint)) {
-        taskHint = modelTask || taskHint;
-      }
-    }
-    if (modelDate) {
-      if (!hasTrustedDate(draft) || !hintsDiffer(modelDate, dateExpression)) {
-        dateExpression = modelDate;
-      }
+    const answer = resolveHoursAnswer({ fill, intent, userMessage });
+    ignored = answer.ignored;
+    if (answer.value != null) {
+      nextHours = answer.value;
+      appliedField = 'hours';
     }
   } else if (target === 'date') {
-    if (modelDate) dateExpression = modelDate;
-    if (modelHours != null && !hasTrustedHours(draft)) hours = modelHours;
-    if (modelProject) {
-      if (!hasTrustedProject(draft) || !hintsDiffer(modelProject, draft.projectHint)) {
-        projectHint = modelProject || projectHint;
-      }
-    }
-    if (modelTask) {
-      if (!hasTrustedTask(draft) || !hintsDiffer(modelTask, draft.taskHint)) {
-        taskHint = modelTask || taskHint;
-      }
-    }
-  } else {
-    // No single outstanding target — fill gaps only; do not clobber trusted slots
-    // with a conflicting model hint when the draft already holds a value.
-    if (modelProject) {
-      if (!hasTrustedProject(draft) || !hintsDiffer(modelProject, draft.projectHint)) {
-        projectHint = modelProject;
-      }
-    }
-    if (modelTask) {
-      if (!hasTrustedTask(draft) || !hintsDiffer(modelTask, draft.taskHint)) {
-        taskHint = modelTask;
-      }
-    }
-    if (modelDate) {
-      if (!hasTrustedDate(draft) || !hintsDiffer(modelDate, dateExpression)) {
-        dateExpression = modelDate;
-      }
-    }
-    if (modelHours != null) {
-      if (!hasTrustedHours(draft) || modelHours === draft.hours) {
-        hours = modelHours;
-      }
+    const answer = resolveDateAnswer({ fill, intent, userMessage, now });
+    ignored = answer.ignored;
+    if (answer.value) {
+      nextDate = answer.value;
+      appliedField = 'date';
     }
   }
 
-  // Deterministic fill always wins for its matched field
-  if (fill?.projectHint) projectHint = fill.projectHint;
-  if (fill?.taskHint) taskHint = fill.taskHint;
-  if (fill?.dateExpression) dateExpression = fill.dateExpression;
-  if (fill?.hours != null) hours = fill.hours;
+  // Deduplicate ignored list
+  ignored = [...new Set(ignored)].filter((f) => f !== target);
 
   return {
-    ...intent,
-    domain: 'timesheet',
-    intent: draft.intent,
-    dateExpression,
-    projectHint,
-    taskHint,
-    hours,
-    refersToPrevious: true,
-    missingFields: [],
-    ambiguities: intent.ambiguities ?? draft.ambiguities ?? [],
+    intent: {
+      ...intent,
+      domain: 'timesheet',
+      intent: draft.intent,
+      dateExpression: nextDate,
+      projectHint: nextProject,
+      taskHint: nextTask,
+      hours: nextHours,
+      refersToPrevious: true,
+      missingFields: [],
+      ambiguities: intent.ambiguities ?? draft.ambiguities ?? [],
+    },
+    mergeMode: 'targeted_follow_up',
+    targetField: target,
+    modelProvidedFields: provided,
+    appliedField,
+    ignoredConflictingFields: ignored,
+    preservedDraftFields: [...preservedDraftFields],
+    mergeReason: options?.mergeReason,
   };
 }
 

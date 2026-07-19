@@ -41,6 +41,9 @@ export {
   recomputeCreateMissingFields,
   structuralFillForOutstandingSlot,
   normalizeAnswerKey,
+  type MissingFieldFill,
+  type DraftMergeResult,
+  type DraftMergeMode,
 } from '@/lib/ai/intent/follow-up';
 export { enrichWriteIntentSlots } from '@/lib/ai/intent/slot-enrich';
 export {
