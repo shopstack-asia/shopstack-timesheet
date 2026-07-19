@@ -32,7 +32,8 @@ Rules:
 - NEVER include employeeId, email, slackUserId, staffId, timesheetStaffId, or Zoho IDs.
 - For incomplete timesheet writes, set intent to the write type and list missingFields (date, project, task, hours).
 - Bare confirm/cancel phrases → confirm_timesheet_change / cancel_timesheet_change.
-- General chit-chat → general_conversation.
+- General chit-chat (ขอบคุณ, สวัสดี, เล่าเรื่อง…, What is…) → general_conversation with refersToPrevious=false. Never treat thanks or off-topic chat as Project/Task/hours.
+- Set refersToPrevious=true ONLY when the user is clearly answering a missing field from the pending draft summary (e.g. "PM", "3 ชม.", "วันนี้").
 - If clearly timesheet-related but unclear which write → create_timesheet_entry with missingFields, not general_conversation.
 - hours must be a number when present (e.g. สามชั่วโมง → 3).
 - dateExpression may be "วันนี้", "yesterday", ISO date, etc.`;

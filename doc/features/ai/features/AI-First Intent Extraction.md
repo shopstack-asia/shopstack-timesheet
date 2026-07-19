@@ -8,14 +8,14 @@ Architecture:
 
 ```text
 User text
-  → (optional) load intent draft
+  → (optional) load Intent Draft (scoped Redis key)
   → AI structured intent (JSON schema)
-  → deterministic enforce (dates, hours, Project/Task, tool mapping)
+  → deterministic enforce (dates, hours, Project/Task, tool mapping, merge rules)
   → Business Tool / clarification
   → (writes) prepare → confirm → fenced Redis execution → Sheets
 ```
 
-This replaces “regex must match the full sentence” as the primary NLU path. Regex remains for bare confirm/cancel, ISO date safety, and **fallback** when extraction fails.
+Regex Decision Engine remains the **flag-off** path and **technical fallback** when extraction fails.
 
 ## Feature flag
 
@@ -28,65 +28,79 @@ This replaces “regex must match the full sentence” as the primary NLU path. 
 
 Validated with Zod (`StructuredIntentSchema`). Forbidden keys: `employeeId`, `email`, `slackUserId`, `staffId`, `timesheetStaffId`, Zoho IDs.
 
-Supported intents map to tools:
-
-| Intent | Tool |
-|--------|------|
-| `get_my_profile` | `get_my_profile` |
-| `get_work_context` | `get_work_context` |
-| `get_timesheet_day` | `get_timesheet` |
-| `get_timesheet_range` | `get_timesheet_range` |
-| `create_timesheet_entry` | `prepare_create_timesheet_entry` |
-| `update_timesheet_entry` | `prepare_update_timesheet_entry` |
-| `delete_timesheet_entry` | `prepare_delete_timesheet_entry` |
-| `confirm_timesheet_change` | `confirm_timesheet_change` |
-| `cancel_timesheet_change` | `cancel_timesheet_change` |
-| `submit_timesheet` | `prepare_submit_timesheet` (returns unsupported) |
-| `general_conversation` | no Business Tool |
-| `unknown` (business-like) | clarification |
-
 The model cannot authorize an arbitrary tool. Round-0 `enforceRequiredBusinessTool` still overwrites wrong tool calls.
 
-## Deterministic enforcement
+## Intent Draft ownership and keys
 
-After extraction, code:
+**Policy:** Preserve an incomplete draft until TTL expiry unless the user explicitly cancels/replaces it or a complete tool decision is produced. Unrelated messages must not merge into it.
 
-- Resolves Bangkok dates / ranges
-- Validates hours and required fields
-- Resolves Project/Task via canonical masters (exact → unique alias/initials → conservative fuzzy); clarifies on ambiguity; never invents IDs
-- Rejects custom Project creation (`allowCustomProject: false` on confirm write)
-- Stores a **non-identity** intent draft when fields are missing (TTL 10 min, scoped to Slack user + conversation)
-- Never writes Sheets during prepare
+Redis key (production only — no in-memory production fallback):
+
+```text
+timesheet:intent-draft:{encodeURIComponent(conversationId)}:{encodeURIComponent(slackUserId)}
+```
+
+- Scoped by **both** conversation and trusted Slack user (from request metadata, never from the model).
+- Two users in the same channel have independent drafts.
+- Draft TTL: **10 minutes**.
+- Distinct from pending write confirmations (`timesheet:pending-change:*`).
+- Never stores employeeId / email / Zoho identity.
+
+## Follow-up merge rules
+
+Merge with an existing draft **only** when at least one is true:
+
+1. Extractor returns `refersToPrevious=true`
+2. Message deterministically matches a missing field (hours / date / unique Project / unique Task)
+3. Explicit continue phrase (e.g. ต่อจากเมื่อกี้)
+4. Same write intent with new slot values
+
+**Do not** auto-fill the first missing field from any short message.
+
+`general_conversation` (ขอบคุณ, เล่าเรื่องแมว, What is a timesheet?, …) while a draft exists:
+
+- Return no Business Tool
+- Do **not** convert to a Timesheet intent
+- Do **not** mutate the draft
+
+Draft intent cannot silently change (create ≠ update). Model `missingFields` are recomputed deterministically.
+
+## Cancel precedence
+
+1. Pending write confirmation exists + bare `ยกเลิก` → `cancel_timesheet_change`
+2. No pending confirmation + incomplete Intent Draft + bare `ยกเลิก` → clear draft (“ยกเลิกคำขอแล้ว”)
+3. Explicit draft cancel (`ยกเลิกคำขอนี้`, `ไม่ลงเวลาแล้ว`, `cancel this draft`) → clear draft
+4. Neither → no pending request
+
+## Redis draft-store failure
+
+Intent Drafts are conversational assistance. Redis failure must not crash the conversation or invent identity errors.
+
+| Situation | Behavior |
+|-----------|----------|
+| Complete request, draft get fails | Continue extraction/enforce without draft; log `draftStoreAvailable=false` |
+| Incomplete request, draft set fails | Controlled clarify: ask for all fields in one message; do not claim a draft was saved |
+| Follow-up that needs draft, get fails | Ask user to resend the complete request; do not guess |
+| Production | Redis only — never fall back to in-memory |
+
+Typed outcomes: `draft_store_unavailable`, `draft_not_found`, `draft_expired`, `draft_saved`, `draft_cleared`, `draft_found`, `draft_preserved`.
 
 ## Clarification vs general conversation
 
-Incomplete but recognizable Timesheet requests **clarify** (ask only for missing slots). They must not fall through to general conversation or invent “cannot access / identity” messages unless a real identity path failed.
+Incomplete but recognizable Timesheet requests **clarify**. They must not fall through to general conversation or invent identity errors unless a real identity path failed.
 
-## Follow-up drafts
+## Testing note
 
-Draft fields: intent, date, project/task hints or resolved IDs, hours, missingFields, timestamps. **No employee identity.** Identity is loaded from Conversation Context when the Business Tool runs.
-
-Drafts are distinct from Redis **pending write confirmations**.
-
-## Fallback
-
-If structured extraction fails technically: log `fallbackUsed`, run regex `decideBusinessTool`. If text still looks Timesheet-related and the regex returns `none`, return a controlled clarification — never silent general chat with invented business data.
-
-## Error integrity
-
-Typed reasons include `project_not_found`, `task_not_found`, `ambiguous_project`, `ambiguous_task`, `validation_failed`, `extraction_failed`, `malformed_intent`, `read_failed`, `redis_unavailable`, `identity_unavailable`. Responses must match the real failure; Project/Task/Redis/parse failures must not be narrated as identity failures.
-
-## Observability
-
-Safe logs (`scope: ai-intent`): requestId, eventId, conversationId, extraction outcome, intent, confidence, missing fields, selected tool, clarification reason, fallback flag, typed error code. No Slack email, employeeId, Redis payloads, full Timesheet bodies, or secrets.
+- `intent-nlu.test.ts` fixture extractors prove **deterministic enforcement**, not live model language quality.
+- `intent-draft-safety.test.ts` exercises `extractStructuredIntent` with a **mocked** OpenAI transport (prompt, `responseFormat=json_object`, `temperature=0`, Zod). That does **not** prove the deployed model understands Thai/English.
+- End-to-end natural-language quality requires a **live Slack staging** run with `AI_INTENT_EXTRACTION_ENABLED=true` and the configured model.
 
 ## Code
 
-- `src/lib/ai/intent/*` — schema, extract, enforce, drafts, decide orchestrator
+- `src/lib/ai/intent/*` — schema, extract, enforce, follow-up, drafts, decide
 - `src/lib/ai/conversation.ts` — wires AI-first decide when flag enabled
-- `src/lib/ai/decision-engine.ts` — regex fallback / flag-off path
 - `src/lib/timesheet/write/master-resolve.ts` — Project/Task resolution
 
 ## Required tests
 
-Covered in `src/lib/ai/intent/intent-nlu.test.ts`: natural-language create fixtures, clarifications, drafts, safety, error integrity, flag-off regression.
+Draft isolation, topic switching, follow-ups, Redis failure, production extraction boundary, cancel precedence — see `intent-draft-safety.test.ts` and `intent-nlu.test.ts`.

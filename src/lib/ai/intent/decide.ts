@@ -14,7 +14,9 @@ import {
   type IntentDraftStore,
 } from '@/lib/ai/intent/draft-store';
 import {
-  enforceStructuredIntent,
+  DRAFT_CANCELLED_MESSAGE,
+  DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY,
+  enforceStructuredIntentDetailed,
   looksLikeBusinessTimesheetText,
   type EnforceIntentOptions,
 } from '@/lib/ai/intent/enforce';
@@ -22,7 +24,10 @@ import {
   extractStructuredIntent,
   type ExtractIntentFn,
 } from '@/lib/ai/intent/extract';
-import type { StructuredIntent } from '@/lib/ai/intent/types';
+import {
+  isExplicitDraftCancelPhrase,
+} from '@/lib/ai/intent/follow-up';
+import type { IntentDraft, StructuredIntent } from '@/lib/ai/intent/types';
 import {
   isBareCancelPhrase,
   isBareConfirmPhrase,
@@ -48,6 +53,8 @@ export type DecideWithIntentResult = {
   fallbackUsed: boolean;
   extractedIntent?: StructuredIntent;
   typedErrorCode?: string;
+  draftStoreAvailable?: boolean;
+  draftOutcome?: string;
 };
 
 function logIntent(payload: Record<string, unknown>): void {
@@ -74,10 +81,19 @@ export async function decideWithIntentExtraction(
   const enabled =
     options.intentExtractionEnabled ?? isAiIntentExtractionEnabled();
 
-  // Narrow deterministic confirm/cancel always first
+  const draftStore =
+    options.draftStore ??
+    (options.conversationId && options.slackUserId
+      ? createRedisIntentDraftStore()
+      : undefined);
+
+  // --- Deterministic confirm / cancel precedence ---
   if (isBareConfirmPhrase(text) || isBareCancelPhrase(text)) {
     const cc = resolveConfirmOrCancel(text, pending);
-    if (cc) {
+    if (cc && (cc.action === 'call_tool' || pending.length > 0)) {
+      if (draftStore && options.conversationId && options.slackUserId) {
+        await draftStore.clear(options.conversationId, options.slackUserId);
+      }
       logIntent({
         message: 'deterministic_confirm_cancel',
         requestId: options.requestId,
@@ -88,8 +104,69 @@ export async function decideWithIntentExtraction(
         clarificationReason: cc.action === 'clarify' ? cc.reason : undefined,
         fallbackUsed: false,
       });
+      return { decision: cc, fallbackUsed: false, draftStoreAvailable: true };
+    }
+
+    // Bare cancel with no pending confirmation → clear Intent Draft if any
+    if (isBareCancelPhrase(text) && pending.length === 0) {
+      const draftLoad = await safeLoadDraft(draftStore, options);
+      if (draftLoad.draft) {
+        await draftStore?.clear(
+          options.conversationId!,
+          options.slackUserId!
+        );
+        return {
+          decision: {
+            action: 'clarify',
+            message: DRAFT_CANCELLED_MESSAGE,
+            reason: 'intent_draft_cancelled',
+          },
+          fallbackUsed: false,
+          draftOutcome: 'draft_cleared',
+          draftStoreAvailable: draftLoad.available,
+        };
+      }
+      if (cc) {
+        return {
+          decision: cc,
+          fallbackUsed: false,
+          draftStoreAvailable: draftLoad.available,
+        };
+      }
+    }
+
+    if (cc) {
       return { decision: cc, fallbackUsed: false };
     }
+  }
+
+  if (isExplicitDraftCancelPhrase(text)) {
+    const draftLoad = await safeLoadDraft(draftStore, options);
+    if (draftLoad.available === false) {
+      return {
+        decision: {
+          action: 'clarify',
+          message: DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY,
+          reason: 'draft_store_unavailable',
+        },
+        fallbackUsed: false,
+        typedErrorCode: 'draft_store_unavailable',
+        draftStoreAvailable: false,
+      };
+    }
+    if (draftStore && options.conversationId && options.slackUserId) {
+      await draftStore.clear(options.conversationId, options.slackUserId);
+    }
+    return {
+      decision: {
+        action: 'clarify',
+        message: DRAFT_CANCELLED_MESSAGE,
+        reason: 'intent_draft_cancelled',
+      },
+      fallbackUsed: false,
+      draftOutcome: 'draft_cleared',
+      draftStoreAvailable: true,
+    };
   }
 
   if (!enabled || options.forceRegexFallback) {
@@ -97,14 +174,9 @@ export async function decideWithIntentExtraction(
     return { decision, fallbackUsed: !enabled };
   }
 
-  const draftStore =
-    options.draftStore ??
-    (options.conversationId ? createRedisIntentDraftStore() : undefined);
-
-  let draft =
-    draftStore && options.conversationId && options.slackUserId
-      ? await draftStore.get(options.conversationId, options.slackUserId)
-      : undefined;
+  const draftLoad = await safeLoadDraft(draftStore, options);
+  const draft: IntentDraft | undefined = draftLoad.draft;
+  const draftLoadFailed = draftLoad.available === false;
 
   const extract = options.extractIntent ?? extractStructuredIntent;
 
@@ -116,10 +188,11 @@ export async function decideWithIntentExtraction(
       eventId: options.eventId,
     });
 
-    const decision = await enforceStructuredIntent(extracted, {
+    const enforced = await enforceStructuredIntentDetailed(extracted, {
       now,
       pendingChanges: pending,
       draft,
+      draftLoadFailed,
       draftStore,
       conversationId: options.conversationId,
       slackUserId: options.slackUserId,
@@ -138,14 +211,34 @@ export async function decideWithIntentExtraction(
       confidence: extracted.confidence,
       missingFields: extracted.missingFields,
       selectedTool:
-        decision.action === 'call_tool' ? decision.toolName : undefined,
+        enforced.decision.action === 'call_tool'
+          ? enforced.decision.toolName
+          : undefined,
       clarificationReason:
-        decision.action === 'clarify' ? decision.reason : undefined,
+        enforced.decision.action === 'clarify'
+          ? enforced.decision.reason
+          : undefined,
       fallbackUsed: false,
-      toolResultStatus: decision.action,
+      toolResultStatus: enforced.decision.action,
+      draftStoreAvailable: enforced.draftStoreAvailable ?? draftLoad.available,
+      draftOutcome: enforced.draftOutcome,
+      typedErrorCode:
+        enforced.decision.reason === 'draft_store_unavailable'
+          ? 'draft_store_unavailable'
+          : undefined,
     });
 
-    return { decision, fallbackUsed: false, extractedIntent: extracted };
+    return {
+      decision: enforced.decision,
+      fallbackUsed: false,
+      extractedIntent: extracted,
+      draftStoreAvailable: enforced.draftStoreAvailable ?? draftLoad.available,
+      draftOutcome: enforced.draftOutcome,
+      typedErrorCode:
+        enforced.decision.reason === 'draft_store_unavailable'
+          ? 'draft_store_unavailable'
+          : undefined,
+    };
   } catch (error) {
     const typedErrorCode =
       error instanceof Error && error.message.startsWith('malformed_intent')
@@ -160,12 +253,12 @@ export async function decideWithIntentExtraction(
       extractionOutcome: 'failed',
       typedErrorCode,
       fallbackUsed: true,
+      draftStoreAvailable: draftLoad.available,
       error: error instanceof Error ? error.message : 'unknown',
     });
 
     const decision = decideBusinessTool(text, { now, pendingChanges: pending });
 
-    // Uncertain timesheet language must not become general conversation
     if (
       decision.action === 'none' &&
       looksLikeBusinessTimesheetText(text)
@@ -179,9 +272,47 @@ export async function decideWithIntentExtraction(
         },
         fallbackUsed: true,
         typedErrorCode,
+        draftStoreAvailable: draftLoad.available,
       };
     }
 
-    return { decision, fallbackUsed: true, typedErrorCode };
+    return {
+      decision,
+      fallbackUsed: true,
+      typedErrorCode,
+      draftStoreAvailable: draftLoad.available,
+    };
+  }
+}
+
+async function safeLoadDraft(
+  draftStore: IntentDraftStore | undefined,
+  options: DecideWithIntentOptions
+): Promise<{
+  draft?: IntentDraft;
+  available: boolean;
+  outcome?: string;
+}> {
+  if (!draftStore || !options.conversationId || !options.slackUserId) {
+    return { available: true, outcome: 'draft_not_found' };
+  }
+  try {
+    const result = await draftStore.get(
+      options.conversationId,
+      options.slackUserId
+    );
+    if (result.outcome === 'draft_store_unavailable') {
+      return { available: false, outcome: 'draft_store_unavailable' };
+    }
+    if (result.outcome === 'draft_found') {
+      return {
+        draft: result.draft,
+        available: true,
+        outcome: 'draft_found',
+      };
+    }
+    return { available: true, outcome: result.outcome };
+  } catch {
+    return { available: false, outcome: 'draft_store_unavailable' };
   }
 }

@@ -9,7 +9,11 @@ export {
 } from '@/lib/ai/intent/extract';
 export {
   enforceStructuredIntent,
+  enforceStructuredIntentDetailed,
   looksLikeBusinessTimesheetText,
+  DRAFT_STORE_UNAVAILABLE_CLARIFY,
+  DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY,
+  DRAFT_CANCELLED_MESSAGE,
 } from '@/lib/ai/intent/enforce';
 export {
   decideWithIntentExtraction,
@@ -20,8 +24,19 @@ export {
   createInMemoryIntentDraftStore,
   createRedisIntentDraftStore,
   buildDraftFromSlots,
+  intentDraftKey,
+  DraftStoreError,
   type IntentDraftStore,
+  type DraftStoreOutcome,
+  type DraftGetResult,
 } from '@/lib/ai/intent/draft-store';
+export {
+  decideDraftMerge,
+  applyDraftMerge,
+  isExplicitDraftCancelPhrase,
+  isUnrelatedGeneralPhrase,
+  recomputeCreateMissingFields,
+} from '@/lib/ai/intent/follow-up';
 export {
   resolveDateExpression,
   parseHoursValue,

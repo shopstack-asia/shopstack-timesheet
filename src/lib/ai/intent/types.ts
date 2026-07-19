@@ -68,6 +68,7 @@ export type AgentTypedErrorCode =
   | 'identity_unavailable'
   | 'context_unavailable'
   | 'redis_unavailable'
+  | 'draft_store_unavailable'
   | 'project_not_found'
   | 'task_not_found'
   | 'ambiguous_project'

@@ -54,7 +54,10 @@ function createIntent(partial: Partial<StructuredIntent>): StructuredIntent {
   };
 }
 
-/** Test double: maps natural language fixtures to structured intents (not production). */
+/** Test double for enforcement unit coverage only — not production NLU verification.
+ * Production extraction boundary tests live in intent-draft-safety.test.ts (mocked OpenAI).
+ * Live model quality requires staging Slack with AI_INTENT_EXTRACTION_ENABLED=true.
+ */
 const fixtureExtractor: ExtractIntentFn = async ({ userMessage, draftSummary }) => {
   const t = userMessage.trim();
 
@@ -471,8 +474,8 @@ describe('follow-up drafts', () => {
         userMessage: 'ลงเวลา RMS วันนี้ 3 ชั่วโมง',
       }
     );
-    expect(await store.get('C-own', 'U2')).toBeUndefined();
-    expect(await store.get('C-own', 'U1')).toBeDefined();
+    expect((await store.get('C-own', 'U2')).outcome).toBe('draft_not_found');
+    expect((await store.get('C-own', 'U1')).outcome).toBe('draft_found');
   });
 
   it('expires drafts', async () => {
@@ -485,7 +488,7 @@ describe('follow-up drafts', () => {
       createdAt: new Date(0).toISOString(),
       expiresAt: new Date(0).toISOString(),
     });
-    expect(await store.get('C-exp', 'U1')).toBeUndefined();
+    expect((await store.get('C-exp', 'U1')).outcome).toBe('draft_expired');
   });
 
   it('draft never carries identity fields', async () => {
@@ -503,7 +506,7 @@ describe('follow-up drafts', () => {
       }
     );
     const draft = await store.get('C-id', 'U1');
-    expect(draft).toBeDefined();
+    expect(draft.outcome).toBe('draft_found');
     expect(JSON.stringify(draft)).not.toMatch(/employeeId|email|staffId/);
   });
 });

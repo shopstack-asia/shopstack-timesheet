@@ -13,8 +13,16 @@ import {
 import {
   buildDraftFromSlots,
   draftSummary,
+  type DraftWriteResult,
   type IntentDraftStore,
 } from '@/lib/ai/intent/draft-store';
+import {
+  applyDraftMerge,
+  decideDraftMerge,
+  isExplicitDraftCancelPhrase,
+  isUnrelatedGeneralPhrase,
+  recomputeCreateMissingFields,
+} from '@/lib/ai/intent/follow-up';
 import type {
   IntentDraft,
   IntentMissingField,
@@ -32,73 +40,34 @@ import {
   isBareCancelPhrase,
 } from '@/lib/ai/write-decision';
 
+export const DRAFT_STORE_UNAVAILABLE_CLARIFY =
+  'ระบบยังเก็บคำขอต่อเนื่องไม่ได้ชั่วคราว กรุณาระบุวันที่ Project งาน และจำนวนชั่วโมงในข้อความเดียวครับ';
+
+export const DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY =
+  'ระบบยังโหลดคำขอค้างไว้ไม่ได้ชั่วคราว กรุณาส่งรายละเอียด Timesheet ครบในข้อความเดียวครับ (วันที่ Project งาน และจำนวนชั่วโมง)';
+
+export const DRAFT_CANCELLED_MESSAGE =
+  'ยกเลิกคำขอแล้วครับ ยังไม่มีการเตรียมรายการ Timesheet';
+
 export type EnforceIntentOptions = {
   now?: Date;
   pendingChanges?: PendingSummary[];
   draft?: IntentDraft | null;
+  /** True when a draft was needed but Redis could not load it. */
+  draftLoadFailed?: boolean;
   draftStore?: IntentDraftStore;
   conversationId?: string;
   slackUserId?: string;
-  /** Injectable resolvers for tests */
   resolveProjectFn?: typeof resolveProject;
   resolveTaskFn?: typeof resolveTask;
   userMessage?: string;
 };
 
-function mergeWithDraft(
-  intent: StructuredIntent,
-  draft: IntentDraft | null | undefined,
-  userMessage: string
-): StructuredIntent {
-  if (!draft) return intent;
-
-  const merged: StructuredIntent = {
-    ...intent,
-    intent:
-      intent.intent === 'unknown' ||
-      intent.intent === 'general_conversation'
-        ? draft.intent
-        : intent.intent,
-    domain:
-      intent.domain === 'unknown' || intent.domain === 'general'
-        ? 'timesheet'
-        : intent.domain,
-    dateExpression:
-      intent.dateExpression || draft.dateExpression || draft.resolvedDate || null,
-    projectHint: intent.projectHint || draft.projectHint || null,
-    taskHint: intent.taskHint || draft.taskHint || null,
-    hours:
-      intent.hours ??
-      draft.hours ??
-      null,
-    refersToPrevious: true,
-  };
-
-  // Short follow-up: fill first missing field with the whole message
-  const trimmed = userMessage.trim();
-  if (
-    trimmed &&
-    trimmed.length <= 40 &&
-    draft.missingFields.length > 0 &&
-    !intent.projectHint &&
-    !intent.taskHint &&
-    intent.hours == null &&
-    !intent.dateExpression
-  ) {
-    const field = draft.missingFields[0]!;
-    if (field === 'task' && !merged.taskHint) merged.taskHint = trimmed;
-    else if (field === 'project' && !merged.projectHint) {
-      merged.projectHint = trimmed;
-    } else if (field === 'hours' && merged.hours == null) {
-      const n = Number(trimmed.replace(/[^\d.]/g, ''));
-      if (Number.isFinite(n)) merged.hours = n;
-    } else if (field === 'date' && !merged.dateExpression) {
-      merged.dateExpression = trimmed;
-    }
-  }
-
-  return merged;
-}
+export type EnforceIntentResult = {
+  decision: BusinessToolDecision;
+  draftOutcome?: string;
+  draftStoreAvailable?: boolean;
+};
 
 function clarifyMissing(fields: IntentMissingField[]): string {
   const set = new Set(fields);
@@ -130,9 +99,11 @@ async function persistDraft(
     Parameters<typeof buildDraftFromSlots>[0],
     'conversationId' | 'slackUserId' | 'now'
   >
-): Promise<void> {
-  if (!opts.draftStore || !opts.conversationId || !opts.slackUserId) return;
-  await opts.draftStore.set(
+): Promise<DraftWriteResult> {
+  if (!opts.draftStore || !opts.conversationId || !opts.slackUserId) {
+    return { outcome: 'draft_store_unavailable' };
+  }
+  return opts.draftStore.set(
     buildDraftFromSlots({
       ...slots,
       conversationId: opts.conversationId,
@@ -142,9 +113,26 @@ async function persistDraft(
   );
 }
 
-async function clearDraft(opts: EnforceIntentOptions): Promise<void> {
-  if (!opts.draftStore || !opts.conversationId || !opts.slackUserId) return;
-  await opts.draftStore.clear(opts.conversationId, opts.slackUserId);
+async function clearDraft(
+  opts: EnforceIntentOptions
+): Promise<DraftWriteResult | undefined> {
+  if (!opts.draftStore || !opts.conversationId || !opts.slackUserId) {
+    return undefined;
+  }
+  return opts.draftStore.clear(opts.conversationId, opts.slackUserId);
+}
+
+function incompleteNeedsDraftMessage(
+  saveResult: DraftWriteResult
+): BusinessToolDecision | null {
+  if (saveResult.outcome === 'draft_store_unavailable') {
+    return {
+      action: 'clarify',
+      message: DRAFT_STORE_UNAVAILABLE_CLARIFY,
+      reason: 'draft_store_unavailable',
+    };
+  }
+  return null;
 }
 
 /**
@@ -154,53 +142,164 @@ export async function enforceStructuredIntent(
   rawIntent: StructuredIntent,
   options: EnforceIntentOptions = {}
 ): Promise<BusinessToolDecision> {
+  const result = await enforceStructuredIntentDetailed(rawIntent, options);
+  return result.decision;
+}
+
+export async function enforceStructuredIntentDetailed(
+  rawIntent: StructuredIntent,
+  options: EnforceIntentOptions = {}
+): Promise<EnforceIntentResult> {
   const now = options.now ?? new Date();
   const pending = options.pendingChanges ?? [];
   const userMessage = options.userMessage || '';
 
-  // Deterministic bare confirm/cancel always wins
-  if (isBareConfirmPhrase(userMessage) || isBareCancelPhrase(userMessage)) {
+  // Explicit draft cancellation (not bare ยกเลิก — that is handled in decide)
+  if (isExplicitDraftCancelPhrase(userMessage)) {
+    const cleared = await clearDraft(options);
+    return {
+      decision: {
+        action: 'clarify',
+        message: DRAFT_CANCELLED_MESSAGE,
+        reason: 'intent_draft_cancelled',
+      },
+      draftOutcome: cleared?.outcome ?? 'draft_cleared',
+      draftStoreAvailable: cleared?.outcome !== 'draft_store_unavailable',
+    };
+  }
+
+  // Deterministic bare confirm always wins for pending confirmations
+  if (isBareConfirmPhrase(userMessage)) {
     const cc = resolveConfirmOrCancel(userMessage, pending);
     if (cc) {
       await clearDraft(options);
-      return cc;
+      return { decision: cc, draftStoreAvailable: true };
     }
   }
 
-  const intent = mergeWithDraft(rawIntent, options.draft, userMessage);
+  if (isBareCancelPhrase(userMessage)) {
+    const cc = resolveConfirmOrCancel(userMessage, pending);
+    if (cc && (cc.action === 'call_tool' || pending.length > 0)) {
+      await clearDraft(options);
+      return { decision: cc, draftStoreAvailable: true };
+    }
+    // Bare cancel with no pending: clear Intent Draft if present
+    if (options.draft) {
+      const cleared = await clearDraft(options);
+      return {
+        decision: {
+          action: 'clarify',
+          message: DRAFT_CANCELLED_MESSAGE,
+          reason: 'intent_draft_cancelled',
+        },
+        draftOutcome: cleared?.outcome ?? 'draft_cleared',
+      };
+    }
+    if (cc) {
+      return { decision: cc };
+    }
+  }
+
+  // Follow-up needed but draft store could not load — do not guess context.
+  // Complete new requests may continue without a draft.
+  if (
+    options.draftLoadFailed &&
+    !options.draft &&
+    (rawIntent.refersToPrevious === true ||
+      looksLikeShortFollowUp(userMessage))
+  ) {
+    return {
+      decision: {
+        action: 'clarify',
+        message: DRAFT_FOLLOWUP_UNAVAILABLE_CLARIFY,
+        reason: 'draft_store_unavailable',
+      },
+      draftStoreAvailable: false,
+      draftOutcome: 'draft_store_unavailable',
+    };
+  }
+
+  let intent = rawIntent;
+  let draftOutcome: string | undefined;
+
+  if (options.draft) {
+    const merge = await decideDraftMerge({
+      intent: rawIntent,
+      draft: options.draft,
+      userMessage,
+      now,
+      resolveProjectFn: options.resolveProjectFn,
+      resolveTaskFn: options.resolveTaskFn,
+    });
+
+    if (merge.merge) {
+      intent = applyDraftMerge(rawIntent, options.draft, merge.fill);
+    } else if (
+      rawIntent.intent === 'general_conversation' ||
+      isUnrelatedGeneralPhrase(userMessage) ||
+      merge.reason === 'unrelated_general_phrase' ||
+      merge.reason === 'general_conversation'
+    ) {
+      // Preserve incomplete draft — do not clear, do not mutate
+      return {
+        decision: { action: 'none', reason: 'general_conversation' },
+        draftOutcome: 'draft_preserved',
+        draftStoreAvailable: true,
+      };
+    } else if (
+      rawIntent.intent === 'unknown' &&
+      !looksLikeBusinessTimesheetText(userMessage)
+    ) {
+      return {
+        decision: { action: 'none', reason: 'unknown_intent' },
+        draftOutcome: 'draft_preserved',
+      };
+    }
+    // else: new timesheet intent may replace draft via normal create path
+  }
 
   switch (intent.intent) {
     case 'general_conversation':
-      await clearDraft(options);
-      return { action: 'none', reason: 'general_conversation' };
+      // Do not clear an unrelated draft when user chats generally without merge
+      return {
+        decision: { action: 'none', reason: 'general_conversation' },
+        draftOutcome: options.draft ? 'draft_preserved' : undefined,
+      };
 
     case 'unknown':
-      if (options.draft || intent.domain === 'timesheet') {
+      if (intent.domain === 'timesheet' || options.draft) {
         return {
-          action: 'clarify',
-          message:
-            'ต้องการทำรายการ Timesheet แบบไหนครับ (ลงเวลา / แก้ / ลบ / ดูข้อมูล)',
-          reason: 'unknown_business_intent',
+          decision: {
+            action: 'clarify',
+            message:
+              'ต้องการทำรายการ Timesheet แบบไหนครับ (ลงเวลา / แก้ / ลบ / ดูข้อมูล)',
+            reason: 'unknown_business_intent',
+          },
+          draftOutcome: options.draft ? 'draft_preserved' : undefined,
         };
       }
-      return { action: 'none', reason: 'unknown_intent' };
+      return { decision: { action: 'none', reason: 'unknown_intent' } };
 
     case 'get_my_profile':
       await clearDraft(options);
       return {
-        action: 'call_tool',
-        toolName: 'get_my_profile',
-        arguments: {},
-        reason: 'ai_intent_get_my_profile',
+        decision: {
+          action: 'call_tool',
+          toolName: 'get_my_profile',
+          arguments: {},
+          reason: 'ai_intent_get_my_profile',
+        },
       };
 
     case 'get_work_context':
       await clearDraft(options);
       return {
-        action: 'call_tool',
-        toolName: 'get_work_context',
-        arguments: {},
-        reason: 'ai_intent_get_work_context',
+        decision: {
+          action: 'call_tool',
+          toolName: 'get_work_context',
+          arguments: {},
+          reason: 'ai_intent_get_work_context',
+        },
       };
 
     case 'get_timesheet_day': {
@@ -210,16 +309,20 @@ export async function enforceStructuredIntent(
         options.draft?.resolvedDate;
       if (!date || !isValidIsoDate(date)) {
         return {
-          action: 'clarify',
-          message: 'Which date or date range do you mean?',
-          reason: 'missing_timesheet_period',
+          decision: {
+            action: 'clarify',
+            message: 'Which date or date range do you mean?',
+            reason: 'missing_timesheet_period',
+          },
         };
       }
       return {
-        action: 'call_tool',
-        toolName: 'get_timesheet',
-        arguments: { date },
-        reason: 'ai_intent_get_timesheet_day',
+        decision: {
+          action: 'call_tool',
+          toolName: 'get_timesheet',
+          arguments: { date },
+          reason: 'ai_intent_get_timesheet_day',
+        },
       };
     }
 
@@ -232,39 +335,47 @@ export async function enforceStructuredIntent(
       );
       if (!range) {
         return {
-          action: 'clarify',
-          message: 'Which date or date range do you mean?',
-          reason: 'missing_timesheet_period',
+          decision: {
+            action: 'clarify',
+            message: 'Which date or date range do you mean?',
+            reason: 'missing_timesheet_period',
+          },
         };
       }
       return {
-        action: 'call_tool',
-        toolName: 'get_timesheet_range',
-        arguments: range,
-        reason: 'ai_intent_get_timesheet_range',
+        decision: {
+          action: 'call_tool',
+          toolName: 'get_timesheet_range',
+          arguments: range,
+          reason: 'ai_intent_get_timesheet_range',
+        },
       };
     }
 
     case 'confirm_timesheet_change': {
       await clearDraft(options);
       const cc = resolveConfirmOrCancel('ยืนยัน', pending);
-      if (cc) return cc;
+      if (cc) return { decision: cc };
       return {
-        action: 'clarify',
-        message:
-          'ยืนยันอะไรครับ ตอนนี้ไม่มีรายการ Timesheet ที่รอการยืนยัน',
-        reason: 'confirm_without_pending',
+        decision: {
+          action: 'clarify',
+          message:
+            'ยืนยันอะไรครับ ตอนนี้ไม่มีรายการ Timesheet ที่รอการยืนยัน',
+          reason: 'confirm_without_pending',
+        },
       };
     }
 
     case 'cancel_timesheet_change': {
       await clearDraft(options);
       const cc = resolveConfirmOrCancel('ยกเลิก', pending);
-      if (cc) return cc;
+      if (cc) return { decision: cc };
       return {
-        action: 'clarify',
-        message: 'ตอนนี้ไม่มีรายการ Timesheet ที่รอการยืนยันครับ',
-        reason: 'cancel_without_pending',
+        decision: {
+          action: 'clarify',
+          message: 'ตอนนี้ไม่มีรายการ Timesheet ที่รอการยืนยันครับ',
+          reason: 'cancel_without_pending',
+        },
       };
     }
 
@@ -272,28 +383,38 @@ export async function enforceStructuredIntent(
       await clearDraft(options);
       const week = resolveRangeExpressions('สัปดาห์นี้', null, now);
       return {
-        action: 'call_tool',
-        toolName: 'prepare_submit_timesheet',
-        arguments: { weekStart: week?.startDate },
-        reason: 'ai_intent_submit_timesheet',
+        decision: {
+          action: 'call_tool',
+          toolName: 'prepare_submit_timesheet',
+          arguments: { weekStart: week?.startDate },
+          reason: 'ai_intent_submit_timesheet',
+        },
       };
     }
 
-    case 'create_timesheet_entry':
-      return enforceCreate(intent, options, now);
+    case 'create_timesheet_entry': {
+      const created = await enforceCreate(intent, options, now);
+      return { ...created, draftOutcome: created.draftOutcome ?? draftOutcome };
+    }
 
-    case 'update_timesheet_entry':
-      return enforceUpdate(intent, options, now);
+    case 'update_timesheet_entry': {
+      const updated = await enforceUpdate(intent, options, now);
+      return { ...updated, draftOutcome: updated.draftOutcome ?? draftOutcome };
+    }
 
-    case 'delete_timesheet_entry':
-      return enforceDelete(intent, options, now);
+    case 'delete_timesheet_entry': {
+      const deleted = await enforceDelete(intent, options, now);
+      return { ...deleted, draftOutcome: deleted.draftOutcome ?? draftOutcome };
+    }
 
     default:
       return {
-        action: 'clarify',
-        message:
-          'ต้องการทำรายการ Timesheet แบบไหนครับ (ลงเวลา / แก้ / ลบ / ดูข้อมูล)',
-        reason: 'unknown_business_intent',
+        decision: {
+          action: 'clarify',
+          message:
+            'ต้องการทำรายการ Timesheet แบบไหนครับ (ลงเวลา / แก้ / ลบ / ดูข้อมูล)',
+          reason: 'unknown_business_intent',
+        },
       };
   }
 }
@@ -302,18 +423,15 @@ async function enforceCreate(
   intent: StructuredIntent,
   options: EnforceIntentOptions,
   now: Date
-): Promise<BusinessToolDecision> {
+): Promise<EnforceIntentResult> {
   const resolveProj = options.resolveProjectFn ?? resolveProject;
   const resolveTk = options.resolveTaskFn ?? resolveTask;
-  const missing: IntentMissingField[] = [];
 
   const date =
     resolveDateExpression(intent.dateExpression, now) ||
     options.draft?.resolvedDate;
-  if (!date) missing.push('date');
 
   const hours = parseHoursValue(intent.hours, options.userMessage);
-  if (hours === undefined) missing.push('hours');
 
   const projectHint =
     intent.projectHint?.trim() || options.draft?.projectHint || '';
@@ -322,11 +440,17 @@ async function enforceCreate(
   let resolvedProjectId = options.draft?.resolvedProjectId;
   let resolvedTaskId = options.draft?.resolvedTaskId;
 
-  if (!projectHint && !resolvedProjectId) missing.push('project');
-  if (!taskHint && !resolvedTaskId) missing.push('task');
+  const missing = recomputeCreateMissingFields({
+    date,
+    hours,
+    projectHint,
+    resolvedProjectId,
+    taskHint,
+    resolvedTaskId,
+  });
 
   if (missing.length > 0) {
-    await persistDraft(options, {
+    const saved = await persistDraft(options, {
       intent: 'create_timesheet_entry',
       dateExpression: intent.dateExpression || undefined,
       resolvedDate: date,
@@ -337,10 +461,22 @@ async function enforceCreate(
       hours,
       missingFields: missing,
     });
+    const fail = incompleteNeedsDraftMessage(saved);
+    if (fail) {
+      return {
+        decision: fail,
+        draftOutcome: saved.outcome,
+        draftStoreAvailable: false,
+      };
+    }
     return {
-      action: 'clarify',
-      message: clarifyMissing(missing),
-      reason: 'ai_intent_create_missing_fields',
+      decision: {
+        action: 'clarify',
+        message: clarifyMissing(missing),
+        reason: 'ai_intent_create_missing_fields',
+      },
+      draftOutcome: saved.outcome,
+      draftStoreAvailable: true,
     };
   }
 
@@ -350,17 +486,21 @@ async function enforceCreate(
       proj = await resolveProj({ projectName: projectHint });
     } catch {
       return {
-        action: 'clarify',
-        message:
-          'ยังไม่สามารถค้นหา Project ได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
-        reason: 'read_failed',
+        decision: {
+          action: 'clarify',
+          message:
+            'ยังไม่สามารถค้นหา Project ได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
+          reason: 'read_failed',
+        },
       };
     }
     if (proj.status === 'not_found') {
       return {
-        action: 'clarify',
-        message: `ไม่พบ Project ที่ตรงกับ “${projectHint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`,
-        reason: 'project_not_found',
+        decision: {
+          action: 'clarify',
+          message: `ไม่พบ Project ที่ตรงกับ “${projectHint}” ครับ ลองระบุชื่อหรือรหัส Project อีกครั้ง`,
+          reason: 'project_not_found',
+        },
       };
     }
     if (proj.status === 'ambiguous') {
@@ -369,9 +509,11 @@ async function enforceCreate(
         .map((p, i) => `${i + 1}. ${formatProjectLabel(p)}`)
         .join('\n');
       return {
-        action: 'clarify',
-        message: `พบหลาย Project ที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
-        reason: 'ambiguous_project',
+        decision: {
+          action: 'clarify',
+          message: `พบหลาย Project ที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
+          reason: 'ambiguous_project',
+        },
       };
     }
     resolvedProjectId = proj.value.ProjectID;
@@ -383,17 +525,21 @@ async function enforceCreate(
       task = await resolveTk({ taskName: taskHint });
     } catch {
       return {
-        action: 'clarify',
-        message:
-          'ยังไม่สามารถค้นหางานได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
-        reason: 'read_failed',
+        decision: {
+          action: 'clarify',
+          message:
+            'ยังไม่สามารถค้นหางานได้ในขณะนี้ครับ กรุณาลองใหม่อีกครั้ง',
+          reason: 'read_failed',
+        },
       };
     }
     if (task.status === 'not_found') {
       return {
-        action: 'clarify',
-        message: `ไม่พบงานที่ตรงกับ “${taskHint}” ครับ ลองระบุชื่องานอีกครั้ง`,
-        reason: 'task_not_found',
+        decision: {
+          action: 'clarify',
+          message: `ไม่พบงานที่ตรงกับ “${taskHint}” ครับ ลองระบุชื่องานอีกครั้ง`,
+          reason: 'task_not_found',
+        },
       };
     }
     if (task.status === 'ambiguous') {
@@ -402,9 +548,11 @@ async function enforceCreate(
         .map((t, i) => `${i + 1}. ${t.Task}`)
         .join('\n');
       return {
-        action: 'clarify',
-        message: `พบหลายงานที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
-        reason: 'ambiguous_task',
+        decision: {
+          action: 'clarify',
+          message: `พบหลายงานที่ใกล้เคียงครับ กรุณาเลือก:\n${list}`,
+          reason: 'ambiguous_task',
+        },
       };
     }
     resolvedTaskId = task.value.TaskID;
@@ -412,25 +560,30 @@ async function enforceCreate(
 
   if (!date || hours === undefined || !resolvedProjectId || !resolvedTaskId) {
     return {
-      action: 'clarify',
-      message: clarifyMissing(['date', 'project', 'task', 'hours']),
-      reason: 'validation_failed',
+      decision: {
+        action: 'clarify',
+        message: clarifyMissing(['date', 'project', 'task', 'hours']),
+        reason: 'validation_failed',
+      },
     };
   }
 
   await clearDraft(options);
   return {
-    action: 'call_tool',
-    toolName: 'prepare_create_timesheet_entry',
-    arguments: {
-      date,
-      hours,
-      projectId: resolvedProjectId,
-      taskId: resolvedTaskId,
-      ...(projectHint ? { projectName: projectHint } : {}),
-      ...(taskHint ? { taskName: taskHint } : {}),
+    decision: {
+      action: 'call_tool',
+      toolName: 'prepare_create_timesheet_entry',
+      arguments: {
+        date,
+        hours,
+        projectId: resolvedProjectId,
+        taskId: resolvedTaskId,
+        ...(projectHint ? { projectName: projectHint } : {}),
+        ...(taskHint ? { taskName: taskHint } : {}),
+      },
+      reason: 'ai_intent_create_entry',
     },
-    reason: 'ai_intent_create_entry',
+    draftOutcome: 'draft_cleared',
   };
 }
 
@@ -438,7 +591,7 @@ async function enforceUpdate(
   intent: StructuredIntent,
   options: EnforceIntentOptions,
   now: Date
-): Promise<BusinessToolDecision> {
+): Promise<EnforceIntentResult> {
   const missing: IntentMissingField[] = [];
   const date =
     resolveDateExpression(intent.dateExpression, now) ||
@@ -452,7 +605,7 @@ async function enforceUpdate(
   if (hours === undefined) missing.push('hours');
 
   if (missing.length > 0) {
-    await persistDraft(options, {
+    const saved = await persistDraft(options, {
       intent: 'update_timesheet_entry',
       dateExpression: intent.dateExpression || undefined,
       resolvedDate: date,
@@ -460,30 +613,44 @@ async function enforceUpdate(
       hours,
       missingFields: missing.length ? missing : ['matchEntry'],
     });
+    const fail = incompleteNeedsDraftMessage(saved);
+    if (fail) {
+      return {
+        decision: fail,
+        draftOutcome: saved.outcome,
+        draftStoreAvailable: false,
+      };
+    }
     return {
-      action: 'clarify',
-      message:
-        missing.length > 0
-          ? clarifyMissing(
-              missing.includes('hours') && missing.includes('date')
-                ? ['matchEntry']
-                : missing
-            )
-          : 'ต้องการแก้รายการวันที่ไหน และเปลี่ยนเป็นกี่ชั่วโมงครับ',
-      reason: 'ai_intent_update_missing_fields',
+      decision: {
+        action: 'clarify',
+        message:
+          missing.length > 0
+            ? clarifyMissing(
+                missing.includes('hours') && missing.includes('date')
+                  ? ['matchEntry']
+                  : missing
+              )
+            : 'ต้องการแก้รายการวันที่ไหน และเปลี่ยนเป็นกี่ชั่วโมงครับ',
+        reason: 'ai_intent_update_missing_fields',
+      },
+      draftOutcome: saved.outcome,
     };
   }
 
   await clearDraft(options);
   return {
-    action: 'call_tool',
-    toolName: 'prepare_update_timesheet_entry',
-    arguments: {
-      date,
-      matchProjectName: projectHint,
-      hours,
+    decision: {
+      action: 'call_tool',
+      toolName: 'prepare_update_timesheet_entry',
+      arguments: {
+        date,
+        matchProjectName: projectHint,
+        hours,
+      },
+      reason: 'ai_intent_update_entry',
     },
-    reason: 'ai_intent_update_entry',
+    draftOutcome: 'draft_cleared',
   };
 }
 
@@ -491,7 +658,7 @@ async function enforceDelete(
   intent: StructuredIntent,
   options: EnforceIntentOptions,
   now: Date
-): Promise<BusinessToolDecision> {
+): Promise<EnforceIntentResult> {
   const missing: IntentMissingField[] = [];
   const date =
     resolveDateExpression(intent.dateExpression, now) ||
@@ -503,30 +670,49 @@ async function enforceDelete(
   if (!projectHint) missing.push('project');
 
   if (missing.length > 0) {
-    await persistDraft(options, {
+    const saved = await persistDraft(options, {
       intent: 'delete_timesheet_entry',
       dateExpression: intent.dateExpression || undefined,
       resolvedDate: date,
       projectHint: projectHint || undefined,
       missingFields: missing,
     });
+    const fail = incompleteNeedsDraftMessage(saved);
+    if (fail) {
+      return {
+        decision: fail,
+        draftOutcome: saved.outcome,
+        draftStoreAvailable: false,
+      };
+    }
     return {
-      action: 'clarify',
-      message: clarifyMissing(missing),
-      reason: 'ai_intent_delete_missing_fields',
+      decision: {
+        action: 'clarify',
+        message: clarifyMissing(missing),
+        reason: 'ai_intent_delete_missing_fields',
+      },
+      draftOutcome: saved.outcome,
     };
   }
 
   await clearDraft(options);
   return {
-    action: 'call_tool',
-    toolName: 'prepare_delete_timesheet_entry',
-    arguments: {
-      date,
-      matchProjectName: projectHint,
+    decision: {
+      action: 'call_tool',
+      toolName: 'prepare_delete_timesheet_entry',
+      arguments: {
+        date,
+        matchProjectName: projectHint,
+      },
+      reason: 'ai_intent_delete_entry',
     },
-    reason: 'ai_intent_delete_entry',
+    draftOutcome: 'draft_cleared',
   };
+}
+
+function looksLikeShortFollowUp(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && t.length <= 24 && !isUnrelatedGeneralPhrase(t);
 }
 
 export function looksLikeBusinessTimesheetText(text: string): boolean {
