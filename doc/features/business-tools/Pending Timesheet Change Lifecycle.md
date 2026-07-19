@@ -42,7 +42,9 @@ Only one claim succeeds. Others see `executing` and return `already_processing`,
 
 ## Crash recovery (90s executing lease)
 
-If status is `executing` and `claimedAt` is older than `EXECUTING_LEASE_MS` (90s):
+Atomic claim (`LUA_CLAIM`) persists both `claimedAt` (ISO) and `claimedAtMs` (epoch ms). Reclaim (`LUA_RECLAIM`) uses `claimedAtMs` only.
+
+If status is `executing` and `claimedAtMs` is older than `EXECUTING_LEASE_MS` (90s):
 
 1. Attempt `reclaimStaleExecution`
 2. Read current day; fail closed if incomplete
@@ -51,6 +53,10 @@ If status is `executing` and `claimedAt` is older than `EXECUTING_LEASE_MS` (90s
 5. Otherwise → `conflict`, zero writes
 
 Within the lease window, return `already_processing` (do not claim success without a completed result).
+
+## Confirm vs cancel race
+
+Cancel uses atomic `pending` → `cancelled` only. If confirm has already claimed (`executing`), cancel does **not** report success — it returns that the change cannot be cancelled because execution is in progress.
 
 ## Redis unavailable
 

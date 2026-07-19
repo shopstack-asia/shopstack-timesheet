@@ -119,8 +119,8 @@ function createSharedFakeRedis(shared = new Map<string, string>()) {
         shared.set(keys[0]!, JSON.stringify(change));
         return JSON.stringify({ ok: true, change }) as T;
       }
-      // RECLAIM
-      if (script.includes('leaseMs') || script.includes('claimedAtMs')) {
+      // RECLAIM (must not match CLAIM — CLAIM also sets claimedAtMs)
+      if (script.includes('local leaseMs')) {
         const raw = shared.get(keys[0]!);
         if (!raw) return JSON.stringify({ ok: false, status: 'missing' }) as T;
         const change = parseJson<Record<string, unknown>>(raw);
@@ -422,6 +422,84 @@ describe('Redis pending store (shared fake)', () => {
     expect(
       statuses.some((s) => s === 'already_processing' || s === 'completed')
     ).toBe(true);
+  });
+
+  it('claim persists claimedAtMs so stale lease can be reclaimed', async () => {
+    const redis = createSharedFakeRedis();
+    const store = createRedisPendingTimesheetChangeStore(redis);
+    await store.create({
+      confirmationId: 'confirm_lease',
+      operation: 'create_entry',
+      conversationId: 'C1',
+      slackUserId: 'U1',
+      employeeId: 'S0005',
+      date: '2026-07-18',
+      originalSnapshot: { date: '2026-07-18', entries: [] },
+      originalSnapshotHash: 'h1',
+      proposedSnapshot: { date: '2026-07-18', entries: [] },
+      proposedSnapshotHash: 'h2',
+      summary: 's',
+      summaryPayload: {},
+      writeEntries: [],
+    });
+    const claimed = await store.claimForExecution('confirm_lease');
+    expect(claimed?.status).toBe('executing');
+    expect(claimed?.claimedAt).toBeInstanceOf(Date);
+
+    const raw = await redis.get<{ claimedAtMs?: number; status?: string }>(
+      'timesheet:pending-change:confirm_lease'
+    );
+    expect(raw?.status).toBe('executing');
+    expect(typeof raw?.claimedAtMs).toBe('number');
+    expect(raw!.claimedAtMs!).toBeGreaterThan(0);
+
+    // Fresh lease — reclaim must fail
+    expect(await store.reclaimStaleExecution('confirm_lease', EXECUTING_LEASE_MS)).toBeNull();
+
+    // Backdate claimedAtMs past the lease window
+    const staleMs = Date.now() - EXECUTING_LEASE_MS - 1000;
+    redis.shared.set(
+      'timesheet:pending-change:confirm_lease',
+      JSON.stringify({
+        ...raw,
+        claimedAt: new Date(staleMs).toISOString(),
+        claimedAtMs: staleMs,
+      })
+    );
+    const reclaimed = await store.reclaimStaleExecution(
+      'confirm_lease',
+      EXECUTING_LEASE_MS
+    );
+    expect(reclaimed?.status).toBe('executing');
+    expect(reclaimed?.claimedAt).toBeInstanceOf(Date);
+  });
+
+  it('cancel loses race to claim and does not report cancelled', async () => {
+    const redis = createSharedFakeRedis();
+    const store = createRedisPendingTimesheetChangeStore(redis);
+    await store.create({
+      confirmationId: 'confirm_race',
+      operation: 'create_entry',
+      conversationId: 'C1',
+      slackUserId: 'U1',
+      employeeId: 'S0005',
+      date: '2026-07-18',
+      originalSnapshot: { date: '2026-07-18', entries: [] },
+      originalSnapshotHash: 'h1',
+      proposedSnapshot: { date: '2026-07-18', entries: [] },
+      proposedSnapshotHash: 'h2',
+      summary: 's',
+      summaryPayload: {},
+      writeEntries: [],
+    });
+    await store.claimForExecution('confirm_race');
+    const result = await cancelTimesheetChange(identity, 'confirm_race', {
+      pendingStore: store,
+    });
+    expect(result.status).not.toBe('cancelled');
+    expect(result.status).toBe('no_pending_change');
+    const still = await store.get('confirm_race');
+    expect(still?.status).toBe('executing');
   });
 
   it('bare ยืนยัน discovers pending from shared store', async () => {

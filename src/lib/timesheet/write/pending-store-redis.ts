@@ -78,6 +78,7 @@ if change.status ~= 'pending' then
 end
 change.status = 'executing'
 change.claimedAt = ARGV[3]
+change.claimedAtMs = nowMs
 redis.call('SET', KEYS[1], cjson.encode(change), 'EX', tonumber(ARGV[2]))
 return cjson.encode({ok=true, change=change})
 `;
@@ -264,10 +265,15 @@ export function createRedisPendingTimesheetChangeStore(
         );
         if (!result.ok) return null;
         const change = deserializePending(result.change);
+        const claimedAt =
+          change.claimedAt ??
+          (typeof result.change.claimedAtMs === 'number'
+            ? new Date(result.change.claimedAtMs)
+            : now);
         return clonePending({
           ...change,
           status: 'executing',
-          claimedAt: now,
+          claimedAt,
         });
       } catch (error) {
         throw wrapRedisError(error);

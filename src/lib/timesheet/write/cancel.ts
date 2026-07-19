@@ -96,6 +96,14 @@ export async function cancelTimesheetChange(
     };
     }
 
+    if (existing.status === 'executing') {
+      return {
+        status: 'no_pending_change',
+        message:
+          'รายการกำลังดำเนินการอยู่ ไม่สามารถยกเลิกได้ครับ',
+      };
+    }
+
     if (existing.status !== 'pending') {
     return {
       status: 'no_pending_change',
@@ -103,7 +111,36 @@ export async function cancelTimesheetChange(
     };
     }
 
-    await store.markCancelled(id);
+    const cancelled = await store.markCancelled(id);
+    // Atomic cancel may lose a race to confirm claim — never report success unless status is cancelled.
+    if (!cancelled || cancelled.status !== 'cancelled') {
+      const again = await store.get(id);
+      if (again?.status === 'completed') {
+        return {
+          status: 'already_completed',
+          message: 'รายการนี้ถูกดำเนินการเรียบร้อยแล้วครับ',
+        };
+      }
+      if (again?.status === 'executing') {
+        return {
+          status: 'no_pending_change',
+          message:
+            'รายการกำลังดำเนินการอยู่ ไม่สามารถยกเลิกได้ครับ',
+        };
+      }
+      if (again?.status === 'cancelled') {
+        return {
+          status: 'cancelled',
+          confirmationId: id,
+          message: cancelledMsg,
+        };
+      }
+      return {
+        status: 'no_pending_change',
+        message: 'ไม่สามารถยกเลิกรายการนี้ได้ในขณะนี้ครับ',
+      };
+    }
+
     auditTimesheetWrite({
     message: 'cancel_pending',
     confirmationId: id,
