@@ -8,11 +8,6 @@ Use [`get_timesheet`](./Get%20Timesheet.md) with Bangkok “today” resolved to
 
 ## Compatibility wrapper
 
-`createGetTodayTimesheetTool()` remains exportable for legacy callers. It delegates to the shared daily timesheet load:
+`createGetTodayTimesheetTool()` remains exportable for legacy callers. It delegates to the shared daily timesheet load (`loadDailyTimesheet` → canonical Google Sheets Time Log read) for Bangkok today.
 
-```http
-GET /v1/timesheets?date=<Asia/Bangkok today>
-X-Employee-Id: <Conversation Context>
-```
-
-No duplicated parsing or API mapping beyond the thin wrapper.
+No duplicated parsing beyond the thin wrapper.

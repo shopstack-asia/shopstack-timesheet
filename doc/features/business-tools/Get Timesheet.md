@@ -8,6 +8,8 @@
 
 Answer natural-language questions about **one calendar day** of timesheet data (today, yesterday, a named weekday, or an explicit date) after the AI resolves the date to `YYYY-MM-DD` in `Asia/Bangkok`.
 
+Reads the **same persisted Google Sheets Time Log** as the Weekly Timesheet UI via the canonical Timesheet read service.
+
 ## Input
 
 ```ts
@@ -26,38 +28,58 @@ sequenceDiagram
   participant AI as OpenAI
   participant T as get_timesheet
   participant Ctx as Conversation Context
-  participant C as Business API Client
-  participant API as Timesheet API
+  participant R as Canonical Timesheet Read
+  participant S as Google Sheets Time Log
 
   U->>AI: เมื่อวานฉันทำอะไร
   AI->>AI: Resolve Asia/Bangkok yesterday → YYYY-MM-DD
   AI->>T: get_timesheet({ date })
   T->>Ctx: getConversationContext()
-  Ctx-->>T: employeeId
-  T->>C: GET /v1/timesheets?date=…
-  C->>API: X-Employee-Id
-  API-->>C: DailyTimesheet
+  Ctx-->>T: employeeId (Zoho EmployeeID) + email
+  T->>R: readDailyTimesheetForEmployee(identity, date)
+  R->>S: getTimeLogEntries(date, date) filter Staff ID
+  S-->>R: Time Log rows (incl. draft / unsubmitted)
+  R-->>T: DailyTimesheet
   T-->>AI: entries + totals + submitted
   AI-->>U: summary
 ```
 
-## API
+## Data source (canonical)
 
-```http
-GET /v1/timesheets?date=2026-07-17
-X-Employee-Id: <from Conversation Context>
-```
+There is **no** `GET /v1/timesheets` route in this app.
+
+| Layer | Contract |
+|-------|----------|
+| Weekly Timesheet UI | `GET /api/timesheet/get?weekStart=` → `getWeeklyTimesheetForStaff` |
+| Shared row load | `getTimeLogRowsForStaffRange` → Google Sheets **Time Log** |
+| AI tools | `readDailyTimesheetForEmployee` → same shared row load |
+
+Identity filter: Zoho **`EmployeeID`** matched to Sheets **`Staff ID`**.
+
+Draft/unsubmitted rows in the Time Log are readable. `submitted: false` must not drop entries.
 
 ## Response (`DailyTimesheet`)
 
 | Field | Meaning |
 |-------|---------|
 | `date` | ISO date |
-| `entries` | Work logged that day |
+| `entries` | Work logged that day (`clientName`, `projectName` = `Project Name (Project Code)` when both exist, `roleName`←Task, `hours`) |
 | `totalHours` | Sum of entry hours |
-| `expectedHours` | Default 8 if omitted |
-| `remainingHours` | Expected minus total (or upstream) |
-| `submitted` | Day submission flag |
+| `expectedHours` | Default 8 |
+| `remainingHours` | Expected minus total |
+| `submitted` | Sheets has no week-submit flag on rows; currently `false` for persisted drafts |
+
+Empty successful day (`entries=[]`, `totalHours=0`) means no work logged — not an integration failure.
+
+## Errors (must not be phrased as “no data”)
+
+| Condition | Tool error code |
+|-----------|-----------------|
+| Missing employee mapping | `identity_mapping` |
+| Sheets / network failure | `integration` / `upstream` |
+| Timeout | `timeout` |
+| Auth failure from Sheets | `authentication` |
+| Invalid date | `validation` |
 
 ## Natural-language examples
 
@@ -79,6 +101,8 @@ Employee ID comes only from Conversation Context. Tools never resolve Slack/Zoho
 
 ## Code
 
+- `src/lib/timesheet/canonical-read.ts`
+- `src/lib/timesheet/timesheet-service.ts` (`getTimeLogRowsForStaffRange`)
 - `src/lib/tools/business/timesheet/get-timesheet.ts`
 - `src/lib/tools/business/timesheet/parse-timesheet.ts`
 - `src/lib/tools/business/timesheet/date-input.ts`

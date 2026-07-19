@@ -3,9 +3,7 @@ import {
   assertNotAborted,
   rejectAiEmployeeId,
   requireConversationIds,
-  resolveBusinessClient,
   resolveContextManager,
-  requestMeta,
   toolFailureFromError,
   toolSuccess,
   type BusinessToolDeps,
@@ -15,7 +13,7 @@ import {
   parseRequiredIsoDate,
 } from '@/lib/tools/business/timesheet/date-input';
 import { parseTimesheetRange } from '@/lib/tools/business/timesheet/parse-timesheet-range';
-import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
+import { readTimesheetRangeForEmployee } from '@/lib/timesheet/canonical-read';
 import type { TimesheetRange } from '@/lib/tools/business/types';
 
 export { parseTimesheetRange } from '@/lib/tools/business/timesheet/parse-timesheet-range';
@@ -23,7 +21,7 @@ export { parseTimesheetRange } from '@/lib/tools/business/timesheet/parse-timesh
 const TOOL_NAME = 'get_timesheet_range';
 
 /**
- * Shared range load. Used by get_timesheet_range and deprecated get_week_timesheet.
+ * Shared range load via canonical Google Sheets Time Log read.
  */
 export async function loadTimesheetRange(
   deps: BusinessToolDeps | undefined,
@@ -44,14 +42,21 @@ export async function loadTimesheetRange(
     ensureWorkContext: false,
   });
 
-  const client = resolveBusinessClient(deps);
-  const qs = new URLSearchParams({ startDate, endDate });
-  const path = `${TIMESHEET_API_PATHS.timesheets}?${qs.toString()}`;
-  const response = await client.get<unknown>(path, {
-    ...requestMeta(context, conv.employeeId),
-    idempotent: true,
-  });
-  const range = parseTimesheetRange(response.data, startDate, endDate);
+  const read = deps?.readTimesheetRange ?? readTimesheetRangeForEmployee;
+  const range = await read(
+    {
+      employeeId: conv.employeeId,
+      email: conv.slackEmail,
+      slackUserId: conv.slackUserId,
+    },
+    startDate,
+    endDate,
+    {
+      requestId: context.requestId,
+      conversationId,
+    }
+  );
+
   return { ...range, employeeId: conv.employeeId };
 }
 
@@ -79,12 +84,13 @@ export function createGetTimesheetRangeTool(deps?: BusinessToolDeps): Tool {
     name: TOOL_NAME,
     description: [
       'Return timesheet data for an inclusive date range (YYYY-MM-DD start/end, max 31 days).',
-      'Resolve relative ranges (this week, last week, this month) to explicit ISO dates in Asia/Bangkok before calling.',
+      'Reads the same Google Sheets Time Log data as the Weekly Timesheet UI.',
+      'Resolve relative ranges to explicit ISO dates in Asia/Bangkok before calling.',
       'Never pass employeeId. Never pass relative date words.',
-      'Example: "how many hours this week?" → Monday–today Bangkok → get_timesheet_range({ startDate, endDate }).',
+      'Empty days mean no work was logged (not an API failure).',
       'Read-only — does not create or modify entries.',
     ].join(' '),
-    version: '1.0.0',
+    version: '2.0.0',
     idempotent: true,
     inputSchema: {
       type: 'object',

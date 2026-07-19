@@ -50,12 +50,13 @@ describe('ToolRegistry', () => {
     expect(names).toEqual([
       'current_date',
       'current_time',
+      'get_my_profile',
       'get_timesheet',
       'get_timesheet_range',
       'get_work_context',
       'ping',
     ]);
-    expect(registry.toLlmToolDefinitions()).toHaveLength(6);
+    expect(registry.toLlmToolDefinitions()).toHaveLength(7);
   });
 
   it('isolates registries (no global mutable state)', () => {

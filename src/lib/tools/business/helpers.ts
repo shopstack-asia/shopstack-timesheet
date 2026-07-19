@@ -7,14 +7,41 @@ import {
   getDefaultContextManager,
 } from '@/lib/conversation/context/context-manager';
 import { IdentityResolutionError } from '@/lib/conversation/context/identity-resolver';
+import {
+  CanonicalTimesheetReadError,
+  type CanonicalReadOptions,
+} from '@/lib/timesheet/canonical-read';
 import { ToolError } from '@/lib/tools/errors';
+import type { DailyTimesheet, TimesheetRange } from '@/lib/tools/business/types';
 import type { JsonValue, ToolContext, ToolResult } from '@/lib/tools/types';
+
+export type ConversationIdentity = {
+  employeeId: string;
+  email: string;
+  slackUserId?: string;
+};
+
+export type ReadDailyTimesheetFn = (
+  identity: ConversationIdentity,
+  date: string,
+  options?: CanonicalReadOptions
+) => Promise<DailyTimesheet>;
+
+export type ReadTimesheetRangeFn = (
+  identity: ConversationIdentity,
+  startDate: string,
+  endDate: string,
+  options?: CanonicalReadOptions
+) => Promise<TimesheetRange>;
 
 export type BusinessToolDeps = {
   /** Injected client for tests; defaults to createBusinessApiClient(). */
   client?: BusinessApiClient;
   /** Injected context manager for tests. */
   contextManager?: ContextManager;
+  /** Injected canonical Timesheet read (Google Sheets Time Log). */
+  readDailyTimesheet?: ReadDailyTimesheetFn;
+  readTimesheetRange?: ReadTimesheetRangeFn;
 };
 
 export function resolveBusinessClient(
@@ -39,14 +66,31 @@ export function assertNotAborted(signal?: AbortSignal): void {
  * Reject AI-supplied employee identity. Identity comes only from Conversation Context.
  */
 export function rejectAiEmployeeId(input: Record<string, unknown>): void {
-  if (
-    Object.prototype.hasOwnProperty.call(input, 'employeeId') ||
-    Object.prototype.hasOwnProperty.call(input, 'employee_id')
-  ) {
-    throw new ToolError(
-      'employeeId must not be provided by the AI; identity is resolved from Slack/Zoho via Conversation Context',
-      'validation_error'
-    );
+  rejectAiIdentityFields(input, ['employeeId', 'employee_id']);
+}
+
+/**
+ * Reject any AI-supplied identity fields. Identity comes only from Conversation Context.
+ */
+export function rejectAiIdentityFields(
+  input: Record<string, unknown>,
+  keys: readonly string[] = [
+    'employeeId',
+    'employee_id',
+    'email',
+    'slackUserId',
+    'slack_user_id',
+    'zohoRecordId',
+    'zoho_record_id',
+  ]
+): void {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) {
+      throw new ToolError(
+        `${key} must not be provided by the AI; identity is resolved from Slack/Zoho via Conversation Context`,
+        'validation_error'
+      );
+    }
   }
 }
 
@@ -105,6 +149,15 @@ export function toolFailureFromError(
     };
   }
   if (error instanceof BusinessApiError) {
+    return {
+      success: false,
+      tool,
+      durationMs: Date.now() - started,
+      errorCode: error.code,
+      errorMessage: error.message,
+    };
+  }
+  if (error instanceof CanonicalTimesheetReadError) {
     return {
       success: false,
       tool,

@@ -35,7 +35,8 @@ Show the current week’s logged time and context needed to edit accurately.
 ### Business Logic
 
 - Week: `weekStartsOn: 1`; days `i = 0..6` (Monday–Sunday).
-- Get API: week end = start + 6 days; filter Sheets rows by `Staff ID`; group by `Date`; dedupe by Time Log ID.
+- Get API: `getWeeklyTimesheetForStaff` → shared `getTimeLogRowsForStaffRange` (calendar Mon–Sun); filter Sheets rows by `Staff ID` (= Zoho EmployeeID); group by `Date`; dedupe by Time Log ID.
+- AI Business Tools (`get_timesheet` / `get_timesheet_range`) use the same shared row load via `src/lib/timesheet/canonical-read.ts`.
 - Client holiday/leave caches in refs to avoid refetch thrash.
 
 ### Validation Rules (load API)
@@ -58,12 +59,14 @@ Show the current week’s logged time and context needed to edit accurately.
 
 ### Known Limitations
 
-- Date range math uses `Date` + `toISOString().split('T')[0]` (UTC date string) — timezone edge cases possible near midnight.
+- Sheets Time Log has no per-day submit flag; UI “unsubmitted week” still shows persisted rows. Canonical AI read returns those rows with `submitted: false`.
 
 ### Source Code References
 
 - `src/components/WeeklyTimesheet.tsx`
 - `src/app/api/timesheet/get/route.ts`
+- `src/lib/timesheet/timesheet-service.ts`
+- `src/lib/timesheet/canonical-read.ts`
 
 ### Required tests
 

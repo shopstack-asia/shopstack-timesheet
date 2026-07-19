@@ -17,5 +17,7 @@
 - `src/app/api/timesheet/get/route.ts`
 - `src/app/api/timesheet/submit/route.ts`
 - `src/lib/google-sheets.ts`
+- `src/lib/timesheet/timesheet-service.ts` (`getTimeLogRowsForStaffRange`, `getWeeklyTimesheetForStaff`)
+- `src/lib/timesheet/canonical-read.ts` (AI + domain `DailyTimesheet` mapping over the same Time Log rows)
 - `src/lib/sheets-write-lock.ts`
 - `src/lib/submit-week-days.ts`

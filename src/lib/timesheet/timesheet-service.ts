@@ -2,12 +2,75 @@ import { getGoogleSheetsService } from '@/lib/google-sheets';
 import { TimeEntry, TimeLogRow } from '@/types';
 import { AgentAuthContext, assertAgentAuth } from '@/lib/timesheet/agent-auth';
 
+/** Calendar-day arithmetic in UTC date parts (YYYY-MM-DD). */
+function addCalendarDays(isoDate: string, deltaDays: number): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const utc = new Date(Date.UTC(y!, m! - 1, d! + deltaDays));
+  const yyyy = utc.getUTCFullYear();
+  const mm = String(utc.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(utc.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export type TimeLogRowsLoader = (
+  startDate: string,
+  endDate: string
+) => Promise<TimeLogRow[]>;
+
+/**
+ * Load Time Log rows for one staff member over an inclusive calendar range.
+ * Shared by the Weekly Timesheet UI path and AI Business Tools (canonical read).
+ */
+export async function getTimeLogRowsForStaffRange(
+  ctx: AgentAuthContext,
+  startDate: string,
+  endDate: string,
+  loader?: TimeLogRowsLoader
+): Promise<TimeLogRow[]> {
+  assertAgentAuth(ctx);
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    throw new Error('startDate and endDate must be YYYY-MM-DD');
+  }
+  if (startDate > endDate) {
+    throw new Error('startDate must not be after endDate');
+  }
+
+  const fetchRows =
+    loader ??
+    ((start, end) => getGoogleSheetsService().getTimeLogEntries(start, end));
+
+  const timeLogEntries = await fetchRows(startDate, endDate);
+  const staffId = ctx.staff.EmployeeID.trim();
+
+  const seenIds = new Set<string>();
+  const staffEntries: TimeLogRow[] = [];
+
+  for (const entry of timeLogEntries) {
+    if (String(entry['Staff ID'] || '').trim() !== staffId) {
+      continue;
+    }
+    const uniqueId =
+      entry['Time Log ID'] ||
+      `existing-${entry.Date}-${entry['Project ID']}-${entry['Task ID']}`;
+    if (seenIds.has(uniqueId)) {
+      continue;
+    }
+    seenIds.add(uniqueId);
+    staffEntries.push(entry);
+  }
+
+  return staffEntries;
+}
+
 /**
  * Load week Time Log entries for the authenticated employee (Mon–Sun).
+ * Used by GET /api/timesheet/get (Weekly Timesheet UI).
  */
 export async function getWeeklyTimesheetForStaff(
   ctx: AgentAuthContext,
-  weekStart: string
+  weekStart: string,
+  loader?: TimeLogRowsLoader
 ): Promise<Record<string, TimeEntry[]>> {
   assertAgentAuth(ctx);
 
@@ -15,33 +78,24 @@ export async function getWeeklyTimesheetForStaff(
     throw new Error('weekStart must be YYYY-MM-DD');
   }
 
-  const startDate = new Date(weekStart);
-  const endDate = new Date(startDate);
-  endDate.setDate(startDate.getDate() + 6);
+  // Calendar arithmetic (avoid UTC Date parsing off-by-one)
+  const startDateStr = weekStart;
+  const endDateStr = addCalendarDays(weekStart, 6);
 
-  const startDateStr = startDate.toISOString().split('T')[0];
-  const endDateStr = endDate.toISOString().split('T')[0];
-
-  const sheetsService = getGoogleSheetsService();
-  const timeLogEntries = await sheetsService.getTimeLogEntries(startDateStr, endDateStr);
-
-  const staffEntries = timeLogEntries.filter(
-    (entry) => entry['Staff ID'] === ctx.staff.EmployeeID
+  const staffEntries = await getTimeLogRowsForStaffRange(
+    ctx,
+    startDateStr,
+    endDateStr,
+    loader
   );
 
   const entriesByDate: Record<string, TimeEntry[]> = {};
-  const seenIds = new Set<string>();
 
   staffEntries.forEach((entry) => {
     const date = entry.Date;
     const uniqueId =
       entry['Time Log ID'] ||
       `existing-${date}-${entry['Project ID']}-${entry['Task ID']}`;
-
-    if (seenIds.has(uniqueId)) {
-      return;
-    }
-    seenIds.add(uniqueId);
 
     if (!entriesByDate[date]) {
       entriesByDate[date] = [];

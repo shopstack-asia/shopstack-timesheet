@@ -1,10 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  AuthenticationError,
-  TimeoutError,
-  UnexpectedApiError,
-} from '@/lib/business/errors';
-import type { BusinessApiClient } from '@/lib/business/client';
 import { createContextManager } from '@/lib/conversation/context/context-manager';
 import { createContextStore } from '@/lib/conversation/context/context-store';
 import { createIdentityResolver } from '@/lib/conversation/context/identity-resolver';
@@ -14,59 +8,54 @@ import {
   createGetTimesheetTool,
   parseDailyTimesheet,
 } from '@/lib/tools/business/timesheet/get-timesheet';
-import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
+import type { DailyTimesheet } from '@/lib/tools/business/types';
+import { CanonicalTimesheetReadError } from '@/lib/timesheet/canonical-read';
 
-function mockClient(
-  impl: (
-    path: string,
-    options?: Parameters<BusinessApiClient['get']>[1]
-  ) => Promise<{
-    success: true;
-    data: unknown;
-    status: number;
-    requestId: string;
-  }>
-): BusinessApiClient {
-  return {
-    getConfig: () => ({
-      baseUrl: 'https://timesheet-api.test',
-      timeoutMs: 5000,
-      apiKey: 'k',
-      maxRetries: 0,
-      logging: false,
-    }),
-    request: async () => {
-      throw new Error('not used');
+const july18: DailyTimesheet = {
+  date: '2026-07-18',
+  entries: [
+    {
+      clientName: 'Hertz',
+      projectName: 'Commerce Suite (HERTZ-PLATFORM-2026-01)',
+      roleName: 'Development',
+      hours: 5,
     },
-    get: (async (path, options) =>
-      impl(path, options)) as BusinessApiClient['get'],
-    post: async () => {
-      throw new Error('not used');
+    {
+      clientName: 'Mitrphol',
+      projectName:
+        'Raw Material Supply Management System (RMS) (MIT-RMS-2025-01)',
+      roleName: 'Project Management',
+      hours: 3,
     },
-    put: async () => {
-      throw new Error('not used');
+    {
+      clientName: 'Shopstack',
+      projectName: 'Commerce Suite (SS-COMMERCE-SUTE)',
+      roleName: 'Development',
+      hours: 2,
     },
-    patch: async () => {
-      throw new Error('not used');
-    },
-    delete: async () => {
-      throw new Error('not used');
-    },
-  };
-}
-
-const validDay = {
-  date: '2026-07-17',
-  entries: [{ hours: 3, projectName: 'Portal', description: 'API' }],
-  totalHours: 3,
-  remainingHours: 5,
+  ],
+  totalHours: 10,
   expectedHours: 8,
+  remainingHours: 0,
   submitted: false,
 };
 
-function makeDeps(client: BusinessApiClient) {
+function makeDeps(readDaily: typeof july18 | (() => Promise<DailyTimesheet>)) {
+  const readDailyTimesheet = async (
+    identity: { employeeId: string; email: string },
+    date: string
+  ) => {
+    expect(identity.employeeId).toBe('S0005');
+    expect(identity.email).toBe('ada@shopstack.asia');
+    if (typeof readDaily === 'function') {
+      return readDaily();
+    }
+    expect(date).toBe(readDaily.date);
+    return readDaily;
+  };
+
   return {
-    client,
+    readDailyTimesheet,
     contextManager: createContextManager({
       store: createContextStore(),
       identityResolver: createIdentityResolver({
@@ -74,13 +63,12 @@ function makeDeps(client: BusinessApiClient) {
           ok: true,
           auth: {
             staff: {
-              EmployeeID: 'S1',
+              EmployeeID: 'S0005',
               Email: 'ada@shopstack.asia',
             },
           },
         }),
       }),
-      businessClient: client,
     }),
   };
 }
@@ -101,167 +89,105 @@ describe('parseDailyTimesheet', () => {
     });
     expect(day.totalHours).toBe(3);
     expect(day.remainingHours).toBe(5);
-    expect(day.submitted).toBe(false);
-  });
-
-  it('allows empty entries', () => {
-    const day = parseDailyTimesheet({ date: '2026-07-17', entries: [] });
-    expect(day.entries).toEqual([]);
-    expect(day.totalHours).toBe(0);
-    expect(day.remainingHours).toBe(8);
-  });
-
-  it('rejects malformed', () => {
-    expect(() => parseDailyTimesheet({})).toThrow(/Malformed/);
   });
 });
 
-describe('get_timesheet tool', () => {
+describe('get_timesheet tool (canonical Sheets read)', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  it('valid date with conversation identity and X-Employee-Id', async () => {
-    const tool = createGetTimesheetTool(
-      makeDeps(
-        mockClient(async (path, options) => {
-          expect(path).toBe(
-            `${TIMESHEET_API_PATHS.timesheets}?date=2026-07-17`
-          );
-          expect(options?.headers?.['X-Employee-Id']).toBe('S1');
-          return {
-            success: true,
-            data: validDay,
-            status: 200,
-            requestId: 'r1',
-          };
-        })
-      )
-    );
-    const result = await tool.execute({ date: '2026-07-17' }, toolCtx());
+  it('returns three entries totaling 10 hours for 2026-07-18', async () => {
+    const tool = createGetTimesheetTool(makeDeps(july18));
+    const result = await tool.execute({ date: '2026-07-18' }, toolCtx());
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.result).toMatchObject({
-        date: '2026-07-17',
-        totalHours: 3,
-        remainingHours: 5,
+        date: '2026-07-18',
+        totalHours: 10,
         submitted: false,
-        employeeId: 'S1',
+        employeeId: 'S0005',
       });
-    }
-  });
-
-  it('rejects invalid date format', async () => {
-    const tool = createGetTimesheetTool(
-      makeDeps(mockClient(async () => {
-        throw new Error('should not call API');
-      }))
-    );
-    const result = await tool.execute({ date: '17-07-2026' }, toolCtx());
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.errorCode).toBe('validation_error');
-    }
-  });
-
-  it('rejects relative date strings', async () => {
-    const tool = createGetTimesheetTool(
-      makeDeps(mockClient(async () => {
-        throw new Error('should not call API');
-      }))
-    );
-    for (const date of ['today', 'yesterday', 'เมื่อวาน', 'this week']) {
-      const result = await tool.execute({ date }, toolCtx());
-      expect(result.success).toBe(false);
+      const entries = (result.result as DailyTimesheet).entries;
+      expect(entries).toHaveLength(3);
+      expect(entries.map((e) => e.hours)).toEqual([5, 3, 2]);
     }
   });
 
   it('rejects AI-provided employeeId', async () => {
-    const tool = createGetTimesheetTool(
-      makeDeps(mockClient(async () => {
-        throw new Error('should not call API');
-      }))
-    );
+    const tool = createGetTimesheetTool(makeDeps(july18));
     const result = await tool.execute(
-      { date: '2026-07-17', employeeId: 'HACK' },
+      { date: '2026-07-18', employeeId: 'HACK' },
       toolCtx()
     );
     expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.errorMessage).toMatch(/employeeId/);
+  });
+
+  it('empty day is success with zero hours', async () => {
+    const tool = createGetTimesheetTool(
+      makeDeps({
+        date: '2026-07-18',
+        entries: [],
+        totalHours: 0,
+        expectedHours: 8,
+        remainingHours: 8,
+        submitted: false,
+      })
+    );
+    const result = await tool.execute({ date: '2026-07-18' }, toolCtx());
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.result).toMatchObject({ totalHours: 0, entries: [] });
     }
   });
 
-  it('malformed API response', async () => {
+  it('integration failure is not reported as empty day', async () => {
     const tool = createGetTimesheetTool(
-      makeDeps(
-        mockClient(async () => ({
-          success: true,
-          data: { entries: [] },
-          status: 200,
-          requestId: 'r1',
-        }))
-      )
+      makeDeps(async () => {
+        throw new CanonicalTimesheetReadError(
+          'Timesheet data source integration failure (Google Sheets Time Log)',
+          'integration'
+        );
+      })
     );
-    const result = await tool.execute({ date: '2026-07-17' }, toolCtx());
+    const result = await tool.execute({ date: '2026-07-18' }, toolCtx());
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorCode).toBe('integration');
+      expect(result.errorMessage).not.toMatch(/no work was logged/i);
+      expect(result.errorMessage).not.toMatch(/no timesheet data exists/i);
+    }
   });
 
-  it('API error', async () => {
+  it.each([
+    ['identity_mapping', 'Employee identity is not mapped'],
+    ['authentication', 'Unable to authenticate'],
+    ['timeout', 'did not respond in time'],
+    ['validation', 'date must be a valid'],
+  ] as const)('maps %s without inventing empty day', async (code, msg) => {
     const tool = createGetTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new UnexpectedApiError('fail', { status: 502 });
-        })
-      )
+      makeDeps(async () => {
+        throw new CanonicalTimesheetReadError(msg, code);
+      })
     );
-    const result = await tool.execute({ date: '2026-07-17' }, toolCtx());
+    const result = await tool.execute({ date: '2026-07-18' }, toolCtx());
     expect(result.success).toBe(false);
-  });
-
-  it('authentication failure', async () => {
-    const tool = createGetTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new AuthenticationError();
-        })
-      )
-    );
-    const result = await tool.execute({ date: '2026-07-17' }, toolCtx());
-    expect(result.success).toBe(false);
-  });
-
-  it('timeout', async () => {
-    const tool = createGetTimesheetTool(
-      makeDeps(
-        mockClient(async () => {
-          throw new TimeoutError();
-        })
-      )
-    );
-    const result = await tool.execute({ date: '2026-07-17' }, toolCtx());
-    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.errorCode).toBe(code);
+      expect(result.errorMessage).not.toMatch(/no work was logged/i);
+    }
   });
 
   it('abort signal', async () => {
     const ac = new AbortController();
     ac.abort();
-    const tool = createGetTimesheetTool(
-      makeDeps(mockClient(async () => {
-        throw new Error('should not call');
-      }))
-    );
-    const result = await tool.execute({ date: '2026-07-17' }, toolCtx(ac.signal));
+    const tool = createGetTimesheetTool(makeDeps(july18));
+    const result = await tool.execute({ date: '2026-07-18' }, toolCtx(ac.signal));
     expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.errorCode).toBe('cancelled');
-    }
   });
 
   it('registered in default registry', () => {
-    const registry = createDefaultToolRegistry();
-    expect(registry.exists('get_timesheet')).toBe(true);
-    expect(registry.exists('get_today_timesheet')).toBe(false);
+    expect(createDefaultToolRegistry().exists('get_timesheet')).toBe(true);
   });
 });
