@@ -108,12 +108,39 @@ export async function decideDraftMerge(input: {
     return { merge: false, reason: 'intent_mismatch' };
   }
 
+  const attachFill = async (): Promise<MissingFieldFill | undefined> => {
+    const deterministic = await matchMissingFieldDeterministically({
+      draft,
+      userMessage: trimmed,
+      now,
+      resolveProjectFn: input.resolveProjectFn,
+      resolveTaskFn: input.resolveTaskFn,
+    });
+    if (deterministic) return deterministic;
+    if (
+      draft.missingFields.length > 0 &&
+      looksLikeStructuralFollowUp(trimmed) &&
+      !isUnrelatedGeneralPhrase(trimmed)
+    ) {
+      return structuralFillForOutstandingSlot(draft, trimmed, now);
+    }
+    return undefined;
+  };
+
   if (intent.refersToPrevious === true) {
-    return { merge: true, reason: 'refers_to_previous' };
+    return {
+      merge: true,
+      reason: 'refers_to_previous',
+      fill: await attachFill(),
+    };
   }
 
   if (isExplicitDraftContinuePhrase(trimmed)) {
-    return { merge: true, reason: 'explicit_continue' };
+    return {
+      merge: true,
+      reason: 'explicit_continue',
+      fill: await attachFill(),
+    };
   }
 
   // Same write intent from extractor with overlapping hints → continue
@@ -125,22 +152,28 @@ export async function decideDraftMerge(input: {
       intent.taskHint ||
       intent.hours != null)
   ) {
-    return { merge: true, reason: 'same_write_intent_with_slots' };
+    return {
+      merge: true,
+      reason: 'same_write_intent_with_slots',
+      fill: await attachFill(),
+    };
   }
 
-  const fill = await matchMissingFieldDeterministically({
+  const deterministic = await matchMissingFieldDeterministically({
     draft,
     userMessage: trimmed,
     now,
     resolveProjectFn: input.resolveProjectFn,
     resolveTaskFn: input.resolveTaskFn,
   });
-  if (fill) {
-    return { merge: true, reason: 'deterministic_missing_field', fill };
+  if (deterministic) {
+    return {
+      merge: true,
+      reason: 'deterministic_missing_field',
+      fill: deterministic,
+    };
   }
 
-  // Structural follow-up: active draft + outstanding slots + short plausible answer
-  // Do not depend only on model refersToPrevious.
   if (
     draft.missingFields.length > 0 &&
     looksLikeStructuralFollowUp(trimmed) &&
@@ -304,31 +337,202 @@ export async function matchMissingFieldDeterministically(input: {
   return undefined;
 }
 
+const SLOT_FIELDS: IntentMissingField[] = [
+  'date',
+  'project',
+  'task',
+  'hours',
+];
+
+function hasTrustedProject(draft: IntentDraft): boolean {
+  return Boolean(draft.resolvedProjectId || draft.projectHint?.trim());
+}
+
+function hasTrustedTask(draft: IntentDraft): boolean {
+  return Boolean(draft.resolvedTaskId || draft.taskHint?.trim());
+}
+
+function hasTrustedDate(draft: IntentDraft): boolean {
+  return Boolean(draft.resolvedDate || draft.dateExpression?.trim());
+}
+
+function hasTrustedHours(draft: IntentDraft): boolean {
+  return draft.hours != null && Number.isFinite(draft.hours);
+}
+
+function hintsDiffer(
+  a?: string | null,
+  b?: string | null
+): boolean {
+  const left = a?.trim();
+  const right = b?.trim();
+  if (!left || !right) return Boolean(left || right);
+  return normalizeAnswerKey(left) !== normalizeAnswerKey(right);
+}
+
 /**
- * Merge draft slots into the AI proposal. Preserves draft intent and resolved fields.
+ * Outstanding slot the follow-up should fill — fill.matchedField wins, then
+ * single missing field, then lastClarificationField when still missing.
+ */
+export function outstandingMergeTarget(
+  draft: IntentDraft,
+  fill?: MissingFieldFill
+): IntentMissingField | null {
+  if (fill?.matchedField && SLOT_FIELDS.includes(fill.matchedField)) {
+    return fill.matchedField;
+  }
+  const missing = draft.missingFields.filter((f) => SLOT_FIELDS.includes(f));
+  if (missing.length === 1) return missing[0]!;
+  const last = draft.lastClarificationField;
+  if (
+    last &&
+    SLOT_FIELDS.includes(last as IntentMissingField) &&
+    missing.includes(last as IntentMissingField)
+  ) {
+    return last as IntentMissingField;
+  }
+  return null;
+}
+
+/**
+ * Merge draft slots into the AI proposal.
+ *
+ * Trusted draft slots are not overwritten by misclassified model hints.
+ * When exactly one slot is outstanding, a model value landed on the wrong
+ * field is remapped to that slot (e.g. projectHint="PM" → taskHint while
+ * draft already has Project RMS).
  */
 export function applyDraftMerge(
   intent: StructuredIntent,
   draft: IntentDraft,
   fill?: MissingFieldFill
 ): StructuredIntent {
-  const nextProject =
-    intent.projectHint || fill?.projectHint || draft.projectHint || null;
-  const nextTask = intent.taskHint || fill?.taskHint || draft.taskHint || null;
+  const target = outstandingMergeTarget(draft, fill);
+
+  let projectHint = draft.projectHint ?? null;
+  let taskHint = draft.taskHint ?? null;
+  let dateExpression =
+    draft.dateExpression || draft.resolvedDate || null;
+  let hours = draft.hours ?? null;
+
+  const modelProject = intent.projectHint?.trim() || null;
+  const modelTask = intent.taskHint?.trim() || null;
+  const modelDate = intent.dateExpression?.trim() || null;
+  const modelHours = intent.hours ?? null;
+
+  if (target === 'task') {
+    if (modelTask && modelProject && hintsDiffer(modelProject, draft.projectHint)) {
+      // Explicit dual update: accept both
+      projectHint = modelProject;
+      taskHint = modelTask;
+    } else if (modelTask) {
+      taskHint = modelTask;
+    } else if (
+      modelProject &&
+      hasTrustedProject(draft) &&
+      hintsDiffer(modelProject, draft.projectHint)
+    ) {
+      // Misclassified: answer put in projectHint → outstanding task
+      taskHint = modelProject;
+    } else if (modelProject && !hasTrustedProject(draft)) {
+      projectHint = modelProject;
+    }
+    if (modelHours != null) hours = modelHours;
+    if (modelDate && !hasTrustedDate(draft)) dateExpression = modelDate;
+    else if (modelDate && !hintsDiffer(modelDate, dateExpression)) {
+      dateExpression = modelDate;
+    }
+  } else if (target === 'project') {
+    if (modelProject && modelTask && hintsDiffer(modelTask, draft.taskHint)) {
+      projectHint = modelProject;
+      taskHint = modelTask;
+    } else if (modelProject) {
+      projectHint = modelProject;
+    } else if (
+      modelTask &&
+      hasTrustedTask(draft) &&
+      hintsDiffer(modelTask, draft.taskHint)
+    ) {
+      projectHint = modelTask;
+    } else if (modelTask && !hasTrustedTask(draft)) {
+      // Outstanding project; no trusted task — treat lone hint as project
+      projectHint = modelTask;
+    }
+    if (modelHours != null) hours = modelHours;
+    if (modelDate && !hasTrustedDate(draft)) dateExpression = modelDate;
+    else if (modelDate && !hintsDiffer(modelDate, dateExpression)) {
+      dateExpression = modelDate;
+    }
+  } else if (target === 'hours') {
+    if (modelHours != null) hours = modelHours;
+    // Protect trusted project/task/date — do not accept stray model overwrites
+    if (modelProject) {
+      if (!hasTrustedProject(draft) || !hintsDiffer(modelProject, draft.projectHint)) {
+        projectHint = modelProject || projectHint;
+      }
+    }
+    if (modelTask) {
+      if (!hasTrustedTask(draft) || !hintsDiffer(modelTask, draft.taskHint)) {
+        taskHint = modelTask || taskHint;
+      }
+    }
+    if (modelDate) {
+      if (!hasTrustedDate(draft) || !hintsDiffer(modelDate, dateExpression)) {
+        dateExpression = modelDate;
+      }
+    }
+  } else if (target === 'date') {
+    if (modelDate) dateExpression = modelDate;
+    if (modelHours != null && !hasTrustedHours(draft)) hours = modelHours;
+    if (modelProject) {
+      if (!hasTrustedProject(draft) || !hintsDiffer(modelProject, draft.projectHint)) {
+        projectHint = modelProject || projectHint;
+      }
+    }
+    if (modelTask) {
+      if (!hasTrustedTask(draft) || !hintsDiffer(modelTask, draft.taskHint)) {
+        taskHint = modelTask || taskHint;
+      }
+    }
+  } else {
+    // No single outstanding target — fill gaps only; do not clobber trusted slots
+    // with a conflicting model hint when the draft already holds a value.
+    if (modelProject) {
+      if (!hasTrustedProject(draft) || !hintsDiffer(modelProject, draft.projectHint)) {
+        projectHint = modelProject;
+      }
+    }
+    if (modelTask) {
+      if (!hasTrustedTask(draft) || !hintsDiffer(modelTask, draft.taskHint)) {
+        taskHint = modelTask;
+      }
+    }
+    if (modelDate) {
+      if (!hasTrustedDate(draft) || !hintsDiffer(modelDate, dateExpression)) {
+        dateExpression = modelDate;
+      }
+    }
+    if (modelHours != null) {
+      if (!hasTrustedHours(draft) || modelHours === draft.hours) {
+        hours = modelHours;
+      }
+    }
+  }
+
+  // Deterministic fill always wins for its matched field
+  if (fill?.projectHint) projectHint = fill.projectHint;
+  if (fill?.taskHint) taskHint = fill.taskHint;
+  if (fill?.dateExpression) dateExpression = fill.dateExpression;
+  if (fill?.hours != null) hours = fill.hours;
 
   return {
     ...intent,
     domain: 'timesheet',
     intent: draft.intent,
-    dateExpression:
-      intent.dateExpression ||
-      fill?.dateExpression ||
-      draft.dateExpression ||
-      draft.resolvedDate ||
-      null,
-    projectHint: nextProject,
-    taskHint: nextTask,
-    hours: intent.hours ?? fill?.hours ?? draft.hours ?? null,
+    dateExpression,
+    projectHint,
+    taskHint,
+    hours,
     refersToPrevious: true,
     missingFields: [],
     ambiguities: intent.ambiguities ?? draft.ambiguities ?? [],

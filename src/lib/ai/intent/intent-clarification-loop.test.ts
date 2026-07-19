@@ -4,6 +4,7 @@ import {
   enforceStructuredIntent,
   createInMemoryIntentDraftStore,
   enrichWriteIntentSlots,
+  applyDraftMerge,
   type StructuredIntent,
 } from '@/lib/ai/intent';
 import { resolveTask, resolveProject, wordInitials } from '@/lib/timesheet/write/master-resolve';
@@ -71,6 +72,67 @@ describe('canonical master resolve', () => {
     const r = await resolveTask({ taskName: 'Project Manager' });
     expect(r.status).toBe('resolved');
     if (r.status === 'resolved') expect(r.value.Task).toBe('Project Management');
+  });
+});
+
+describe('applyDraftMerge slot protection', () => {
+  const draftBase = {
+    intent: 'create_timesheet_entry' as const,
+    conversationId: 'C1',
+    slackUserId: 'U1',
+    resolvedDate: '2026-07-19',
+    projectHint: 'RMS',
+    resolvedProjectId: 'P-RMS',
+    hours: 3,
+    missingFields: ['task' as const],
+    lastClarificationField: 'task',
+    clarificationCount: 1,
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+  };
+
+  it('remaps misclassified projectHint to task when task is outstanding', () => {
+    const merged = applyDraftMerge(
+      createIntent({
+        projectHint: 'PM',
+        taskHint: null,
+        dateExpression: null,
+        hours: null,
+        refersToPrevious: true,
+      }),
+      draftBase
+    );
+    expect(merged.projectHint).toBe('RMS');
+    expect(merged.taskHint).toBe('PM');
+    expect(merged.hours).toBe(3);
+    expect(merged.dateExpression).toBe('2026-07-19');
+  });
+
+  it('fill.taskHint wins and still protects trusted project', () => {
+    const merged = applyDraftMerge(
+      createIntent({
+        projectHint: 'PM',
+        taskHint: null,
+        refersToPrevious: true,
+      }),
+      draftBase,
+      { taskHint: 'PM', matchedField: 'task' }
+    );
+    expect(merged.projectHint).toBe('RMS');
+    expect(merged.taskHint).toBe('PM');
+  });
+
+  it('allows explicit dual update when model provides both hints', () => {
+    const merged = applyDraftMerge(
+      createIntent({
+        projectHint: 'HERTZ',
+        taskHint: 'PM',
+        refersToPrevious: true,
+      }),
+      draftBase
+    );
+    expect(merged.projectHint).toBe('HERTZ');
+    expect(merged.taskHint).toBe('PM');
   });
 });
 
@@ -258,6 +320,54 @@ describe('production phrase → prepare (no clarification loop)', () => {
     });
     expect(thirdB.decision.action).toBe('call_tool');
     expect(third.decision.action).not.toBe('clarify');
+  });
+
+  it('misclassified projectHint=PM does not overwrite trusted RMS project', async () => {
+    const store = createInMemoryIntentDraftStore();
+    await store.set({
+      intent: 'create_timesheet_entry',
+      conversationId: 'C-mis',
+      slackUserId: 'U1',
+      resolvedDate: '2026-07-19',
+      projectHint: 'RMS',
+      resolvedProjectId: 'P-RMS',
+      hours: 3,
+      missingFields: ['task'],
+      lastClarificationField: 'task',
+      clarificationCount: 1,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+
+    // Exact production extractor mistake: answer "PM" lands in projectHint
+    const extractIntent = async () =>
+      createIntent({
+        projectHint: 'PM',
+        taskHint: null,
+        dateExpression: null,
+        hours: null,
+        refersToPrevious: true,
+        missingFields: [],
+      });
+
+    const result = await decideWithIntentExtraction('PM', {
+      now: FIXED_NOW,
+      extractIntent,
+      draftStore: store,
+      conversationId: 'C-mis',
+      slackUserId: 'U1',
+    });
+
+    expect(result.decision.action).toBe('call_tool');
+    if (result.decision.action === 'call_tool') {
+      expect(result.decision.toolName).toBe('prepare_create_timesheet_entry');
+      expect(result.decision.arguments).toMatchObject({
+        projectId: 'P-RMS',
+        taskId: 'T-PM',
+        hours: 3,
+        date: '2026-07-19',
+      });
+    }
   });
 
   it('repeated unknown task shows candidates instead of generic loop', async () => {

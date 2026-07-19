@@ -70,6 +70,8 @@ Merge with an existing draft when at least one is true:
 
 When a single slot is outstanding (e.g. only `task`), short answers such as `PM`, `Project Manager`, or `RMS เป็น PM` merge into that slot even if canonical resolve has not succeeded yet. Enforcement then resolves or returns a targeted not-found / ambiguous list.
 
+**Trusted slot protection:** `applyDraftMerge` does **not** give raw model hints priority over already-filled draft slots. If the outstanding field is `task` and the model misclassifies the answer as `projectHint` (e.g. `"PM"`), the merge remaps that value into `taskHint` and keeps the trusted Project (`RMS` / `resolvedProjectId`). Deterministic `fill.matchedField` always wins for its slot. Explicit dual updates (both `projectHint` and `taskHint` provided and different from draft) are still accepted.
+
 **Do not** erase resolved Project/Task IDs unless the corresponding hint changes.
 
 `general_conversation` (ขอบคุณ, เล่าเรื่องแมว, What is a timesheet?, …) while a draft exists:
