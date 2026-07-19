@@ -8,6 +8,8 @@
 
 Answer questions spanning **multiple calendar days** (this week, last week, this/last month, custom ranges) after the AI resolves bounds to inclusive `YYYY-MM-DD` dates in `Asia/Bangkok`.
 
+Uses the same **canonical Timesheet read** → Google Sheets Time Log path as `get_timesheet` and the Weekly Timesheet UI.
+
 ## Input
 
 ```ts
@@ -28,42 +30,38 @@ sequenceDiagram
   participant AI as OpenAI
   participant T as get_timesheet_range
   participant Ctx as Conversation Context
-  participant C as Business API Client
-  participant API as Timesheet API
+  participant R as Canonical Timesheet Read
+  participant S as Google Sheets Time Log
 
   U->>AI: สัปดาห์นี้ลงกี่ชั่วโมง
   AI->>AI: Resolve Mon→today Asia/Bangkok
   AI->>T: get_timesheet_range({ startDate, endDate })
   T->>Ctx: getConversationContext()
-  Ctx-->>T: employeeId
-  T->>C: GET /v1/timesheets?startDate=&endDate=
-  C->>API: X-Employee-Id
-  API-->>C: days[]
-  T-->>AI: TimesheetRange aggregates
+  Ctx-->>T: employeeId + email
+  T->>R: readTimesheetRangeForEmployee(identity, start, end)
+  R->>S: getTimeLogEntries(start, end) filter Staff ID
+  S-->>R: Time Log rows
+  R-->>T: TimesheetRange
+  T-->>AI: days + aggregates
   AI-->>U: summary
 ```
 
-## API
+## Data source
 
-```http
-GET /v1/timesheets?startDate=2026-07-13&endDate=2026-07-19
-X-Employee-Id: <from Conversation Context>
-```
+Same as [Get Timesheet.md](./Get%20Timesheet.md): `getTimeLogRowsForStaffRange` / Google Sheets **Time Log**. No `GET /v1/timesheets`.
 
-Dates are inclusive.
+Dates are inclusive. Draft/unsubmitted entries are included.
 
 ## Response (`TimesheetRange`)
 
 | Field | Meaning |
 |-------|---------|
 | `startDate` / `endDate` | Inclusive range |
-| `days` | `DailyTimesheet[]` |
+| `days` | `DailyTimesheet[]` (one per calendar day) |
 | `totalHours` | Aggregate hours |
 | `expectedHours` | Aggregate expected |
 | `remainingHours` | Aggregate remaining |
 | `submittedDays` / `unsubmittedDays` | Submission counts |
-
-Enables answers about work in range, totals by date, missing/incomplete days, and submission status.
 
 ## Natural-language examples
 
@@ -81,6 +79,7 @@ Enables answers about work in range, totals by date, missing/incomplete days, an
 
 ## Code
 
+- `src/lib/timesheet/canonical-read.ts`
 - `src/lib/tools/business/timesheet/get-timesheet-range.ts`
 - `src/lib/tools/business/timesheet/parse-timesheet-range.ts`
 - `src/lib/tools/business/timesheet/bangkok-dates.ts`

@@ -8,9 +8,4 @@ Use [`get_timesheet_range`](./Get%20Timesheet%20Range.md) with Bangkok week boun
 
 ## Compatibility wrapper
 
-`createGetWeekTimesheetTool()` remains exportable for legacy callers. It delegates to the shared range load for Monday → today (Asia/Bangkok) and maps the result to the legacy week shape (`weekStart`, `days`, `weeklyTotal`, …).
-
-```http
-GET /v1/timesheets?startDate=<Mon>&endDate=<today>
-X-Employee-Id: <Conversation Context>
-```
+`createGetWeekTimesheetTool()` remains exportable for legacy callers. It delegates to the shared range load (`loadTimesheetRange` → canonical Google Sheets Time Log read) for Bangkok current week (Monday → today) and maps to the legacy week shape.

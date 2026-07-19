@@ -18,10 +18,11 @@ General-intent override runs **before** date and work keyword routing.
 4. Explicit ISO date range → `get_timesheet_range` (wins over project/client words)
 5. Relative timesheet range → `get_timesheet_range` (week/month phrases only)
 6. Explicit or relative single date → `get_timesheet` (includes standalone `today` / `วันนี้`)
-7. Explicit employee work-context request → `get_work_context`
-8. Timesheet request missing date/range → `clarify` (`missing_timesheet_period`)
-9. Potential employee-business request → `get_work_context`
-10. Non-business → `none`
+7. Current-user identity / profile → `get_my_profile` (before work-context)
+8. Explicit employee work-context request → `get_work_context`
+9. Timesheet request missing date/range → `clarify` (`missing_timesheet_period`)
+10. Potential employee-business request → `get_work_context`
+11. Non-business → `none`
 
 Unresolved timesheet asks never default to today or the current week.
 
@@ -33,6 +34,7 @@ Unresolved timesheet asks never default to today or the current week.
 | `isGeneralConceptualQuestion` | What is / Explain / Define / … |
 | `isGeneralInstructionalQuestion` | How do I… (I alone ≠ employee data) |
 | `isGeneralNewsOrExternalTopic` | News, weather, holidays, events |
+| `isMyProfileRequest` | Who am I / my employee ID / Timesheet identity (Conversation Context → Staff ID; no Zoho in tool) |
 | `isWorkContextRequest` | Employee assignment / projects / clients / roles |
 | `isTimesheetDomainRequest` | Employee timesheet / logged hours |
 | `isEmployeeBusinessRequest` | Phrase-level personal business structure |

@@ -4,7 +4,7 @@
 |------------|----------|
 | Config | `OPENAI_API_KEY` (+ model/tokens/temperature/timeout); startup validation when key present |
 | Prompt | Reliability system prompt + user message; Business Tools as source of truth |
-| Decision engine | General questions answer directly; employee-business → Business Tool or clarify; standalone today/วันนี้ → `get_timesheet`; exact-tool round-0 enforcement |
+| Decision engine | General questions answer directly; personal identity → `get_my_profile`; employee-business → Business Tool or clarify; standalone today/วันนี้ → `get_timesheet`; exact-tool round-0 enforcement |
 | Generate | Chat Completions via HTTP; optional `tools`; timeout; retries on 429/5xx/network |
 | Conversation | Decide → prompt → OpenAI → tool router (forced if needed) → OpenAI → validate → plain text |
 | Slack bridge | DM / app_mention → conversation → `chat.postMessage` |

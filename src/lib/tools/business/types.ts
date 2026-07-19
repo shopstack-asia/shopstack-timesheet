@@ -81,10 +81,13 @@ export type WeekTimesheet = {
   submissionStatus?: string;
 };
 
-/** Timesheet API REST paths used by read-only tools. */
+/**
+ * External Business API paths still used by read-only tools.
+ * Daily/range timesheet reads use the canonical Google Sheets Time Log service
+ * (`src/lib/timesheet/canonical-read.ts`) — not a `/v1/timesheets` HTTP contract.
+ */
 export const TIMESHEET_API_PATHS = {
   workContext: '/v1/work-context',
-  timesheets: '/v1/timesheets',
 } as const;
 
 export const DEFAULT_EXPECTED_DAY_HOURS = 8;

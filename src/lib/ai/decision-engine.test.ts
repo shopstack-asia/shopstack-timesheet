@@ -12,6 +12,7 @@ import { createContextManager } from '@/lib/conversation/context/context-manager
 import { createContextStore } from '@/lib/conversation/context/context-store';
 import { createIdentityResolver } from '@/lib/conversation/context/identity-resolver';
 import { createGetWorkContextTool } from '@/lib/tools/business/context/get-work-context';
+import { createGetMyProfileTool } from '@/lib/tools/business/profile/get-my-profile';
 import { createGetTimesheetTool } from '@/lib/tools/business/timesheet/get-timesheet';
 import { createGetTimesheetRangeTool } from '@/lib/tools/business/timesheet/get-timesheet-range';
 import {
@@ -66,7 +67,33 @@ function mockClient(paths: Record<string, unknown>): BusinessApiClient {
   };
 }
 
-function makeRegistry(client: BusinessApiClient, extras = true) {
+function dayPayload(date: string) {
+  return {
+    date,
+    entries: [{ hours: 4, description: 'API' }],
+    totalHours: 4,
+    expectedHours: 8,
+    remainingHours: 4,
+    submitted: false,
+  };
+}
+
+function emptyRange(startDate: string, endDate: string) {
+  return {
+    startDate,
+    endDate,
+    days: [] as ReturnType<typeof dayPayload>[],
+    totalHours: 0,
+    expectedHours: 0,
+    remainingHours: 0,
+    submittedDays: 0,
+    unsubmittedDays: 0,
+  };
+}
+
+/** Registry with Business API mock for work-context + canonical Timesheet read injection. */
+function makeRegistry(paths: Record<string, unknown>, extras = true) {
+  const client = mockClient(paths);
   const deps = {
     client,
     contextManager: createContextManager({
@@ -78,12 +105,49 @@ function makeRegistry(client: BusinessApiClient, extras = true) {
             staff: {
               EmployeeID: 'S1',
               Email: 'ada@shopstack.asia',
+              FirstName: 'Ada',
+              LastName: 'Lovelace',
             },
           },
         }),
       }),
       businessClient: client,
     }),
+    readDailyTimesheet: async (
+      _identity: { employeeId: string },
+      date: string
+    ) => {
+      const raw = paths.timesheets;
+      if (
+        raw &&
+        typeof raw === 'object' &&
+        !Array.isArray(raw) &&
+        'entries' in raw
+      ) {
+        return { ...(raw as ReturnType<typeof dayPayload>), date };
+      }
+      return dayPayload(date);
+    },
+    readTimesheetRange: async (
+      _identity: { employeeId: string },
+      startDate: string,
+      endDate: string
+    ) => {
+      const raw = paths.timesheets;
+      if (
+        raw &&
+        typeof raw === 'object' &&
+        !Array.isArray(raw) &&
+        'days' in raw
+      ) {
+        return {
+          startDate,
+          endDate,
+          ...(raw as Record<string, unknown>),
+        } as ReturnType<typeof emptyRange>;
+      }
+      return emptyRange(startDate, endDate);
+    },
   };
   const registry = createToolRegistry();
   if (extras) {
@@ -91,6 +155,7 @@ function makeRegistry(client: BusinessApiClient, extras = true) {
     registry.register(currentDateTool);
     registry.register(currentTimeTool);
   }
+  registry.register(createGetMyProfileTool(deps));
   registry.register(createGetWorkContextTool(deps));
   registry.register(createGetTimesheetTool(deps));
   registry.register(createGetTimesheetRangeTool(deps));
@@ -103,17 +168,6 @@ function input(userMessage: string, conversationId: string) {
     conversationId,
     requestId: 'r-decision',
     metadata: { slackUserId: 'U1', conversationId },
-  };
-}
-
-function dayPayload(date: string) {
-  return {
-    date,
-    entries: [{ hours: 4, description: 'API' }],
-    totalHours: 4,
-    expectedHours: 8,
-    remainingHours: 4,
-    submitted: false,
   };
 }
 
@@ -303,7 +357,7 @@ describe('prompt reliability rules', () => {
 
 describe('AI conversation tool selection reliability', () => {
   it('ฉันมี project อะไรบ้าง forces get_work_context when model skips', async () => {
-    const client = mockClient({
+    const registry = makeRegistry({
       'work-context': {
         user: { id: 'S1', name: 'Ada' },
         clients: [
@@ -321,7 +375,6 @@ describe('AI conversation tool selection reliability', () => {
         ],
       },
     });
-    const registry = makeRegistry(client);
     const executed: string[] = [];
     let turn = 0;
 
@@ -360,7 +413,7 @@ describe('AI conversation tool selection reliability', () => {
   ])(
     'explicit range forces get_timesheet_range when model skips: %s',
     async (msg) => {
-      const client = mockClient({
+      const registry = makeRegistry({
         timesheets: {
           days: [],
           totalHours: 0,
@@ -370,7 +423,6 @@ describe('AI conversation tool selection reliability', () => {
           unsubmittedDays: 0,
         },
       });
-      const registry = makeRegistry(client);
       const executedArgs: string[] = [];
       let turn = 0;
 
@@ -409,8 +461,7 @@ describe('AI conversation tool selection reliability', () => {
     'เมื่อวาน: wrong round-0 tool %s is replaced by get_timesheet once',
     async (wrongTool) => {
       const yesterday = bangkokYesterday(FIXED_NOW);
-      const client = mockClient({ timesheets: dayPayload(yesterday) });
-      const registry = makeRegistry(client);
+      const registry = makeRegistry({ timesheets: dayPayload(yesterday) });
       const executed: string[] = [];
       let turn = 0;
 
@@ -463,9 +514,7 @@ describe('AI conversation tool selection reliability', () => {
 
   it('does not duplicate get_timesheet when the model already called it', async () => {
     const yesterday = bangkokYesterday(FIXED_NOW);
-    const client = mockClient({ timesheets: dayPayload(yesterday) });
     const timesheet = createGetTimesheetTool({
-      client,
       contextManager: createContextManager({
         store: createContextStore(),
         identityResolver: createIdentityResolver({
@@ -479,8 +528,8 @@ describe('AI conversation tool selection reliability', () => {
             },
           }),
         }),
-        businessClient: client,
       }),
+      readDailyTimesheet: async (_id, date) => dayPayload(date),
     });
     let executeCount = 0;
     const wrapped = {
@@ -566,7 +615,7 @@ describe('AI conversation tool selection reliability', () => {
 
   it('สรุปสัปดาห์นี้ forces get_timesheet_range when model skips', async () => {
     const week = bangkokCurrentWeek(FIXED_NOW);
-    const client = mockClient({
+    const registry = makeRegistry({
       timesheets: {
         days: [],
         totalHours: 0,
@@ -576,7 +625,6 @@ describe('AI conversation tool selection reliability', () => {
         unsubmittedDays: 0,
       },
     });
-    const registry = makeRegistry(client);
     let turn = 0;
 
     const result = await runConversation(input('สรุปสัปดาห์นี้', 'conv-week'), {
@@ -667,7 +715,7 @@ describe('fail-closed potential work-context intents', () => {
   });
 
   it('forces get_work_context when model says it cannot access assignments', async () => {
-    const registry = makeRegistry(mockClient(WORK_CONTEXT_PAYLOAD));
+    const registry = makeRegistry(WORK_CONTEXT_PAYLOAD);
     const executed: string[] = [];
     let turn = 0;
 
@@ -705,7 +753,7 @@ describe('fail-closed potential work-context intents', () => {
   it.each([['ping'], ['current_date'], ['get_timesheet']] as const)(
     'replaces wrong tool %s with get_work_context for assignment ask',
     async (wrongTool) => {
-      const registry = makeRegistry(mockClient(WORK_CONTEXT_PAYLOAD));
+      const registry = makeRegistry(WORK_CONTEXT_PAYLOAD);
       const executed: string[] = [];
       let turn = 0;
 
@@ -976,8 +1024,7 @@ describe('runConversation standalone today forces get_timesheet', () => {
     ['today', bangkokToday(FIXED_NOW)],
     ['วันนี้', bangkokToday(FIXED_NOW)],
   ] as const)('%s', async (msg, date) => {
-    const client = mockClient({ timesheets: dayPayload(date) });
-    const registry = makeRegistry(client);
+    const registry = makeRegistry({ timesheets: dayPayload(date) });
     const executed: string[] = [];
     let turn = 0;
 
@@ -1004,5 +1051,211 @@ describe('runConversation standalone today forces get_timesheet', () => {
     expect(executed).toEqual(['get_timesheet']);
     expect(result.text).toContain(date);
     expect(result.text).not.toMatch(/cannot access/i);
+  });
+});
+
+describe('decideBusinessTool get_my_profile', () => {
+  it.each([
+    'ฉันคือใคร',
+    'ผมคือใคร',
+    'Employee ID ของฉันคืออะไร',
+    'Employee ID ของผมคืออะไร',
+    'รหัสพนักงานของฉันคืออะไร',
+    'รหัสพนักงานของผมคืออะไร',
+    'ตรวจสอบ Timesheet identity ของฉัน',
+    'ตรวจสอบ identity ของฉัน',
+    'ระบบมองว่าฉันเป็นใคร',
+    'ระบบมองว่าผมเป็นใคร',
+    'ระบบมองว่าฉันเป็นพนักงานคนไหน',
+    'Slack ของฉันผูกกับ Employee ID อะไร',
+    'Slack ของผมผูกกับ Employee ID อะไร',
+    'ตรวจสอบข้อมูลพนักงานของฉัน',
+    'Who am I?',
+    'What is my employee ID?',
+    'Show my employee profile',
+    'Show my Timesheet identity',
+    'Verify my employee identity',
+    'Check my Timesheet identity',
+    'Which employee am I mapped to?',
+    'What employee does the system see me as?',
+    'Which employee ID is linked to my Slack account?',
+  ])('%s → get_my_profile', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW })).toEqual({
+      action: 'call_tool',
+      toolName: 'get_my_profile',
+      arguments: {},
+      reason: 'my_profile_intent',
+    });
+  });
+
+  it.each([
+    'What is an employee ID?',
+    'What is identity mapping?',
+    'How does Slack identity work?',
+    'What is a Timesheet employee profile?',
+    'Employee ID คืออะไร',
+  ])('%s → none (general concept)', (msg) => {
+    expect(decideBusinessTool(msg, { now: FIXED_NOW }).action).toBe('none');
+  });
+});
+
+describe('runConversation get_my_profile enforcement', () => {
+  it('Employee ID ของฉันคืออะไร forces get_my_profile once', async () => {
+    const registry = makeRegistry({});
+    const executed: string[] = [];
+    let turn = 0;
+
+    const result = await runConversation(
+      input('Employee ID ของฉันคืออะไร', 'conv-my-profile'),
+      {
+        toolRegistry: registry,
+        decisionNow: FIXED_NOW,
+        generate: async (req: GenerateResponseInput) => {
+          turn += 1;
+          if (turn === 1) {
+            return {
+              text: 'I cannot access your employee profile.',
+              model: 'm',
+            };
+          }
+          const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+          expect(toolMsgs).toHaveLength(1);
+          expect(toolMsgs[0]?.name).toBe('get_my_profile');
+          expect(toolMsgs[0]?.content).toContain('"employeeId":"S1"');
+          expect(toolMsgs[0]?.content).toContain('"timesheetStaffId":"S1"');
+          expect(toolMsgs[0]?.content).toContain('"timesheetMappingStatus":"configured"');
+          expect(toolMsgs[0]?.content).toContain('"success":true');
+          expect(toolMsgs[0]?.content).not.toContain('timesheetIdentityMatched');
+          executed.push(toolMsgs[0]!.name!);
+          return {
+            text: 'Your employee ID is S1.',
+            model: 'm',
+          };
+        },
+      }
+    );
+
+    expect(executed).toEqual(['get_my_profile']);
+    expect(result.toolRounds).toBe(1);
+    expect(result.text).toContain('S1');
+    expect(result.text).not.toMatch(/cannot access/i);
+  });
+
+  it.each([['ping'], ['current_date'], ['get_work_context'], ['get_timesheet']] as const)(
+    'ตรวจสอบ Timesheet identity: wrong tool %s replaced',
+    async (wrongTool) => {
+      const registry = makeRegistry({});
+      const executed: string[] = [];
+      let turn = 0;
+
+      const result = await runConversation(
+        input('ตรวจสอบ Timesheet identity ของฉัน', `conv-prof-wrong-${wrongTool}`),
+        {
+          toolRegistry: registry,
+          decisionNow: FIXED_NOW,
+          generate: async (req: GenerateResponseInput) => {
+            turn += 1;
+            if (turn === 1) {
+              return {
+                text: '',
+                model: 'm',
+                toolCalls: [
+                  {
+                    id: 'wrong1',
+                    type: 'function' as const,
+                    function: {
+                      name: wrongTool,
+                      arguments:
+                        wrongTool === 'get_timesheet'
+                          ? JSON.stringify({ date: '2026-07-18' })
+                          : '{}',
+                    },
+                  },
+                ],
+              };
+            }
+            const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+            expect(toolMsgs).toHaveLength(1);
+            expect(toolMsgs[0]?.name).toBe('get_my_profile');
+            executed.push(toolMsgs[0]!.name!);
+            return { text: 'Identity verified.', model: 'm' };
+          },
+        }
+      );
+
+      expect(executed).toEqual(['get_my_profile']);
+      expect(result.text).toContain('Identity verified');
+    }
+  );
+
+  it('overwrites AI identity args and executes get_my_profile once', async () => {
+    const registry = makeRegistry({});
+    let executeCount = 0;
+    const profile = createGetMyProfileTool({
+      contextManager: createContextManager({
+        store: createContextStore(),
+        identityResolver: createIdentityResolver({
+          lookup: async () => ({
+            ok: true,
+            auth: {
+              staff: {
+                EmployeeID: 'S1',
+                Email: 'ada@shopstack.asia',
+                FirstName: 'Ada',
+                LastName: 'Lovelace',
+              },
+            },
+          }),
+        }),
+      }),
+    });
+    const wrapped = {
+      ...profile,
+      async execute(
+        args: Record<string, unknown>,
+        ctx: Parameters<typeof profile.execute>[1]
+      ) {
+        executeCount += 1;
+        expect(args).toEqual({});
+        return profile.execute(args, ctx);
+      },
+    };
+    const reg = createToolRegistry();
+    reg.register(wrapped);
+
+    let turn = 0;
+    await runConversation(
+      input('Who am I?', 'conv-profile-dedupe'),
+      {
+        toolRegistry: reg,
+        decisionNow: FIXED_NOW,
+        generate: async (req: GenerateResponseInput) => {
+          turn += 1;
+          if (turn === 1) {
+            return {
+              text: '',
+              model: 'm',
+              toolCalls: [
+                {
+                  id: 'c1',
+                  type: 'function' as const,
+                  function: {
+                    name: 'get_my_profile',
+                    arguments: JSON.stringify({ employeeId: 'HACK' }),
+                  },
+                },
+              ],
+            };
+          }
+          const toolMsgs = req.messages.filter((m) => m.role === 'tool');
+          expect(toolMsgs).toHaveLength(1);
+          expect(toolMsgs[0]?.content).toContain('"employeeId":"S1"');
+          expect(toolMsgs[0]?.content).not.toContain('HACK');
+          return { text: 'ok', model: 'm' };
+        },
+      }
+    );
+
+    expect(executeCount).toBe(1);
   });
 });

@@ -8,10 +8,11 @@
  * 4. Explicit ISO date range → get_timesheet_range
  * 5. Relative timesheet range → get_timesheet_range
  * 6. Explicit or relative single timesheet date → get_timesheet
- * 7. Explicit employee work-context request → get_work_context
- * 8. Timesheet request missing date/range → clarify
- * 9. Potential employee-business request → get_work_context / clarify
- * 10. Non-business → none
+ * 7. Current-user identity / profile diagnostic → get_my_profile
+ * 8. Explicit employee work-context request → get_work_context
+ * 9. Timesheet request missing date/range → clarify
+ * 10. Potential employee-business request → get_work_context / clarify
+ * 11. Non-business → none
  *
  * Recognized and potential employee-business requests must route to a Business Tool
  * or clarification. Clearly general, conceptual, instructional, programming, news,
@@ -37,7 +38,11 @@ import { MAX_TIMESHEET_RANGE_DAYS } from '@/lib/tools/business/types';
 export type BusinessToolDecision =
   | {
       action: 'call_tool';
-      toolName: 'get_work_context' | 'get_timesheet' | 'get_timesheet_range';
+      toolName:
+        | 'get_my_profile'
+        | 'get_work_context'
+        | 'get_timesheet'
+        | 'get_timesheet_range';
       arguments: Record<string, unknown>;
       reason: string;
     }
@@ -107,6 +112,49 @@ function normalize(text: string): string {
   return text.trim();
 }
 
+/**
+ * Current-user identity / Timesheet employee mapping diagnostic.
+ * Personal “who am I / my employee ID” — not general identity concepts.
+ */
+export function isMyProfileRequest(text: string): boolean {
+  const t = normalize(text);
+  if (!t) return false;
+
+  // Conceptual identity topics (no personal “my/ฉัน”) stay general
+  if (
+    /^(what\s+is\s+an?\s+employee\s+id|what\s+is\s+identity\s+mapping|how\s+does\s+slack\s+identity\s+work|what\s+is\s+a\s+timesheet\s+employee\s+profile)\b/i.test(
+      t
+    ) ||
+    /^(employee\s+id\s+คืออะไร|identity\s+mapping\s+คืออะไร|slack\s+identity\s+ทำงานอย่างไร)/i.test(
+      t
+    )
+  ) {
+    return false;
+  }
+
+  return (
+    /^(who\s+am\s+i)\b/i.test(t) ||
+    /\b(what\s+is\s+my\s+employee\s+id|show\s+my\s+(employee\s+)?profile|show\s+my\s+timesheet\s+identity|verify\s+my\s+(employee\s+)?identity|check\s+my\s+timesheet\s+identity|which\s+employee\s+am\s+i\s+mapped\s+to|what\s+employee\s+does\s+the\s+system\s+see\s+me\s+as|which\s+employee\s+id\s+is\s+linked\s+to\s+my\s+slack)\b/i.test(
+      t
+    ) ||
+    /(ฉันคือใคร|ผมคือใคร|employee\s*id\s*ของ(ฉัน|ผม)คืออะไร|รหัสพนักงานของ(ฉัน|ผม)คืออะไร|ตรวจสอบ\s*timesheet\s*identity\s*ของ(ฉัน|ผม)|ตรวจสอบ\s*identity\s*ของ(ฉัน|ผม)|ระบบมองว่า(ฉัน|ผม)เป็นใคร|ระบบมองว่า(ฉัน|ผม)เป็นพนักงานคนไหน|slack\s*ของ(ฉัน|ผม)ผูกกับ\s*employee\s*id\s*อะไร|ตรวจสอบข้อมูลพนักงานของ(ฉัน|ผม))/i.test(
+      t
+    )
+  );
+}
+
+function myProfileDecision(): Extract<
+  BusinessToolDecision,
+  { action: 'call_tool' }
+> {
+  return {
+    action: 'call_tool',
+    toolName: 'get_my_profile',
+    arguments: {},
+    reason: 'my_profile_intent',
+  };
+}
+
 /** Strong employee-specific work-context / assignment request structure. */
 export function isWorkContextRequest(text: string): boolean {
   const t = normalize(text);
@@ -158,18 +206,22 @@ export function isEmployeeBusinessRequest(text: string): boolean {
 
 export function isGeneralConceptualQuestion(text: string): boolean {
   const t = normalize(text);
+  if (isMyProfileRequest(t)) return false;
   // Employee-specific overrides
   if (
-    /\b(am\s+i|did\s+i|do\s+i\s+(manage|have)|my\s+(project|client|role|assignment|timesheet))\b/i.test(
+    /\b(am\s+i|did\s+i|do\s+i\s+(manage|have)|my\s+(project|client|role|assignment|timesheet|employee\s+id))\b/i.test(
       t
     ) ||
-    /(ฉันมี|ผมอยู่|ของฉัน|ของผม|ฉันได้รับ|ฉันรับผิดชอบ)/i.test(t)
+    /(ฉันมี|ผมอยู่|ของฉัน|ของผม|ฉันได้รับ|ฉันรับผิดชอบ|ฉันคือใคร|ผมคือใคร)/i.test(t)
   ) {
     // Still allow pure definitions that happen to include "my" incorrectly — only block when clearly employee ask
     if (
       isWorkContextRequest(t) ||
       isTimesheetDomainRequest(t) ||
-      /\b(what\s+am\s+i|which\s+.+\s+am\s+i|show\s+my)\b/i.test(t)
+      isMyProfileRequest(t) ||
+      /\b(what\s+am\s+i|which\s+.+\s+am\s+i|show\s+my|what\s+is\s+my\s+employee\s+id)\b/i.test(
+        t
+      )
     ) {
       return false;
     }
@@ -286,6 +338,7 @@ function isBareUnqualifiedSummary(text: string): boolean {
 export function isClearlyGeneralConversation(text: string): boolean {
   const t = normalize(text);
   if (!t) return false;
+  if (isMyProfileRequest(t)) return false;
 
   if (GREETING_THANKS_RE.test(t)) return true;
   if (/^(เล่าเรื่อง|tell\s+me\s+a\s+(joke|story)|joke\b)/i.test(t)) {
@@ -543,21 +596,26 @@ export function decideBusinessTool(
     return single;
   }
 
-  // 7. Explicit employee work-context request
+  // 7. Current-user identity / Timesheet employee diagnostic
+  if (isMyProfileRequest(text)) {
+    return myProfileDecision();
+  }
+
+  // 8. Explicit employee work-context request
   if (isWorkContextRequest(text)) {
     return workContextDecision('potential_work_context_intent');
   }
 
-  // 8. Timesheet domain without a resolvable period → clarify (never default today/week)
+  // 9. Timesheet domain without a resolvable period → clarify (never default today/week)
   if (isTimesheetDomainRequest(text)) {
     return MISSING_PERIOD_CLARIFY;
   }
 
-  // 9. Potential employee-business request
+  // 10. Potential employee-business request
   if (isPotentialBusinessIntent(text)) {
     return workContextDecision('potential_work_context_intent');
   }
 
-  // 10. Non-business
+  // 11. Non-business
   return { action: 'none', reason: 'no_business_intent' };
 }

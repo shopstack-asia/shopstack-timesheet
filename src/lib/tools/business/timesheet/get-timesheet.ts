@@ -3,24 +3,22 @@ import {
   assertNotAborted,
   rejectAiEmployeeId,
   requireConversationIds,
-  resolveBusinessClient,
   resolveContextManager,
-  requestMeta,
   toolFailureFromError,
   toolSuccess,
   type BusinessToolDeps,
 } from '@/lib/tools/business/helpers';
 import { parseRequiredIsoDate } from '@/lib/tools/business/timesheet/date-input';
 import { parseDailyTimesheet } from '@/lib/tools/business/timesheet/parse-timesheet';
-import { TIMESHEET_API_PATHS } from '@/lib/tools/business/types';
+import { readDailyTimesheetForEmployee } from '@/lib/timesheet/canonical-read';
 
 export { parseDailyTimesheet } from '@/lib/tools/business/timesheet/parse-timesheet';
 
 const TOOL_NAME = 'get_timesheet';
 
 /**
- * Shared daily timesheet load (Conversation Context identity + Timesheet API).
- * Used by get_timesheet and deprecated get_today_timesheet wrapper.
+ * Shared daily timesheet load via canonical Google Sheets Time Log read
+ * (same data source as Weekly Timesheet UI). Identity from Conversation Context.
  */
 export async function loadDailyTimesheet(
   deps: BusinessToolDeps | undefined,
@@ -46,13 +44,20 @@ export async function loadDailyTimesheet(
     ensureWorkContext: false,
   });
 
-  const client = resolveBusinessClient(deps);
-  const path = `${TIMESHEET_API_PATHS.timesheets}?date=${encodeURIComponent(date)}`;
-  const response = await client.get<unknown>(path, {
-    ...requestMeta(context, conv.employeeId),
-    idempotent: true,
-  });
-  const day = parseDailyTimesheet(response.data);
+  const read = deps?.readDailyTimesheet ?? readDailyTimesheetForEmployee;
+  const day = await read(
+    {
+      employeeId: conv.employeeId,
+      email: conv.slackEmail,
+      slackUserId: conv.slackUserId,
+    },
+    date,
+    {
+      requestId: context.requestId,
+      conversationId,
+    }
+  );
+
   return { ...day, employeeId: conv.employeeId };
 }
 
@@ -79,12 +84,13 @@ export function createGetTimesheetTool(deps?: BusinessToolDeps): Tool {
     name: TOOL_NAME,
     description: [
       'Return timesheet entries for one calendar date (YYYY-MM-DD) for the resolved conversation employee.',
+      'Reads the same Google Sheets Time Log data as the Weekly Timesheet UI.',
       'Resolve relative phrases (today, yesterday, Thai equivalents) to YYYY-MM-DD in Asia/Bangkok before calling.',
       'Never pass employeeId. Never pass relative date words.',
-      'Example: User asks what they logged yesterday → resolve Bangkok yesterday → get_timesheet({ date }).',
+      'Empty entries mean no work was logged that day (not an API failure).',
       'Read-only — does not create or modify entries.',
     ].join(' '),
-    version: '1.0.0',
+    version: '2.0.0',
     idempotent: true,
     inputSchema: {
       type: 'object',
