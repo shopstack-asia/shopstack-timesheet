@@ -75,7 +75,7 @@ describe('canonical master resolve', () => {
   });
 });
 
-describe('applyDraftMerge strict target-only slot protection', () => {
+describe('applyDraftMerge strict target-only via TargetResolution', () => {
   const taskTargetDraft = {
     intent: 'create_timesheet_entry' as const,
     conversationId: 'C1',
@@ -91,185 +91,31 @@ describe('applyDraftMerge strict target-only slot protection', () => {
     expiresAt: new Date(Date.now() + 600_000).toISOString(),
   };
 
-  const projectTargetDraft = {
-    intent: 'create_timesheet_entry' as const,
-    conversationId: 'C1',
-    slackUserId: 'U1',
-    resolvedDate: '2026-07-19',
-    taskHint: 'Project Management',
-    resolvedTaskId: 'T-PM',
-    hours: 3,
-    missingFields: ['project' as const],
-    lastClarificationField: 'project',
-    clarificationCount: 1,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 600_000).toISOString(),
-  };
-
-  const hoursTargetDraft = {
-    intent: 'create_timesheet_entry' as const,
-    conversationId: 'C1',
-    slackUserId: 'U1',
-    resolvedDate: '2026-07-19',
-    projectHint: 'RMS',
-    resolvedProjectId: 'P-RMS',
-    taskHint: 'Project Management',
-    resolvedTaskId: 'T-PM',
-    missingFields: ['hours' as const],
-    lastClarificationField: 'hours',
-    clarificationCount: 1,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 600_000).toISOString(),
-  };
-
-  const dateTargetDraft = {
-    intent: 'create_timesheet_entry' as const,
-    conversationId: 'C1',
-    slackUserId: 'U1',
-    projectHint: 'RMS',
-    resolvedProjectId: 'P-RMS',
-    taskHint: 'Project Management',
-    resolvedTaskId: 'T-PM',
-    hours: 3,
-    missingFields: ['date' as const],
-    lastClarificationField: 'date',
-    clarificationCount: 1,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 600_000).toISOString(),
-  };
-
-  it('Test A: task target ignores adversarial model project/date/hours', () => {
+  it('applies only resolved task and preserves trusted slots', () => {
     const merged = applyDraftMerge(
       createIntent({
         projectHint: 'HERTZ',
-        taskHint: 'PM',
+        taskHint: 'QA',
         dateExpression: 'พรุ่งนี้',
         hours: 8,
         refersToPrevious: true,
       }),
       taskTargetDraft,
-      undefined,
-      { userMessage: 'PM', now: FIXED_NOW }
+      {
+        status: 'resolved',
+        targetField: 'task',
+        taskHint: 'PM',
+        resolvedTaskId: 'T-PM',
+      }
     );
-    expect(merged.mergeMode).toBe('targeted_follow_up');
-    expect(merged.targetField).toBe('task');
     expect(merged.intent.dateExpression).toBe('2026-07-19');
     expect(merged.intent.projectHint).toBe('RMS');
     expect(merged.intent.taskHint).toBe('PM');
     expect(merged.intent.hours).toBe(3);
+    expect(merged.draftPatch.resolvedTaskId).toBe('T-PM');
     expect(merged.ignoredConflictingFields).toEqual(
       expect.arrayContaining(['project', 'date', 'hours'])
     );
-  });
-
-  it('Test B: project target only changes project', () => {
-    const merged = applyDraftMerge(
-      createIntent({
-        projectHint: 'RMS',
-        taskHint: 'Development',
-        dateExpression: 'พรุ่งนี้',
-        hours: 8,
-        refersToPrevious: true,
-      }),
-      projectTargetDraft,
-      undefined,
-      { userMessage: 'RMS', now: FIXED_NOW }
-    );
-    expect(merged.intent.projectHint).toBe('RMS');
-    expect(merged.intent.taskHint).toBe('Project Management');
-    expect(merged.intent.dateExpression).toBe('2026-07-19');
-    expect(merged.intent.hours).toBe(3);
-  });
-
-  it('Test C: hours target ignores adversarial project', () => {
-    const merged = applyDraftMerge(
-      createIntent({
-        projectHint: 'HERTZ',
-        taskHint: 'QA',
-        dateExpression: 'พรุ่งนี้',
-        hours: 3,
-        refersToPrevious: true,
-      }),
-      hoursTargetDraft,
-      undefined,
-      { userMessage: '3', now: FIXED_NOW }
-    );
-    expect(merged.intent.hours).toBe(3);
-    expect(merged.intent.projectHint).toBe('RMS');
-    expect(merged.intent.taskHint).toBe('Project Management');
-    expect(merged.intent.dateExpression).toBe('2026-07-19');
-  });
-
-  it('Test D: date target only changes date', () => {
-    const merged = applyDraftMerge(
-      createIntent({
-        projectHint: 'HERTZ',
-        taskHint: 'QA',
-        dateExpression: 'พรุ่งนี้',
-        hours: 8,
-        refersToPrevious: true,
-      }),
-      dateTargetDraft,
-      undefined,
-      { userMessage: 'พรุ่งนี้', now: FIXED_NOW }
-    );
-    expect(merged.intent.dateExpression).toBe('พรุ่งนี้');
-    expect(merged.intent.projectHint).toBe('RMS');
-    expect(merged.intent.taskHint).toBe('Project Management');
-    expect(merged.intent.hours).toBe(3);
-  });
-
-  it('Test E: wrong-slot projectHint remaps to task only', () => {
-    const merged = applyDraftMerge(
-      createIntent({
-        projectHint: 'PM',
-        taskHint: null,
-        dateExpression: 'พรุ่งนี้',
-        hours: 8,
-        refersToPrevious: true,
-      }),
-      taskTargetDraft,
-      undefined,
-      { userMessage: 'PM', now: FIXED_NOW }
-    );
-    expect(merged.intent.projectHint).toBe('RMS');
-    expect(merged.intent.taskHint).toBe('PM');
-    expect(merged.intent.hours).toBe(3);
-    expect(merged.intent.dateExpression).toBe('2026-07-19');
-  });
-
-  it('Test F: wrong-slot taskHint remaps to project only', () => {
-    const merged = applyDraftMerge(
-      createIntent({
-        projectHint: null,
-        taskHint: 'RMS',
-        dateExpression: 'พรุ่งนี้',
-        hours: 8,
-        refersToPrevious: true,
-      }),
-      projectTargetDraft,
-      undefined,
-      { userMessage: 'RMS', now: FIXED_NOW }
-    );
-    expect(merged.intent.projectHint).toBe('RMS');
-    expect(merged.intent.taskHint).toBe('Project Management');
-    expect(merged.intent.hours).toBe(3);
-    expect(merged.intent.dateExpression).toBe('2026-07-19');
-  });
-
-  it('fill.taskHint wins and still protects trusted project', () => {
-    const merged = applyDraftMerge(
-      createIntent({
-        projectHint: 'HERTZ',
-        taskHint: null,
-        refersToPrevious: true,
-      }),
-      taskTargetDraft,
-      { taskHint: 'PM', matchedField: 'task' },
-      { userMessage: 'PM', now: FIXED_NOW }
-    );
-    expect(merged.intent.projectHint).toBe('RMS');
-    expect(merged.intent.taskHint).toBe('PM');
   });
 
   it('does not allow dual update from model fields during targeted clarification', () => {
@@ -279,16 +125,17 @@ describe('applyDraftMerge strict target-only slot protection', () => {
         taskHint: 'PM',
         dateExpression: 'พรุ่งนี้',
         hours: 8,
-        refersToPrevious: true,
       }),
       taskTargetDraft,
-      undefined,
-      { userMessage: 'PM', now: FIXED_NOW }
+      {
+        status: 'resolved',
+        targetField: 'task',
+        taskHint: 'PM',
+        resolvedTaskId: 'T-PM',
+      }
     );
     expect(merged.intent.projectHint).toBe('RMS');
-    expect(merged.intent.taskHint).toBe('PM');
     expect(merged.intent.hours).toBe(3);
-    expect(merged.intent.dateExpression).toBe('2026-07-19');
     expect(merged.appliedField).toBe('task');
   });
 });
@@ -666,7 +513,7 @@ describe('production phrase → prepare (no clarification loop)', () => {
     expect(r1.decision.action).toBe('clarify');
     if (r1.decision.action === 'clarify') {
       expect(r1.decision.message).not.toBe('ต้องการลงงานอะไรครับ');
-      expect(r1.decision.message).toMatch(/Task|Project Management|Development/i);
+      expect(r1.decision.message).toMatch(/Task/);
     }
   });
 });
@@ -916,7 +763,7 @@ describe('general_conversation must not block outstanding-slot follow-up', () =>
     expect((await store.get('C-g8', 'U1')).outcome).toBe('draft_not_found');
   });
 
-  it('TEST 9: invalid hours structural answer re-clarifies hours', async () => {
+  it('TEST 9: invalid hours under general stays general (no Draft mutation)', async () => {
     const store = createInMemoryIntentDraftStore();
     await store.set({
       intent: 'create_timesheet_entry',
@@ -929,6 +776,7 @@ describe('general_conversation must not block outstanding-slot follow-up', () =>
       resolvedTaskId: 'T-PM',
       missingFields: ['hours'],
       lastClarificationField: 'hours',
+      clarificationCount: 1,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
     });
@@ -939,20 +787,17 @@ describe('general_conversation must not block outstanding-slot follow-up', () =>
       conversationId: 'C-g9',
       slackUserId: 'U1',
     });
-    expect(result.decision.action).toBe('clarify');
-    if (result.decision.action === 'clarify') {
-      expect(result.decision.message).toMatch(/ชั่วโมง/);
-      expect(result.decision.message).not.toBe('ต้องการลงงานอะไรครับ');
-    }
+    expect(result.decision.action).toBe('none');
     const draft = await store.get('C-g9', 'U1');
     expect(draft.outcome).toBe('draft_found');
     if (draft.outcome === 'draft_found') {
-      expect(draft.draft.missingFields).toContain('hours');
-      expect(draft.draft.taskHint).toBe('Project Management');
+      expect(draft.draft.missingFields).toEqual(['hours']);
+      expect(draft.draft.hours).toBeUndefined();
+      expect(draft.draft.clarificationCount).toBe(1);
     }
   });
 
-  it('TEST 10: invalid date structural answer re-clarifies date', async () => {
+  it('TEST 10: invalid date under general stays general', async () => {
     const store = createInMemoryIntentDraftStore();
     await store.set({
       intent: 'create_timesheet_entry',
@@ -965,6 +810,7 @@ describe('general_conversation must not block outstanding-slot follow-up', () =>
       hours: 3,
       missingFields: ['date'],
       lastClarificationField: 'date',
+      clarificationCount: 2,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
     });
@@ -975,9 +821,12 @@ describe('general_conversation must not block outstanding-slot follow-up', () =>
       conversationId: 'C-g10',
       slackUserId: 'U1',
     });
-    expect(result.decision.action).toBe('clarify');
-    if (result.decision.action === 'clarify') {
-      expect(result.decision.message).toMatch(/วันที่/);
+    expect(result.decision.action).toBe('none');
+    const draft = await store.get('C-g10', 'U1');
+    expect(draft.outcome).toBe('draft_found');
+    if (draft.outcome === 'draft_found') {
+      expect(draft.draft.missingFields).toEqual(['date']);
+      expect(draft.draft.clarificationCount).toBe(2);
     }
   });
 

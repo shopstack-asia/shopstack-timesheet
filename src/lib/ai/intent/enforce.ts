@@ -20,9 +20,11 @@ import {
   applyDraftMerge,
   decideDraftMerge,
   isExplicitDraftCancelPhrase,
+  isExplicitDraftContinuePhrase,
   isUnrelatedGeneralPhrase,
   normalizeAnswerKey,
   recomputeCreateMissingFields,
+  type TargetResolution,
 } from '@/lib/ai/intent/follow-up';
 import { enrichWriteIntentSlots } from '@/lib/ai/intent/slot-enrich';
 import type {
@@ -82,7 +84,99 @@ export type EnforceIntentResult = {
   decision: BusinessToolDecision;
   draftOutcome?: string;
   draftStoreAvailable?: boolean;
+  typedErrorCode?: string;
 };
+
+function missingFieldsMessage(fields: IntentMissingField[]): string {
+  return clarifyMissing(fields);
+}
+
+function modelProvidedFieldNames(intent: StructuredIntent): string[] {
+  const fields: string[] = [];
+  if (intent.dateExpression?.trim()) fields.push('date');
+  if (intent.projectHint?.trim()) fields.push('project');
+  if (intent.taskHint?.trim()) fields.push('task');
+  if (intent.hours != null) fields.push('hours');
+  return fields;
+}
+
+function intentFromTrustedDraft(
+  draft: IntentDraft,
+  confidence: StructuredIntent['confidence']
+): StructuredIntent {
+  return {
+    domain: 'timesheet',
+    intent: draft.intent,
+    confidence,
+    dateExpression: draft.dateExpression || draft.resolvedDate || null,
+    projectHint: draft.projectHint ?? null,
+    taskHint: draft.taskHint ?? null,
+    hours: draft.hours ?? null,
+    missingFields: [],
+    ambiguities: [],
+    refersToPrevious: true,
+  };
+}
+
+async function clarifyFromTargetResolution(
+  resolution: Extract<TargetResolution, { status: 'ambiguous' | 'not_found' }>,
+  showCandidates: boolean,
+  options: EnforceIntentOptions
+): Promise<EnforceIntentResult> {
+  if (resolution.targetField === 'task') {
+    if (resolution.status === 'ambiguous' && showCandidates) {
+      const list = resolution.candidateLabels
+        .slice(0, 8)
+        .map((l) => `• ${l}`)
+        .join('\n');
+      return {
+        decision: {
+          action: 'clarify',
+          message: `พบหลาย Task ที่ตรงกับ “${resolution.hint}” ครับ กรุณาเลือก:\n${list}`,
+          reason: 'task_ambiguous',
+        },
+        draftOutcome: 'draft_saved',
+      };
+    }
+    const message = showCandidates
+      ? await listTaskCandidatesMessage(resolution.hint)
+      : `ทำ Task อะไรครับ เช่น Development หรือ Project Management`;
+    return {
+      decision: {
+        action: 'clarify',
+        message,
+        reason: 'task_not_found',
+      },
+      draftOutcome: 'draft_saved',
+    };
+  }
+
+  if (resolution.status === 'ambiguous' && showCandidates) {
+    const list = resolution.candidateLabels
+      .slice(0, 8)
+      .map((l) => `• ${l}`)
+      .join('\n');
+    return {
+      decision: {
+        action: 'clarify',
+        message: `พบหลายโปรเจกต์ที่ตรงกับ “${resolution.hint}” ครับ กรุณาเลือก:\n${list}`,
+        reason: 'project_ambiguous',
+      },
+      draftOutcome: 'draft_saved',
+    };
+  }
+  const message = showCandidates
+    ? await listProjectCandidatesMessage(resolution.hint)
+    : 'ต้องการลงเวลาให้โปรเจกต์ไหนครับ';
+  return {
+    decision: {
+      action: 'clarify',
+      message,
+      reason: 'project_not_found',
+    },
+    draftOutcome: 'draft_saved',
+  };
+}
 
 function clarifyMissing(fields: IntentMissingField[]): string {
   const set = new Set(fields);
@@ -278,6 +372,7 @@ export async function enforceStructuredIntentDetailed(
   let intent = enrichWriteIntentSlots(rawIntent, userMessage, now);
   let draftOutcome: string | undefined;
   let mergeReason: string | undefined;
+  let workingDraft: IntentDraft | null | undefined = options.draft;
 
   if (options.draft) {
     const merge = await decideDraftMerge({
@@ -289,96 +384,235 @@ export async function enforceStructuredIntentDetailed(
       resolveTaskFn: options.resolveTaskFn,
     });
     mergeReason = merge.reason;
-
+    const outcome = merge.outcome;
     const outstandingFields = options.draft.missingFields.filter((f) =>
       ['date', 'project', 'task', 'hours'].includes(f)
     );
 
-    if (merge.merge) {
-      const merged = applyDraftMerge(intent, options.draft, merge.fill, {
-        userMessage,
-        now,
-        mergeReason: merge.reason,
+    const logMerge = (extra: Record<string, unknown>) => {
+      logEnforce({
+        message: 'draft_merge',
+        conversationId: options.conversationId,
+        draftFound: true,
+        modelIntent: rawIntent.intent,
+        modelRefersToPrevious: Boolean(rawIntent.refersToPrevious),
+        explicitContinue: isExplicitDraftContinuePhrase(userMessage),
+        outstandingFields,
+        mergeDecision: outcome.kind,
+        mergeReason: outcome.reason,
+        DraftMutated: 'draftMutated' in outcome ? outcome.draftMutated : true,
+        ignoredModelFields: modelProvidedFieldNames(rawIntent),
+        ...extra,
       });
-      // Targeted clarification: never re-enrich from model/message into non-target slots
+    };
+
+    if (outcome.kind === 'merge_resolved') {
+      const merged = applyDraftMerge(intent, options.draft, outcome.resolution, {
+        mergeReason: outcome.reason,
+      });
       intent = merged.intent;
-      logEnforce({
-        message: 'draft_merge',
-        conversationId: options.conversationId,
-        draftFound: true,
-        modelIntent: rawIntent.intent,
-        modelRefersToPrevious: Boolean(rawIntent.refersToPrevious),
-        outstandingFields,
-        mergeMode: merged.mergeMode,
-        targetField: merged.targetField,
-        modelProvidedFields: merged.modelProvidedFields,
-        appliedField: merged.appliedField,
-        ignoredConflictingFields: merged.ignoredConflictingFields,
-        preservedDraftFields: merged.preservedDraftFields,
-        mergeReason: merged.mergeReason ?? merge.reason,
-        modelClassificationOverridden: Boolean(
-          merge.merge && merge.modelClassificationOverridden
-        ),
-      });
-    } else if (merge.reason === 'outstanding_slot_unmatched') {
-      // Model said general/unknown but message is not a known chat phrase and
-      // did not match the outstanding slot (e.g. "PM" while hours is missing).
-      // Re-enter create path from trusted Draft so we re-clarify the target.
-      intent = {
-        domain: 'timesheet',
-        intent: options.draft.intent,
-        confidence: rawIntent.confidence,
-        dateExpression:
-          options.draft.dateExpression || options.draft.resolvedDate || null,
-        projectHint: options.draft.projectHint ?? null,
-        taskHint: options.draft.taskHint ?? null,
-        hours: options.draft.hours ?? null,
-        missingFields: [],
-        ambiguities: [],
-        refersToPrevious: true,
+      workingDraft = {
+        ...options.draft,
+        ...merged.draftPatch,
       };
-      logEnforce({
-        message: 'draft_merge',
-        conversationId: options.conversationId,
-        draftFound: true,
-        modelIntent: rawIntent.intent,
-        modelRefersToPrevious: Boolean(rawIntent.refersToPrevious),
-        outstandingFields,
-        mergeMode: 'preserve_draft',
-        targetField: outstandingFields[0] ?? null,
-        mergeReason: 'outstanding_slot_unmatched',
-        modelClassificationOverridden: false,
-        appliedField: null,
-        ignoredConflictingFields: [],
-        preservedDraftFields: outstandingFields.length
-          ? ['date', 'project', 'task', 'hours'].filter(
-              (f) => !outstandingFields.includes(f as typeof outstandingFields[number])
-            )
-          : [],
+      // Clear target from missing after resolved merge
+      workingDraft.missingFields = recomputeCreateMissingFields({
+        date: workingDraft.resolvedDate || workingDraft.dateExpression,
+        hours: workingDraft.hours,
+        projectHint: workingDraft.projectHint,
+        resolvedProjectId: workingDraft.resolvedProjectId,
+        taskHint: workingDraft.taskHint,
+        resolvedTaskId: workingDraft.resolvedTaskId,
       });
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: outcome.candidateResolution,
+        modelClassificationOverridden: Boolean(
+          outcome.modelClassificationOverridden
+        ),
+        appliedField: merged.appliedField,
+        resolutionOutcome: 'resolved',
+      });
+    } else if (outcome.kind === 'clarify_with_hint') {
+      const merged = applyDraftMerge(intent, options.draft, outcome.resolution, {
+        mergeReason: outcome.reason,
+      });
+      workingDraft = {
+        ...options.draft,
+        ...merged.draftPatch,
+        lastClarificationField: outcome.targetField,
+        lastClarificationReason: outcome.candidateResolution,
+        clarificationCount: (options.draft.clarificationCount ?? 0) + 1,
+        lastUserAnswerNorm: normalizeAnswerKey(userMessage),
+        lastResolutionOutcome: outcome.candidateResolution,
+        missingFields: recomputeCreateMissingFields({
+          date:
+            merged.draftPatch.resolvedDate ||
+            options.draft.resolvedDate ||
+            options.draft.dateExpression,
+          hours: merged.draftPatch.hours ?? options.draft.hours,
+          projectHint:
+            merged.draftPatch.projectHint ?? options.draft.projectHint,
+          resolvedProjectId:
+            merged.draftPatch.resolvedProjectId ??
+            options.draft.resolvedProjectId,
+          taskHint: merged.draftPatch.taskHint ?? options.draft.taskHint,
+          resolvedTaskId:
+            merged.draftPatch.resolvedTaskId ?? options.draft.resolvedTaskId,
+        }),
+      };
+      await persistDraft(options, {
+        intent: workingDraft.intent,
+        dateExpression: workingDraft.dateExpression,
+        resolvedDate: workingDraft.resolvedDate,
+        projectHint: workingDraft.projectHint,
+        resolvedProjectId: workingDraft.resolvedProjectId,
+        taskHint: workingDraft.taskHint,
+        resolvedTaskId: workingDraft.resolvedTaskId,
+        hours: workingDraft.hours,
+        missingFields: workingDraft.missingFields,
+        lastClarificationField: workingDraft.lastClarificationField,
+        lastClarificationReason: workingDraft.lastClarificationReason,
+        clarificationCount: workingDraft.clarificationCount,
+        lastUserAnswerNorm: workingDraft.lastUserAnswerNorm,
+        lastResolutionOutcome: workingDraft.lastResolutionOutcome,
+        previous: options.draft,
+      });
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: outcome.candidateResolution,
+        modelClassificationOverridden: Boolean(
+          outcome.modelClassificationOverridden
+        ),
+        appliedField: outcome.targetField,
+        resolutionOutcome: outcome.candidateResolution,
+        DraftMutated: true,
+      });
+      return await clarifyFromTargetResolution(
+        outcome.resolution,
+        outcome.showCandidates,
+        options
+      );
+    } else if (outcome.kind === 'clarify_target') {
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: outcome.candidateResolution,
+        appliedField: null,
+        DraftMutated: false,
+        resolutionOutcome: outcome.candidateResolution,
+      });
+      // Re-clarify from trusted draft — do not mutate slots
+      intent = intentFromTrustedDraft(options.draft, rawIntent.confidence);
+      workingDraft = options.draft;
+    } else if (outcome.kind === 'clarify_missing_list') {
+      logMerge({
+        targetField: null,
+        appliedField: null,
+        DraftMutated: false,
+        missingFields: outcome.missingFields,
+      });
+      const saved = await persistDraft(options, {
+        intent: options.draft.intent,
+        resolvedDate: options.draft.resolvedDate,
+        dateExpression: options.draft.dateExpression,
+        projectHint: options.draft.projectHint,
+        resolvedProjectId: options.draft.resolvedProjectId,
+        taskHint: options.draft.taskHint,
+        resolvedTaskId: options.draft.resolvedTaskId,
+        hours: options.draft.hours,
+        missingFields: outcome.missingFields,
+        lastClarificationField: outcome.missingFields[0],
+        clarificationCount: (options.draft.clarificationCount ?? 0) + 1,
+        previous: options.draft,
+      });
+      return {
+        decision: {
+          action: 'clarify',
+          message: missingFieldsMessage(outcome.missingFields),
+          reason: 'missing_fields',
+        },
+        draftOutcome: saved.outcome,
+        draftStoreAvailable: saved.outcome !== 'draft_store_unavailable',
+      };
+    } else if (outcome.kind === 'dependency') {
+      logMerge({
+        targetField: outcome.targetField,
+        candidateResolution: 'unavailable',
+        DraftMutated: false,
+        resolutionOutcome: 'unavailable',
+      });
+      return {
+        decision: {
+          action: 'clarify',
+          message:
+            'ระบบยังโหลดรายการ Project/Task ไม่ได้ชั่วคราว ลองใหม่อีกครั้งครับ',
+          reason: 'master_data_unavailable',
+        },
+        draftOutcome: 'draft_preserved',
+        typedErrorCode: 'read_failed',
+        draftStoreAvailable: true,
+      };
     } else if (
-      intent.intent === 'general_conversation' ||
-      isUnrelatedGeneralPhrase(userMessage) ||
-      merge.reason === 'unrelated_general_phrase' ||
-      merge.reason === 'general_conversation'
+      outcome.kind === 'general' ||
+      outcome.kind === 'explicit_cancel' ||
+      outcome.kind === 'empty'
     ) {
-      // Preserve incomplete draft — do not clear, do not mutate
+      if (outcome.kind === 'explicit_cancel') {
+        // handled earlier by isExplicitDraftCancelPhrase — keep as safety
+        const cleared = await clearDraft(options);
+        return {
+          decision: {
+            action: 'clarify',
+            message: DRAFT_CANCELLED_MESSAGE,
+            reason: 'intent_draft_cancelled',
+          },
+          draftOutcome: cleared?.outcome ?? 'draft_cleared',
+        };
+      }
+      logMerge({
+        targetField:
+          outcome.kind === 'general' ? outcome.targetField ?? null : null,
+        candidateResolution:
+          outcome.kind === 'general' ? outcome.candidateResolution : undefined,
+        DraftMutated: false,
+        appliedField: null,
+      });
       return {
         decision: { action: 'none', reason: 'general_conversation' },
         draftOutcome: 'draft_preserved',
         draftStoreAvailable: true,
       };
-    } else if (
-      intent.intent === 'unknown' &&
-      !looksLikeBusinessTimesheetText(userMessage)
-    ) {
+    } else if (outcome.kind === 'intent_mismatch') {
+      logMerge({ DraftMutated: false, appliedField: null });
       return {
-        decision: { action: 'none', reason: 'unknown_intent' },
+        decision: {
+          action: 'clarify',
+          message:
+            'คำขอนี้ต่างจากรายการที่ค้างไว้ครับ ถ้าต้องการเริ่มใหม่ให้ยกเลิกคำขอก่อน หรือส่งรายละเอียดครบในข้อความเดียว',
+          reason: 'intent_mismatch',
+        },
         draftOutcome: 'draft_preserved',
       };
+    } else if (outcome.kind === 'no_merge') {
+      logMerge({ DraftMutated: false, appliedField: null });
+      if (
+        intent.intent === 'unknown' &&
+        !looksLikeBusinessTimesheetText(userMessage)
+      ) {
+        return {
+          decision: { action: 'none', reason: 'unknown_intent' },
+          draftOutcome: 'draft_preserved',
+        };
+      }
+      // fall through — may replace draft with new write intent
     }
-    // else: new timesheet intent may replace draft via normal create path
   }
+
+  // Use working draft (possibly patched) for create enforcement
+  const enforceOptions: EnforceIntentOptions = {
+    ...options,
+    draft: workingDraft,
+  };
 
   logEnforce({
     message: 'intent_enforcement',
@@ -525,17 +759,17 @@ export async function enforceStructuredIntentDetailed(
     }
 
     case 'create_timesheet_entry': {
-      const created = await enforceCreate(intent, options, now);
+      const created = await enforceCreate(intent, enforceOptions, now);
       return { ...created, draftOutcome: created.draftOutcome ?? draftOutcome };
     }
 
     case 'update_timesheet_entry': {
-      const updated = await enforceUpdate(intent, options, now);
+      const updated = await enforceUpdate(intent, enforceOptions, now);
       return { ...updated, draftOutcome: updated.draftOutcome ?? draftOutcome };
     }
 
     case 'delete_timesheet_entry': {
-      const deleted = await enforceDelete(intent, options, now);
+      const deleted = await enforceDelete(intent, enforceOptions, now);
       return { ...deleted, draftOutcome: deleted.draftOutcome ?? draftOutcome };
     }
 

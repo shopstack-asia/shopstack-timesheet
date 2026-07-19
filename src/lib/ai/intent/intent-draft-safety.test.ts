@@ -425,8 +425,12 @@ describe('follow-up merge semantics', () => {
         refersToPrevious: true,
       }),
       draft,
-      undefined,
-      { userMessage: 'PM' }
+      {
+        status: 'resolved',
+        targetField: 'task',
+        taskHint: 'PM',
+        resolvedTaskId: 'T-PM',
+      }
     );
     expect(merged.intent.intent).toBe('create_timesheet_entry');
     expect(merged.intent.projectHint).toBe('RMS');

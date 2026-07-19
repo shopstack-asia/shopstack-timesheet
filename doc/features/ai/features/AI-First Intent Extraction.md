@@ -58,46 +58,46 @@ timesheet:intent-draft:{encodeURIComponent(conversationId)}:{encodeURIComponent(
 - Distinct from pending write confirmations (`timesheet:pending-change:*`).
 - Never stores employeeId / email / Zoho identity.
 
-## Follow-up merge rules
+## Follow-up merge rules (deterministic state machine)
 
-Merge with an existing draft when at least one is true:
+The AI model proposes semantic intent. Deterministic code decides whether a message continues an Intent Draft, which single slot is targeted, and whether to merge, clarify, preserve the Draft, or treat the message as general conversation.
 
-1. Extractor returns `refersToPrevious=true`
-2. Message deterministically matches a missing field (hours / date / Project / Task — including unresolved hints so enforcement can show candidates)
-3. Explicit continue phrase (e.g. ต่อจากเมื่อกี้)
-4. Same write intent with new slot values
-5. **Structural follow-up:** active draft + outstanding slot(s) + short plausible answer that is not general chat or cancel (does **not** depend only on the model’s `refersToPrevious`)
+**Target selection** (trusted Draft only — never model `missingFields`):
 
-When a single slot is outstanding (e.g. only `task`), short answers such as `PM`, `Project Manager`, or `RMS เป็น PM` merge into that slot even if canonical resolve has not succeeded yet. Enforcement then resolves or returns a targeted not-found / ambiguous list.
+1. Exactly one primary field in `draft.missingFields` → that field
+2. Else `draft.lastClarificationField` if still missing → that field
+3. Else no safe target (never silently multi-merge)
 
-**Trusted slot protection (strict target-only):** During a targeted clarification, **exactly one slot is mutable**. Every non-target Draft slot and resolved ID remains authoritative regardless of additional fields proposed by the model (including multi-field adversarial extractor output).
+Primary fields: `date` | `project` | `task` | `hours`
 
-`applyDraftMerge`:
+**Decision order:**
 
-1. Starts exclusively from trusted Draft values.
-2. Determines target via `fill.matchedField` → single primary missing field → `lastClarificationField` when still missing.
-3. Updates **only** that target (wrong-slot remap allowed into the target only, e.g. lone `projectHint: "PM"` → `taskHint` while Project stays `RMS` / `P-RMS`).
-4. Never treats multiple populated model fields as an explicit multi-slot correction.
-5. Explicit multi-field correction is a **separate** merge mode (not implemented in this path; if uncertain, keep clarifying the outstanding slot).
+1. Empty message → preserve Draft (`empty_message`)
+2. Explicit Draft cancellation → clear Draft (`explicit_cancel`)
+3. Known unrelated phrase (conservative safety layer) without continuation → general (`unrelated_general_phrase`)
+4. Resolve target from Draft; if none → general / `no_merge_signal` / list missing fields (same write) — never multi-merge
+5. Evaluate raw user answer for that target via Bangkok date/hours parsers or **canonical Project/Task masters**
+6. Apply model-intent × resolution table (below)
 
-Deterministic `MissingFieldFill` is a discriminated union (exactly one slot value). Model `missingFields` are **never** final — enforcement recomputes them after every merge.
+**Continuation signal** = `refersToPrevious` OR explicit continue phrase.
 
-**Do not** erase non-target resolved Project/Task IDs. Clear and re-resolve only the target hint’s ID after canonical master resolution succeeds.
+| Model / signal | resolved | ambiguous | not_found | invalid | unavailable |
+|----------------|----------|-----------|-----------|---------|-------------|
+| Continuation | merge target | hint + candidates | hint + candidates | re-clarify target | dependency |
+| `general_conversation` | override merge | override + candidates | **general** (no Draft change, no candidates) | **general** | dependency |
+| `unknown` | override merge | hint + candidates | re-clarify target (no generic question) | re-clarify | dependency |
+| Same write intent | merge target | hint + candidates | hint + candidates (when clear answer) | re-clarify | dependency |
+| Different write | `intent_mismatch` (unless continuation) | — | — | — | — |
 
-When a Draft has an **explicit outstanding clarification slot**, a plausible structural answer is evaluated against that slot **before** accepting the model’s `general_conversation` or `unknown` classification. Known unrelated phrases (`ขอบคุณ`, `เล่าเรื่องแมว`, …) and explicit cancellation remain protected and never fill slots.
+Canonical resolution is the evidence that a short Task/Project answer is a valid follow-up. Message length alone is not evidence.
 
-Decision order in `decideDraftMerge`:
+**General + not_found + no continuation = general conversation** (Draft unchanged). Do not expand `UNRELATED_GENERAL_RE` into the primary NLU.
 
-1. Non-empty message
-2. Explicit Draft cancellation
-3. Known unrelated/general phrases
-4–5. Outstanding-slot deterministic / structural match (may set reason `structural_follow_up_overrode_general`)
-6. `refersToPrevious` / explicit continue
-7. Same write intent with slots
-8. Accept model `general_conversation`
-9. `no_merge_signal`
+**Explicit continuation + not_found = targeted business clarification** with canonical candidates.
 
-If the model says general/unknown but the message does not match hours/date constraints for an outstanding slot (e.g. `PM` while hours is missing), return `outstanding_slot_unmatched` and re-clarify that slot — do not answer as general chat.
+**Target-only mutation:** `applyDraftMerge` copies trusted Draft state and applies only `TargetResolution.targetField`. Non-target slots and resolved IDs stay authoritative. Model multi-field output is ignored. Model `missingFields` are never final.
+
+**Dependency failure:** resolver throw → `master_data_unavailable` / `read_failed`, Draft preserved, no prepare, no identity wording.
 
 If extraction fails technically, do **not** treat the message as general conversation — return the controlled extraction-failure response.
 

@@ -35,16 +35,21 @@ export {
 export {
   decideDraftMerge,
   applyDraftMerge,
+  selectTargetField,
   outstandingMergeTarget,
-  matchOutstandingSlot,
+  evaluateTargetAnswer,
   isExplicitDraftCancelPhrase,
+  isExplicitDraftContinuePhrase,
   isUnrelatedGeneralPhrase,
   recomputeCreateMissingFields,
-  structuralFillForOutstandingSlot,
+  parseHoursForOutstandingSlot,
+  extractTaskHintFromFollowUp,
   normalizeAnswerKey,
-  type MissingFieldFill,
+  type TargetResolution,
+  type DraftMergeOutcome,
   type DraftMergeResult,
   type DraftMergeMode,
+  type MergeDecision,
 } from '@/lib/ai/intent/follow-up';
 export { enrichWriteIntentSlots } from '@/lib/ai/intent/slot-enrich';
 export {

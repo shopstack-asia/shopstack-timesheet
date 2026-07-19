@@ -2,7 +2,8 @@
 
 | Doc | Description |
 |-----|-------------|
-| [AI-First Intent Extraction.md](./features/AI-First%20Intent%20Extraction.md) | Structured NLU → deterministic enforce → tools; Intent Draft merge, targeted clarification, loop prevention |
+| [AI-First Intent Extraction.md](./features/AI-First%20Intent%20Extraction.md) | Structured NLU → deterministic Draft state machine → tools; target-only merge; general+not_found=general |
+
 
 | [AI Conversation Architecture.md](./features/AI%20Conversation%20Architecture.md) | Modules and boundaries |
 | [AI Prompt Strategy.md](./features/AI%20Prompt%20Strategy.md) | System prompt and extensibility |
