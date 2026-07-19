@@ -5,6 +5,11 @@ import {
   EVENT_APP_MENTION,
   EVENT_MESSAGE,
 } from '@/lib/slack/constants';
+import { EVENT_APP_HOME_OPENED } from '@/lib/slack/app-home/constants';
+import {
+  handleAppHomeOpened,
+  type AppHomeHandlerDeps,
+} from '@/lib/slack/app-home/handler';
 import { handleAppMention } from '@/lib/slack/events/app-mention';
 import { handleDirectMessage } from '@/lib/slack/events/direct-message';
 import { shouldIgnoreSlackMessage } from '@/lib/slack/events/handler-utils';
@@ -13,7 +18,10 @@ import type { SlackPostMessageClient } from '@/lib/slack/responses';
 import type { SlackEventEnvelope } from '@/lib/slack/types';
 
 export type DispatchResult =
-  | { handled: true; route: 'app_mention' | 'message.im' }
+  | {
+      handled: true;
+      route: 'app_mention' | 'message.im' | 'app_home_opened';
+    }
   | { handled: false; route: 'ignored' | 'bot' | 'workspace_mismatch' };
 
 export type DispatchOptions = {
@@ -26,6 +34,8 @@ export type DispatchOptions = {
   generate?: GenerateResponseFn;
   /** Injected structured intent extractor for tests */
   extractIntent?: ExtractIntentFn;
+  /** App Home handler deps (views client, loaders, dedupe) */
+  appHome?: AppHomeHandlerDeps;
 };
 
 function isDirectMessage(envelope: SlackEventEnvelope): boolean {
@@ -73,12 +83,22 @@ export async function dispatchSlackEvent(
     return { handled: false, route: 'ignored' };
   }
 
+  const eventType = envelope.event.type;
+
+  // App Home — before message ignore rules (no bot_id/subtype expected)
+  if (eventType === EVENT_APP_HOME_OPENED) {
+    await handleAppHomeOpened(
+      { requestId: options.requestId, envelope },
+      options.appHome ?? {}
+    );
+    return { handled: true, route: 'app_home_opened' };
+  }
+
   if (shouldIgnoreSlackMessage(envelope.event)) {
     log.debug('bot/subtype event — ignored');
     return { handled: false, route: 'bot' };
   }
 
-  const eventType = envelope.event.type;
   const handlerDeps = {
     client: options.client,
     generate: options.generate,
