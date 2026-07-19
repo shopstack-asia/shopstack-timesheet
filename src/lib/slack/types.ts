@@ -31,6 +31,8 @@ export interface SlackEventBase {
   subtype?: string;
   team?: string;
   client_msg_id?: string;
+  /** app_home_opened: home | messages | about */
+  tab?: string;
 }
 
 export interface SlackAppMention extends SlackEventBase {

@@ -66,8 +66,8 @@ Generate secrets: `openssl rand -base64 32` for `NEXTAUTH_SECRET` and `CRON_SECR
 | `SLACK_INTERACTIONS_PATH` | Optional | Interactivity Request URL path | `/api/slack/interactions` |
 | `SLACK_COMMANDS_PATH` | Optional | Slash commands Request URL path | `/api/slack/commands` |
 | `SLACK_ENABLE_SOCKET_MODE` | Optional | `true` / `false` | `false` |
-| `SLACK_ENABLE_APP_HOME` | Optional | `true` / `false` | `true` |
-| `SLACK_ALLOWED_WORKSPACE` | Optional | Restrict to Slack team/workspace id | — |
+| `SLACK_ENABLE_APP_HOME` | Optional | Enable `app_home_opened` Home dashboard (`true` / `false`) | `true` |
+| `SLACK_ALLOWED_WORKSPACE` | Optional (recommended in production) | Exact Slack Team ID; App Home events/actions from other workspaces are ignored | — |
 | `SLACK_LOG_LEVEL` | Optional | `debug` \| `info` \| `warn` \| `error` | `info` |
 | `SLACK_VALIDATE_ON_STARTUP` | Optional | `true` = always validate Slack env at process start | unset |
 

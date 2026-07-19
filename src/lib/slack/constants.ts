@@ -13,5 +13,6 @@ export const PAYLOAD_EVENT_CALLBACK = 'event_callback';
 
 export const EVENT_APP_MENTION = 'app_mention';
 export const EVENT_MESSAGE = 'message';
+export { EVENT_APP_HOME_OPENED } from '@/lib/slack/app-home/constants';
 
 export const CHANNEL_TYPE_IM = 'im';
