@@ -39,10 +39,10 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | NextAuth + middleware | `auth`, `layout` | Matcher: `/timesheet`, `/api/timesheet`, `/api/master`, `/api/staff` |
 | Cron bearer secret | `reminders`, `holidays` | `Authorization: Bearer ${CRON_SECRET}` |
 | Theme / view prefs | `layout` | `localStorage` keys `theme`, `timesheetViewMode` |
-| Slack Timesheet AI Agent | `slack`, `timesheet` | Events foundation: `src/lib/slack/*`, `src/app/api/slack/events`; AI agent (later wiring): `src/lib/timesheet-agent`; docs: `doc/features/slack/`, `docs/ai-implementation/` |
+| Slack Timesheet AI Agent | `slack`, `timesheet`, `ai` | Events foundation: `src/lib/slack/*`; AI-first NLU: `src/lib/ai/intent/*` (flag `AI_INTENT_EXTRACTION_ENABLED`); Decision Engine fallback: `src/lib/ai/decision-engine.ts` |
 | Tool Execution Foundation | `tools`, `ai`, `slack` | Vendor-agnostic tools: `src/lib/tools/*`; Conversation tool loop: `src/lib/ai/conversation.ts`; docs: `doc/features/tools/` |
 | Business API Foundation | `business`, `tools` | Timesheet API HTTP client: `src/lib/business/*`; docs: `doc/features/business/` |
-| Business Tools (read + confirmation-gated write) | `business-tools`, `tools`, `ai`, `timesheet` | Read tools + prepare/confirm/cancel write tools; pending store in `src/lib/timesheet/write/`; decision engine: `src/lib/ai/decision-engine.ts` + `write-decision.ts` |
+| Business Tools (read + confirmation-gated write) | `business-tools`, `tools`, `ai`, `timesheet` | Read tools + prepare/confirm/cancel write tools; pending store in `src/lib/timesheet/write/`; decision: `src/lib/ai/intent/` + `decision-engine.ts` + `write-decision.ts` |
 
 ### Source Code References
 

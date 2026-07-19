@@ -10,6 +10,21 @@ function norm(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+/** Initials of whitespace/punctuation-separated words (e.g. Project Management → pm). */
+function wordInitials(s: string): string {
+  return norm(s)
+    .split(/[\s/_().-]+/)
+    .filter(Boolean)
+    .map((w) => w[0]!)
+    .join('');
+}
+
+function uniqueOrAmbiguous<T>(matches: T[]): MasterResolveResult<T> {
+  if (matches.length === 1) return { status: 'resolved', value: matches[0]! };
+  if (matches.length > 1) return { status: 'ambiguous', candidates: matches };
+  return { status: 'not_found' };
+}
+
 export async function resolveProject(input: {
   projectId?: string;
   projectName?: string;
@@ -35,6 +50,17 @@ export async function resolveProject(input: {
   if (exact.length === 1) return { status: 'resolved', value: exact[0]! };
   if (exact.length > 1) return { status: 'ambiguous', candidates: exact };
 
+  // Unique abbreviation / initials (RMS, short codes as hints)
+  const alias = projects.filter(
+    (p) =>
+      wordInitials(p.ProjectName) === n ||
+      wordInitials(p.ProjectCode) === n ||
+      (n.length >= 2 && norm(p.ProjectCode).startsWith(n)) ||
+      (n.length >= 2 && norm(p.ProjectName).startsWith(n))
+  );
+  const aliasResult = uniqueOrAmbiguous(alias);
+  if (aliasResult.status !== 'not_found') return aliasResult;
+
   const fuzzy = projects.filter(
     (p) =>
       norm(p.ProjectName).includes(n) ||
@@ -42,9 +68,7 @@ export async function resolveProject(input: {
       n.includes(norm(p.ProjectName)) ||
       norm(p.ProjectClient).includes(n)
   );
-  if (fuzzy.length === 1) return { status: 'resolved', value: fuzzy[0]! };
-  if (fuzzy.length > 1) return { status: 'ambiguous', candidates: fuzzy };
-  return { status: 'not_found' };
+  return uniqueOrAmbiguous(fuzzy);
 }
 
 export async function resolveTask(input: {
@@ -64,11 +88,23 @@ export async function resolveTask(input: {
   const exact = tasks.filter((t) => norm(t.Task) === n);
   if (exact.length === 1) return { status: 'resolved', value: exact[0]! };
   if (exact.length > 1) return { status: 'ambiguous', candidates: exact };
-  const fuzzy = tasks.filter(
-    (t) => norm(t.Task).includes(n) || n.includes(norm(t.Task))
+
+  // Unique abbreviation (PM → Project Management, Dev → Development)
+  const alias = tasks.filter(
+    (t) =>
+      wordInitials(t.Task) === n ||
+      (n.length >= 2 && norm(t.Task).startsWith(n))
   );
-  if (fuzzy.length === 1) return { status: 'resolved', value: fuzzy[0]! };
-  if (fuzzy.length > 1) return { status: 'ambiguous', candidates: fuzzy };
+  const aliasResult = uniqueOrAmbiguous(alias);
+  if (aliasResult.status !== 'not_found') return aliasResult;
+
+  // Conservative fuzzy: only when hint length >= 3 to avoid "pm" substring noise
+  if (n.length >= 3) {
+    const fuzzy = tasks.filter(
+      (t) => norm(t.Task).includes(n) || n.includes(norm(t.Task))
+    );
+    return uniqueOrAmbiguous(fuzzy);
+  }
   return { status: 'not_found' };
 }
 

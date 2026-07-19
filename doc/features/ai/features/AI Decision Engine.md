@@ -2,9 +2,13 @@
 
 ### Overview
 
-Deterministic router that maps user intent to Business Tools or clarification — never an LLM classifier.
+Deterministic router that maps user intent to Business Tools or clarification.
 
-Recognized and potential employee-business requests must route to a Business Tool or clarification. Clearly general, conceptual, instructional, programming, news, weather, and external-topic questions remain direct-answer requests.
+When `AI_INTENT_EXTRACTION_ENABLED=true`, primary NLU is **AI structured intent extraction** ([AI-First Intent Extraction.md](./AI-First%20Intent%20Extraction.md)). This Decision Engine remains:
+
+- The **flag-off** path
+- The **technical fallback** if structured extraction fails
+- The home of bare confirm/cancel, ISO/range validation helpers used by both paths
 
 Exact-tool enforcement on round 0 remains mandatory via `enforceRequiredBusinessTool()`.
 

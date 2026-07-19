@@ -270,12 +270,18 @@ export function createOpenAIClient(deps?: {
       const body: Record<string, unknown> = {
         model: config.model,
         messages: input.messages,
-        temperature: config.temperature,
+        temperature:
+          typeof input.temperature === 'number'
+            ? input.temperature
+            : config.temperature,
         max_tokens: config.maxTokens,
       };
       if (input.tools && input.tools.length > 0) {
         body.tools = input.tools;
         body.tool_choice = 'auto';
+      }
+      if (input.responseFormat === 'json_object') {
+        body.response_format = { type: 'json_object' };
       }
 
       let attempt = 0;
