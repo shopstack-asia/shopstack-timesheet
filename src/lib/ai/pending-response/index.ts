@@ -38,6 +38,7 @@ export {
   loadOwnedPendingChange,
   type LoadOwnedPendingInput,
   type LoadOwnedPendingResult,
+  type LoadOwnedPendingNoneReason,
 } from '@/lib/ai/pending-response/load-owned';
 export {
   resolveOwnedPendingSelection,
@@ -66,6 +67,10 @@ export {
   setDefaultSelectedPendingStore,
   type SelectedPendingStore,
 } from '@/lib/ai/pending-response/selection-store';
+export {
+  resolveSelectionAfterToolResult,
+  type SelectionToolOutcome,
+} from '@/lib/ai/pending-response/selection-lifecycle';
 export {
   gateCorrectionAfterCancel,
   type CorrectionCancelGate,

@@ -10,7 +10,7 @@ When an **owned** `PendingTimesheetChange` exists, the user’s next message is 
 User message
   → resolve Conversation Context
   → load confirmable owned pending (slackUserId + conversationId + employeeId, status=pending, not expired)
-  → if none: normal AI-first intent path (unless a prior selected target expired → controlled expiry message)
+  → if none: if trusted employeeId present, clear stale selected target when it is no longer confirmable; otherwise normal AI-first intent path
   → if multiple owned:
        load selected-pending target (navigation state)
        if valid selected → semantic extraction against that proposal only

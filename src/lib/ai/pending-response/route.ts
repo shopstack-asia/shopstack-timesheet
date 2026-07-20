@@ -47,8 +47,6 @@ export type RoutePendingResponseInput = {
   getContext?: LoadOwnedPendingInput['getContext'];
   nowMs?: number;
   selectionStore?: SelectedPendingStore;
-  /** Employee id when already known (avoids double context load in tests). */
-  employeeId?: string;
 };
 
 export type RoutePendingResponseResult =
@@ -435,79 +433,71 @@ export async function routePendingResponse(
     nowMs,
   });
 
-  if (ownedResult.status === 'store_unavailable') {
-    logPendingResponseAudit({
-      requestId: input.requestId,
-      eventId: input.eventId,
-      conversationId,
-      pendingResponseOutcome: 'store_unavailable',
-      enforcementOutcome: 'clarify_extractor_failure',
-    });
-    return { handled: false, reason: 'no_pending' };
-  }
-
-  if (ownedResult.status === 'context_unavailable') {
-    await selectionStore.clearAll(conversationId, slackUserId);
-    logPendingResponseAudit({
-      requestId: input.requestId,
-      eventId: input.eventId,
-      conversationId,
-      pendingResponseOutcome: 'ownership_denied',
-      enforcementOutcome: 'ownership_denied',
-    });
-    return {
-      handled: true,
-      decision: {
-        action: 'clarify',
-        message:
-          'ยังไม่สามารถยืนยันตัวตนเพื่อจัดการรายการที่รออยู่ได้ครับ กรุณาลองใหม่อีกครั้ง',
-        reason: 'pending_context_unavailable',
-      },
-      enforcement: {
+  switch (ownedResult.status) {
+    case 'store_unavailable': {
+      logPendingResponseAudit({
+        requestId: input.requestId,
+        eventId: input.eventId,
+        conversationId,
+        pendingResponseOutcome: 'store_unavailable',
+        enforcementOutcome: 'clarify_extractor_failure',
+      });
+      return { handled: false, reason: 'no_pending' };
+    }
+    case 'context_unavailable': {
+      await selectionStore.clearAll(conversationId, slackUserId);
+      logPendingResponseAudit({
+        requestId: input.requestId,
+        eventId: input.eventId,
+        conversationId,
+        pendingResponseOutcome: 'ownership_denied',
+        enforcementOutcome: 'ownership_denied',
+      });
+      return {
+        handled: true,
         decision: {
           action: 'clarify',
           message:
             'ยังไม่สามารถยืนยันตัวตนเพื่อจัดการรายการที่รออยู่ได้ครับ กรุณาลองใหม่อีกครั้ง',
           reason: 'pending_context_unavailable',
         },
-        enforcementOutcome: 'ownership_denied',
-        confidenceBand: 'none',
-      },
-      clearSelectionNow: true,
-    };
-  }
-
-  if (ownedResult.status === 'none') {
-    const employeeId = input.employeeId?.trim() || ownedResult.employeeId;
-    if (employeeId) {
-      const prior = await selectionStore.getSelected(
-        conversationId,
-        slackUserId,
-        employeeId,
-        nowMs
-      );
-      if (prior.outcome === 'found' || prior.outcome === 'expired') {
-        await selectionStore.clearAll(conversationId, slackUserId);
-        logPendingResponseAudit({
-          requestId: input.requestId,
-          eventId: input.eventId,
-          conversationId,
-          pendingResponseOutcome: 'semantic_handled',
-          enforcementOutcome: 'selection_expired',
-        });
-        return selectionExpiredResult(userMessage);
-      }
-      if (prior.outcome === 'unavailable') {
-        return {
-          handled: true,
+        enforcement: {
           decision: {
             action: 'clarify',
-            message: looksThai(userMessage)
-              ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
-              : 'Timesheet confirmation is temporarily unavailable. Please try again.',
-            reason: 'selection_store_unavailable',
+            message:
+              'ยังไม่สามารถยืนยันตัวตนเพื่อจัดการรายการที่รออยู่ได้ครับ กรุณาลองใหม่อีกครั้ง',
+            reason: 'pending_context_unavailable',
           },
-          enforcement: {
+          enforcementOutcome: 'ownership_denied',
+          confidenceBand: 'none',
+        },
+        clearSelectionNow: true,
+      };
+    }
+    case 'none': {
+      // employeeId is present only when Conversation Context resolved successfully.
+      if (typeof ownedResult.employeeId === 'string' && ownedResult.employeeId) {
+        const employeeId = ownedResult.employeeId;
+        const prior = await selectionStore.getSelected(
+          conversationId,
+          slackUserId,
+          employeeId,
+          nowMs
+        );
+        if (prior.outcome === 'found' || prior.outcome === 'expired') {
+          await selectionStore.clearAll(conversationId, slackUserId);
+          logPendingResponseAudit({
+            requestId: input.requestId,
+            eventId: input.eventId,
+            conversationId,
+            pendingResponseOutcome: 'semantic_handled',
+            enforcementOutcome: 'selection_expired',
+          });
+          return selectionExpiredResult(userMessage);
+        }
+        if (prior.outcome === 'unavailable') {
+          return {
+            handled: true,
             decision: {
               action: 'clarify',
               message: looksThai(userMessage)
@@ -515,25 +505,43 @@ export async function routePendingResponse(
                 : 'Timesheet confirmation is temporarily unavailable. Please try again.',
               reason: 'selection_store_unavailable',
             },
-            enforcementOutcome: 'clarify_extractor_failure',
-            confidenceBand: 'none',
-          },
-        };
+            enforcement: {
+              decision: {
+                action: 'clarify',
+                message: looksThai(userMessage)
+                  ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+                  : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+                reason: 'selection_store_unavailable',
+              },
+              enforcementOutcome: 'clarify_extractor_failure',
+              confidenceBand: 'none',
+            },
+          };
+        }
+        // Trusted identity, no confirmable pending, no selected target → clear leftovers
+        await selectionStore.clearAll(conversationId, slackUserId);
       }
+      // No trusted employeeId: do not validate selected ownership; no pending action.
+      logPendingResponseAudit({
+        requestId: input.requestId,
+        eventId: input.eventId,
+        conversationId,
+        pendingResponseOutcome: 'no_pending',
+        enforcementOutcome: 'no_owned_pending',
+      });
+      return { handled: false, reason: 'no_pending' };
     }
-    await selectionStore.clearAll(conversationId, slackUserId);
-    logPendingResponseAudit({
-      requestId: input.requestId,
-      eventId: input.eventId,
-      conversationId,
-      pendingResponseOutcome: 'no_pending',
-      enforcementOutcome: 'no_owned_pending',
-    });
-    return { handled: false, reason: 'no_pending' };
+    case 'owned':
+    case 'multiple_owned':
+      break;
+    default: {
+      const _exhaustive: never = ownedResult;
+      void _exhaustive;
+      return { handled: false, reason: 'no_pending' };
+    }
   }
 
-  const employeeId =
-    input.employeeId?.trim() || ownedResult.employeeId;
+  const employeeId = ownedResult.employeeId;
   const candidates: OwnedPendingRef[] =
     ownedResult.status === 'owned'
       ? [ownedResult.pending]

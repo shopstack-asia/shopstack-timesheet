@@ -13,9 +13,21 @@ import {
 } from '@/lib/timesheet/write/pending-store';
 import type { PendingTimesheetChange } from '@/lib/timesheet/write/pending-types';
 
+export type LoadOwnedPendingNoneReason =
+  | 'no_conversation_identity'
+  | 'no_confirmable_pending';
+
 export type LoadOwnedPendingResult =
-  | { status: 'none'; employeeId?: string }
-  | { status: 'owned'; pending: OwnedPendingRef; employeeId: string }
+  | {
+      status: 'none';
+      employeeId?: string;
+      reason: LoadOwnedPendingNoneReason;
+    }
+  | {
+      status: 'owned';
+      pending: OwnedPendingRef;
+      employeeId: string;
+    }
   | {
       status: 'multiple_owned';
       pending: OwnedPendingRef[];
@@ -76,7 +88,7 @@ export async function loadOwnedPendingChange(
   const conversationId = input.conversationId?.trim();
   const slackUserId = input.slackUserId?.trim();
   if (!conversationId || !slackUserId) {
-    return { status: 'none' };
+    return { status: 'none', reason: 'no_conversation_identity' };
   }
 
   const store = input.pendingStore ?? getDefaultPendingTimesheetChangeStore();
@@ -103,7 +115,7 @@ export async function loadOwnedPendingChange(
           new Date(c.expiresAt).getTime() > nowMs
       );
       if (confirmableForUser.length === 0) {
-        return { status: 'none' };
+        return { status: 'none', reason: 'no_confirmable_pending' };
       }
     } catch (storeError) {
       if (
@@ -124,7 +136,11 @@ export async function loadOwnedPendingChange(
     );
 
     if (owned.length === 0) {
-      return { status: 'none', employeeId: convEmployeeId };
+      return {
+        status: 'none',
+        employeeId: convEmployeeId,
+        reason: 'no_confirmable_pending',
+      };
     }
 
     if (owned.length === 1) {

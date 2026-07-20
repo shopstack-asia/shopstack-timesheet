@@ -10,6 +10,7 @@ import {
 import {
   routePendingResponse,
   gateCorrectionAfterCancel,
+  resolveSelectionAfterToolResult,
   type ExtractPendingResponseFn,
   type RoutePendingResponseInput,
 } from '@/lib/ai/pending-response';
@@ -308,8 +309,37 @@ export async function runConversation(
             toolRounds: 0,
           };
         }
-        // Old selection cleared once replacement preparation is authorized
-        await selectionStore.clearAll(conversationId, slackUserId);
+        // Old selection cleared only after authoritative cancel === cancelled
+        try {
+          const cleared = await selectionStore.clearAll(
+            conversationId,
+            slackUserId
+          );
+          if (cleared.outcome === 'unavailable') {
+            console.log(
+              JSON.stringify({
+                scope: 'ai',
+                level: 'warn',
+                message:
+                  'selection cleanup unavailable after correction cancel',
+                requestId: input.requestId,
+                eventId: input.eventId,
+                ts: new Date().toISOString(),
+              })
+            );
+          }
+        } catch {
+          console.log(
+            JSON.stringify({
+              scope: 'ai',
+              level: 'warn',
+              message: 'selection cleanup failed after correction cancel',
+              requestId: input.requestId,
+              eventId: input.eventId,
+              ts: new Date().toISOString(),
+            })
+          );
+        }
         clearSelectionAfterTools = false;
       } catch {
         return {
@@ -612,11 +642,61 @@ export async function runConversation(
         if (
           clearSelectionAfterTools &&
           (call.function.name === 'confirm_timesheet_change' ||
-            call.function.name === 'cancel_timesheet_change') &&
-          toolResult.success
+            call.function.name === 'cancel_timesheet_change')
         ) {
-          await selectionStore.clearAll(conversationId, slackUserId);
-          clearSelectionAfterTools = false;
+          const lifecycle = resolveSelectionAfterToolResult({
+            toolName: call.function.name,
+            toolResult,
+          });
+          if (
+            lifecycle.action === 'clear' ||
+            lifecycle.action === 'clear_stale'
+          ) {
+            try {
+              const cleared = await selectionStore.clearAll(
+                conversationId,
+                slackUserId
+              );
+              if (cleared.outcome === 'unavailable') {
+                console.log(
+                  JSON.stringify({
+                    scope: 'ai',
+                    level: 'warn',
+                    message: 'selection cleanup unavailable after authoritative tool outcome',
+                    requestId: input.requestId,
+                    eventId: input.eventId,
+                    reason: lifecycle.reason,
+                    ts: new Date().toISOString(),
+                  })
+                );
+              }
+            } catch {
+              console.log(
+                JSON.stringify({
+                  scope: 'ai',
+                  level: 'warn',
+                  message: 'selection cleanup failed after authoritative tool outcome',
+                  requestId: input.requestId,
+                  eventId: input.eventId,
+                  reason: lifecycle.reason,
+                  ts: new Date().toISOString(),
+                })
+              );
+            }
+            clearSelectionAfterTools = false;
+          } else if (lifecycle.action === 'preserve') {
+            console.log(
+              JSON.stringify({
+                scope: 'ai',
+                level: 'info',
+                message: 'selection preserved after tool outcome',
+                requestId: input.requestId,
+                eventId: input.eventId,
+                reason: lifecycle.reason,
+                ts: new Date().toISOString(),
+              })
+            );
+          }
         }
 
         messages.push({
