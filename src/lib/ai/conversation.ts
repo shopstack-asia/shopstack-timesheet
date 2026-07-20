@@ -9,6 +9,7 @@ import {
 } from '@/lib/ai/intent';
 import {
   routePendingResponse,
+  gateCorrectionAfterCancel,
   type ExtractPendingResponseFn,
   type RoutePendingResponseInput,
 } from '@/lib/ai/pending-response';
@@ -27,10 +28,15 @@ import {
   type ToolRegistry,
   type ToolRouter,
 } from '@/lib/tools';
-import { cancelTimesheetChange } from '@/lib/timesheet/write/cancel';
+import {
+  cancelTimesheetChange,
+  type CancelDeps,
+} from '@/lib/timesheet/write/cancel';
 import { getDefaultPendingTimesheetChangeStore } from '@/lib/timesheet/write/pending-store';
 import { PendingStoreError } from '@/lib/timesheet/write/pending-store';
+import type { CancelTimesheetChangeResult } from '@/lib/timesheet/write/pending-types';
 import { getConversationContext } from '@/lib/conversation/context';
+import type { WriteIdentity } from '@/lib/timesheet/write/prepare';
 
 /** Soft limit for Slack-friendly replies (chars). */
 export const MAX_AI_RESPONSE_CHARS = 3500;
@@ -76,6 +82,12 @@ export type RunConversationDeps = {
   pendingStore?: Parameters<typeof routePendingResponse>[0]['pendingStore'];
   /** Conversation context loader override (tests). */
   getContext?: Parameters<typeof routePendingResponse>[0]['getContext'];
+  /** Injectable cancel for correction supersede race tests. */
+  cancelPendingChange?: (
+    identity: WriteIdentity,
+    confirmationId: string | undefined,
+    deps?: CancelDeps
+  ) => Promise<CancelTimesheetChangeResult>;
 };
 
 function validateResponseText(text: string): string {
@@ -245,7 +257,7 @@ export async function runConversation(
       pendingRoute.enforcement.enforcementOutcome === 'correction_prepare' &&
       pendingRoute.enforcement.correctionPrepare
     ) {
-      // Supersede old proposal safely, then prepare a replacement
+      // Supersede old proposal only after authoritative cancel === cancelled
       try {
         const conv = await (deps?.getContext ?? getConversationContext)({
           conversationId,
@@ -253,7 +265,8 @@ export async function runConversation(
           requestId: input.requestId,
           ensureWorkContext: false,
         });
-        await cancelTimesheetChange(
+        const cancelFn = deps?.cancelPendingChange ?? cancelTimesheetChange;
+        const cancelResult = await cancelFn(
           {
             employeeId: conv.employeeId,
             email: conv.slackEmail,
@@ -268,12 +281,20 @@ export async function runConversation(
           pendingRoute.enforcement.correctionPrepare.cancelConfirmationId,
           { pendingStore: deps?.pendingStore }
         );
+        const gate = gateCorrectionAfterCancel(cancelResult, userMessage);
+        if (!gate.proceed) {
+          return {
+            text: gate.message,
+            model: 'pending-response',
+            usedFallback: false,
+            toolRounds: 0,
+          };
+        }
       } catch {
-        // If cancel fails, still do not write the old proposal — clarify
         return {
-          text: pendingRoute.decision.action === 'clarify'
-            ? pendingRoute.decision.message
-            : 'ยังไม่สามารถแทนที่รายการที่รออยู่ได้ครับ กรุณาลองใหม่อีกครั้ง',
+          text: /[\u0E00-\u0E7F]/.test(userMessage)
+            ? 'ยังไม่สามารถแทนที่รายการที่รออยู่ได้ครับ กรุณาลองใหม่อีกครั้ง ยังไม่มีการเตรียมรายการใหม่'
+            : 'Could not replace the pending proposal. Please try again — no replacement was prepared.',
           model: 'pending-response',
           usedFallback: false,
           toolRounds: 0,

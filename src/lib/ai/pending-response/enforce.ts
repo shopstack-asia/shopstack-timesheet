@@ -1,6 +1,6 @@
 import type { BusinessToolDecision } from '@/lib/ai/decision-engine';
 import {
-  PENDING_CONFIRM_CONFIDENCE_THRESHOLD,
+  PENDING_ACTION_CONFIDENCE_THRESHOLD,
   confidenceBand,
   type PendingResponseEnforcementOutcome,
   type PendingResponseExtraction,
@@ -23,13 +23,23 @@ function looksThai(text: string): boolean {
 
 export function pendingClarifyMessage(
   userMessage: string,
-  kind: 'ambiguous' | 'low_confidence' | 'extractor_failure' | 'conflict'
+  kind:
+    | 'ambiguous'
+    | 'low_confidence'
+    | 'extractor_failure'
+    | 'conflict'
+    | 'cancel_vs_correction'
 ): string {
   const th = looksThai(userMessage);
   if (kind === 'extractor_failure') {
     return th
       ? 'ยังไม่สามารถตีความคำตอบของท่านได้ครับ กรุณาตอบอีกครั้งว่าต้องการยืนยัน ยกเลิก หรือแก้ไขรายการที่รออยู่ครับ'
       : 'I couldn’t interpret that reply. Please say whether you want to confirm, cancel, or change the pending Timesheet proposal.';
+  }
+  if (kind === 'cancel_vs_correction') {
+    return th
+      ? 'คำตอบดูเหมือนทั้งยกเลิกและแก้ไขครับ ต้องการยกเลิกรายการที่รออยู่ หรือแก้ไขรายละเอียด (วันที่ Project งาน ชั่วโมง) ครับ?'
+      : 'That sounds like both cancel and a change. Do you want to cancel the pending proposal, or replace it with corrected details?';
   }
   if (kind === 'conflict') {
     return th
@@ -85,17 +95,45 @@ function correctionHasAnyHint(
   );
 }
 
-/**
- * Deterministic safety gates for confirming a pending proposal.
- * Confirmation is forbidden when any conflict / mutation signal is present.
- */
 export function isConfirmAuthorized(
   extraction: PendingResponseExtraction
-): { ok: true } | { ok: false; outcome: PendingResponseEnforcementOutcome } {
+):
+  | { ok: true }
+  | {
+      ok: false;
+      outcome: 'clarify_low_confidence' | 'clarify_conflict';
+    } {
   if (extraction.intent !== 'confirm') {
     return { ok: false, outcome: 'clarify_conflict' };
   }
-  if (extraction.confidence < PENDING_CONFIRM_CONFIDENCE_THRESHOLD) {
+  if (extraction.confidence < PENDING_ACTION_CONFIDENCE_THRESHOLD) {
+    return { ok: false, outcome: 'clarify_low_confidence' };
+  }
+  if (extraction.hasNewMutation) {
+    return { ok: false, outcome: 'clarify_conflict' };
+  }
+  if (extraction.correction !== null) {
+    return { ok: false, outcome: 'clarify_conflict' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Deterministic cancel authorization — same conservative threshold as confirm.
+ * “Cancellation wins” only for clear, high-confidence cancel without mutation signals.
+ */
+export function isCancelAuthorized(
+  extraction: PendingResponseExtraction
+):
+  | { ok: true }
+  | {
+      ok: false;
+      outcome: 'clarify_low_confidence' | 'clarify_conflict';
+    } {
+  if (extraction.intent !== 'cancel') {
+    return { ok: false, outcome: 'clarify_conflict' };
+  }
+  if (extraction.confidence < PENDING_ACTION_CONFIDENCE_THRESHOLD) {
     return { ok: false, outcome: 'clarify_low_confidence' };
   }
   if (extraction.hasNewMutation) {
@@ -111,7 +149,6 @@ export type EnforcePendingResponseResult = {
   decision: BusinessToolDecision;
   enforcementOutcome: PendingResponseEnforcementOutcome;
   confidenceBand: ReturnType<typeof confidenceBand>;
-  /** When correction is complete enough to prepare a replacement. */
   correctionPrepare?: {
     toolName:
       | 'prepare_create_timesheet_entry'
@@ -122,10 +159,6 @@ export type EnforcePendingResponseResult = {
   };
 };
 
-/**
- * Map validated semantic extraction → the only permitted application action.
- * Never trusts model-supplied confirmation IDs or tool names.
- */
 export function enforcePendingResponse(input: {
   userMessage: string;
   extraction: PendingResponseExtraction;
@@ -134,8 +167,25 @@ export function enforcePendingResponse(input: {
   const { extraction, ownedPending, userMessage } = input;
   const band = confidenceBand(extraction.confidence);
 
-  // Cancellation meaning takes precedence when intent is cancel
   if (extraction.intent === 'cancel') {
+    const gate = isCancelAuthorized(extraction);
+    if (!gate.ok) {
+      const kind =
+        gate.outcome === 'clarify_low_confidence'
+          ? 'low_confidence'
+          : extraction.hasNewMutation || extraction.correction !== null
+            ? 'cancel_vs_correction'
+            : 'conflict';
+      return {
+        decision: {
+          action: 'clarify',
+          message: pendingClarifyMessage(userMessage, kind),
+          reason: gate.outcome,
+        },
+        enforcementOutcome: gate.outcome,
+        confidenceBand: band,
+      };
+    }
     return {
       decision: {
         action: 'call_tool',
@@ -348,7 +398,6 @@ function enforceCorrection(
     };
   }
 
-  // create_entry (default) and other write ops → prepare_create
   return {
     decision: {
       action: 'call_tool',

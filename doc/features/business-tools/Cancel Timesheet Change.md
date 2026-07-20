@@ -6,7 +6,9 @@
 
 ## How users reach this tool
 
-Semantic pending-response extraction maps cancellation meaning (including negation and polite Thai/English variants) to this tool. Cancellation takes precedence over confirmation. **No phrase allow-list** authorizes the call — only validated semantic intent + ownership checks.
+Semantic pending-response extraction maps cancellation meaning to this tool only when **deterministic cancel authorization** passes: `intent === 'cancel'`, `confidence >= 0.75`, `hasNewMutation === false`, `correction === null`, and exactly one owned pending target. Low-confidence or conflicting cancel/correction signals clarify and preserve the pending proposal.
+
+Cancellation takes precedence over confirmation **only** for clear, high-confidence cancel — it does not bypass confidence, conflict, or ownership gates. **No phrase allow-list** authorizes the call.
 
 ## Input
 

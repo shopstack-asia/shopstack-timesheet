@@ -7,6 +7,7 @@ export type {
   PendingResponseEnforcementOutcome,
 } from '@/lib/ai/pending-response/types';
 export {
+  PENDING_ACTION_CONFIDENCE_THRESHOLD,
   PENDING_CONFIRM_CONFIDENCE_THRESHOLD,
   confidenceBand,
 } from '@/lib/ai/pending-response/types';
@@ -26,6 +27,7 @@ export {
   enforcePendingResponse,
   enforceExtractorFailure,
   isConfirmAuthorized,
+  isCancelAuthorized,
   pendingClarifyMessage,
   correctionClarifyMessage,
   type OwnedPendingRef,
@@ -37,6 +39,15 @@ export {
   type LoadOwnedPendingInput,
   type LoadOwnedPendingResult,
 } from '@/lib/ai/pending-response/load-owned';
+export {
+  resolveOwnedPendingSelection,
+  formatOwnedPendingChoices,
+  type ResolveOwnedPendingSelectionResult,
+} from '@/lib/ai/pending-response/select-pending';
+export {
+  gateCorrectionAfterCancel,
+  type CorrectionCancelGate,
+} from '@/lib/ai/pending-response/correction-cancel-gate';
 export {
   routePendingResponse,
   type RoutePendingResponseInput,

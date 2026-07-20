@@ -1,5 +1,6 @@
 /**
- * Load owned pending Timesheet change for semantic pending-response routing.
+ * Load owned pending Timesheet changes for semantic pending-response routing.
+ * Never silently picks among multiple owned proposals.
  */
 
 import { getConversationContext } from '@/lib/conversation/context';
@@ -10,10 +11,16 @@ import {
   PendingStoreError,
   type PendingTimesheetChangeStore,
 } from '@/lib/timesheet/write/pending-store';
+import type { PendingTimesheetChange } from '@/lib/timesheet/write/pending-types';
 
 export type LoadOwnedPendingResult =
   | { status: 'none' }
   | { status: 'owned'; pending: OwnedPendingRef; employeeId: string }
+  | {
+      status: 'multiple_owned';
+      pending: OwnedPendingRef[];
+      employeeId: string;
+    }
   | { status: 'store_unavailable' }
   | { status: 'context_unavailable'; message: string };
 
@@ -24,11 +31,39 @@ export type LoadOwnedPendingInput = {
   pendingStore?: PendingTimesheetChangeStore;
   /** Injected context loader for tests */
   getContext?: typeof getConversationContext;
+  /** Injectable clock for expiry tests */
+  nowMs?: number;
 };
 
+function toOwnedRef(change: PendingTimesheetChange): OwnedPendingRef {
+  return {
+    confirmationId: change.confirmationId,
+    operation: change.operation,
+    date: change.date,
+    summaryPayload: change.summaryPayload,
+    proposal: buildSafePendingProposalContext(change),
+  };
+}
+
+function isConfirmableOwned(
+  change: PendingTimesheetChange,
+  slackUserId: string,
+  employeeId: string,
+  nowMs: number
+): boolean {
+  if (change.status !== 'pending') return false;
+  if (change.slackUserId !== slackUserId) return false;
+  if (change.employeeId !== employeeId) return false;
+  const expiresAt = new Date(change.expiresAt).getTime();
+  if (!Number.isFinite(expiresAt) || expiresAt <= nowMs) return false;
+  return true;
+}
+
 /**
- * Resolve Conversation Context, then load a pending change owned by
- * slackUserId + conversationId + context employeeId with status=pending.
+ * Resolve Conversation Context, then load confirmable pending change(s) owned by
+ * slackUserId + conversationId + context employeeId.
+ * Returns `multiple_owned` when more than one confirmable proposal exists —
+ * callers must not pick by createdAt or array order.
  */
 export async function loadOwnedPendingChange(
   input: LoadOwnedPendingInput
@@ -40,6 +75,7 @@ export async function loadOwnedPendingChange(
   }
 
   const store = input.pendingStore ?? getDefaultPendingTimesheetChangeStore();
+  const nowMs = input.nowMs ?? Date.now();
 
   let convEmployeeId: string;
   try {
@@ -52,14 +88,16 @@ export async function loadOwnedPendingChange(
     });
     convEmployeeId = conv.employeeId;
   } catch (error) {
-    // Context unavailable: only fail closed if a pending row exists for this user.
-    // Otherwise continue the normal AI-first path (no owned pending to authorize).
+    // Context unavailable: only fail closed if a confirmable pending exists for this user.
     try {
       const list = await store.findPendingByConversation(conversationId);
-      const forUser = list.filter(
-        (c) => c.status === 'pending' && c.slackUserId === slackUserId
+      const confirmableForUser = list.filter(
+        (c) =>
+          c.status === 'pending' &&
+          c.slackUserId === slackUserId &&
+          new Date(c.expiresAt).getTime() > nowMs
       );
-      if (forUser.length === 0) {
+      if (confirmableForUser.length === 0) {
         return { status: 'none' };
       }
     } catch (storeError) {
@@ -76,32 +114,26 @@ export async function loadOwnedPendingChange(
 
   try {
     const list = await store.findPendingByConversation(conversationId);
-    const owned = list.filter(
-      (c) =>
-        c.status === 'pending' &&
-        c.slackUserId === slackUserId &&
-        c.employeeId === convEmployeeId
+    const owned = list.filter((c) =>
+      isConfirmableOwned(c, slackUserId, convEmployeeId, nowMs)
     );
 
     if (owned.length === 0) {
       return { status: 'none' };
     }
 
-    const selected = [...owned].sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    )[0]!;
+    if (owned.length === 1) {
+      return {
+        status: 'owned',
+        employeeId: convEmployeeId,
+        pending: toOwnedRef(owned[0]!),
+      };
+    }
 
     return {
-      status: 'owned',
+      status: 'multiple_owned',
       employeeId: convEmployeeId,
-      pending: {
-        confirmationId: selected.confirmationId,
-        operation: selected.operation,
-        date: selected.date,
-        summaryPayload: selected.summaryPayload,
-        proposal: buildSafePendingProposalContext(selected),
-      },
+      pending: owned.map(toOwnedRef),
     };
   } catch (error) {
     if (

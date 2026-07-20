@@ -1,6 +1,7 @@
 /**
  * Pending-aware routing: semantic extraction → deterministic enforcement.
  * Runs before normal AI-first Timesheet intent extraction when an owned pending exists.
+ * Never authorizes against an arbitrarily selected proposal when multiple are owned.
  */
 
 import { logPendingResponseAudit } from '@/lib/ai/pending-response/audit';
@@ -18,6 +19,10 @@ import {
   loadOwnedPendingChange,
   type LoadOwnedPendingInput,
 } from '@/lib/ai/pending-response/load-owned';
+import {
+  formatOwnedPendingChoices,
+  resolveOwnedPendingSelection,
+} from '@/lib/ai/pending-response/select-pending';
 import type { BusinessToolDecision } from '@/lib/ai/decision-engine';
 import type { GenerateResponseFn } from '@/lib/ai/types';
 
@@ -34,6 +39,7 @@ export type RoutePendingResponseInput = {
   >;
   pendingStore?: LoadOwnedPendingInput['pendingStore'];
   getContext?: LoadOwnedPendingInput['getContext'];
+  nowMs?: number;
 };
 
 export type RoutePendingResponseResult =
@@ -48,6 +54,92 @@ export type RoutePendingResponseResult =
       ownedPending?: OwnedPendingRef;
       extractorOutcome?: string;
     };
+
+function multipleOwnedClarify(
+  userMessage: string,
+  candidates: OwnedPendingRef[]
+): RoutePendingResponseResult {
+  const message = formatOwnedPendingChoices(candidates, userMessage);
+  const enforcement: EnforcePendingResponseResult = {
+    decision: {
+      action: 'clarify',
+      message,
+      reason: 'multiple_owned_pending',
+    },
+    enforcementOutcome: 'clarify_multiple_owned',
+    confidenceBand: 'none',
+  };
+  return {
+    handled: true,
+    decision: enforcement.decision,
+    enforcement,
+  };
+}
+
+async function runSemanticAgainstOwned(
+  input: RoutePendingResponseInput,
+  ownedPending: OwnedPendingRef,
+  conversationId: string,
+  userMessage: string
+): Promise<RoutePendingResponseResult> {
+  const extract = input.extractPending ?? extractPendingResponse;
+  const extracted = await extract({
+    userMessage,
+    proposal: ownedPending.proposal,
+    requestId: input.requestId,
+    eventId: input.eventId,
+  });
+
+  if (!extracted.ok) {
+    const failure = enforceExtractorFailure(
+      userMessage,
+      extracted.extractorOutcome
+    );
+    logPendingResponseAudit({
+      requestId: input.requestId,
+      eventId: input.eventId,
+      conversationId,
+      pendingResponseOutcome: 'semantic_handled',
+      extractorOutcome: extracted.extractorOutcome,
+      enforcementOutcome: failure.enforcementOutcome,
+    });
+    return {
+      handled: true,
+      decision: failure.decision,
+      enforcement: failure,
+      ownedPending,
+      extractorOutcome: extracted.extractorOutcome,
+    };
+  }
+
+  const enforcement = enforcePendingResponse({
+    userMessage,
+    extraction: extracted.extraction,
+    ownedPending,
+  });
+
+  logPendingResponseAudit({
+    requestId: input.requestId,
+    eventId: input.eventId,
+    conversationId,
+    pendingResponseOutcome: 'semantic_handled',
+    extractorOutcome: 'extracted',
+    enforcementOutcome: enforcement.enforcementOutcome,
+    confidence: extracted.extraction.confidence,
+    selectedTool:
+      enforcement.decision.action === 'call_tool'
+        ? enforcement.decision.toolName
+        : undefined,
+  });
+
+  return {
+    handled: true,
+    decision: enforcement.decision,
+    enforcement,
+    ownedPending,
+    extractorOutcome: 'extracted',
+  };
+}
 
 /**
  * If an owned pending confirmation exists, classify the user reply semantically
@@ -78,6 +170,7 @@ export async function routePendingResponse(
     requestId: input.requestId,
     pendingStore: input.pendingStore,
     getContext: input.getContext,
+    nowMs: input.nowMs,
   });
 
   if (ownedResult.status === 'store_unavailable') {
@@ -88,8 +181,6 @@ export async function routePendingResponse(
       pendingResponseOutcome: 'store_unavailable',
       enforcementOutcome: 'clarify_extractor_failure',
     });
-    // Cannot prove ownership — do not authorize pending writes.
-    // Continue the normal AI-first path with confirm/cancel suppressed by caller.
     return { handled: false, reason: 'no_pending' };
   }
 
@@ -133,61 +224,34 @@ export async function routePendingResponse(
     return { handled: false, reason: 'no_pending' };
   }
 
-  const extract = input.extractPending ?? extractPendingResponse;
-  const extracted = await extract({
-    userMessage,
-    proposal: ownedResult.pending.proposal,
-    requestId: input.requestId,
-    eventId: input.eventId,
-  });
-
-  if (!extracted.ok) {
-    const failure = enforceExtractorFailure(
+  if (ownedResult.status === 'multiple_owned') {
+    const selection = resolveOwnedPendingSelection(
       userMessage,
-      extracted.extractorOutcome
+      ownedResult.pending
     );
-    logPendingResponseAudit({
-      requestId: input.requestId,
-      eventId: input.eventId,
+    if (selection.status !== 'unique') {
+      logPendingResponseAudit({
+        requestId: input.requestId,
+        eventId: input.eventId,
+        conversationId,
+        pendingResponseOutcome: 'semantic_handled',
+        enforcementOutcome: 'clarify_multiple_owned',
+      });
+      return multipleOwnedClarify(userMessage, ownedResult.pending);
+    }
+    // Server-selected unique target — semantic may proceed against this record only.
+    return runSemanticAgainstOwned(
+      input,
+      selection.pending,
       conversationId,
-      pendingResponseOutcome: 'semantic_handled',
-      extractorOutcome: extracted.extractorOutcome,
-      enforcementOutcome: failure.enforcementOutcome,
-    });
-    return {
-      handled: true,
-      decision: failure.decision,
-      enforcement: failure,
-      ownedPending: ownedResult.pending,
-      extractorOutcome: extracted.extractorOutcome,
-    };
+      userMessage
+    );
   }
 
-  const enforcement = enforcePendingResponse({
-    userMessage,
-    extraction: extracted.extraction,
-    ownedPending: ownedResult.pending,
-  });
-
-  logPendingResponseAudit({
-    requestId: input.requestId,
-    eventId: input.eventId,
+  return runSemanticAgainstOwned(
+    input,
+    ownedResult.pending,
     conversationId,
-    pendingResponseOutcome: 'semantic_handled',
-    extractorOutcome: 'extracted',
-    enforcementOutcome: enforcement.enforcementOutcome,
-    confidence: extracted.extraction.confidence,
-    selectedTool:
-      enforcement.decision.action === 'call_tool'
-        ? enforcement.decision.toolName
-        : undefined,
-  });
-
-  return {
-    handled: true,
-    decision: enforcement.decision,
-    enforcement,
-    ownedPending: ownedResult.pending,
-    extractorOutcome: 'extracted',
-  };
+    userMessage
+  );
 }

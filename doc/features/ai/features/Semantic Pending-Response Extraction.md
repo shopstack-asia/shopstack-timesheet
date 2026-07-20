@@ -9,14 +9,24 @@ When an **owned** `PendingTimesheetChange` exists, the user’s next message is 
 ```text
 User message
   → resolve Conversation Context
-  → load owned PendingTimesheetChange (slackUserId + conversationId + employeeId, status=pending)
-  → if none: normal AI-first intent path (acknowledgements cannot confirm foreign/old proposals)
-  → if owned pending: semantic pending-response extraction (json_object, temperature 0)
+  → load confirmable owned pending (slackUserId + conversationId + employeeId, status=pending, not expired)
+  → if none: normal AI-first intent path
+  → if multiple owned: resolve by visible business fields OR clarify (never newest-created-at)
+  → if exactly one target: semantic pending-response extraction (json_object, temperature 0)
   → Zod strict schema validation
-  → deterministic enforcement
-  → confirm_timesheet_change | cancel_timesheet_change | prepare_* (after cancel) | clarify | unrelated passthrough
+  → deterministic enforcement (confirm AND cancel require confidence ≥ 0.75)
+  → confirm | cancel | correction (prepare only after cancel===cancelled) | clarify | unrelated
   → existing fenced Redis write lifecycle
 ```
+
+## Multiple owned pending proposals
+
+- `loadOwnedPendingChange` returns `owned` (exactly one) or `multiple_owned` (two+).
+- **Never** select by `createdAt`, array order, or any implicit heuristic.
+- With `multiple_owned`, application code first tries `resolveOwnedPendingSelection` using date / project / task / hours visible in the user reply.
+- Unique match → semantic extraction proceeds against that **server-selected** record.
+- Zero or multiple matches → controlled clarification listing safe summaries (date, project, task, hours). No confirm/cancel/prepare/writer. No confirmationId, employeeId, Redis keys, hashes, or fencing versions in the message.
+- The model must never supply an authoritative pending ID.
 
 ## Strict schema
 
@@ -32,19 +42,18 @@ User message
 
 - `.strict()` — unknown properties rejected
 - Forbidden: `employeeId`, `email`, `slackUserId`, `staffId`, `confirmationId`, `executionVersion`, `toolName`, Redis keys, snapshot hashes
-- Model never selects tools or supplies writer arguments
 
 ## Deterministic enforcement
 
+Shared threshold: `PENDING_ACTION_CONFIDENCE_THRESHOLD = 0.75` (confirm and cancel).
+
 | Intent | Rules |
 |--------|--------|
-| `confirm` | Allowed only if `confidence >= 0.75`, `hasNewMutation === false`, `correction === null`. Routes solely to `confirm_timesheet_change` with server-owned `confirmationId`. Existing ownership/TTL/fencing still apply. |
-| `cancel` | Cancellation meaning wins. Routes to `cancel_timesheet_change`. Never calls the Sheets writer. |
-| `correction` | Never confirms the old proposal. Cancel/supersede old pending, then `prepare_*` with merged hints → **new** confirmation required. Incomplete correction → targeted clarify. |
-| `unrelated` | Preserve pending. Answer via normal AI-first path; confirm/cancel tools suppressed for that turn. |
-| `ambiguous` / low confidence / extractor failure | Fail closed. Zero writes. Preserve pending. One concise clarification in the user’s language. |
-
-Confirmation is also forbidden when mutation signals conflict, schema validation fails, or ownership cannot be proven.
+| `confirm` | `confidence >= 0.75`, `hasNewMutation === false`, `correction === null`. Routes to `confirm_timesheet_change` with server-owned `confirmationId`. |
+| `cancel` | Same confidence/conflict gates as confirm. Clear high-confidence cancel only. Never Sheets writer. Low confidence or mutation/correction signals → clarify (preserve pending). |
+| `correction` | Never confirms the old proposal. Cancel old pending; **replacement prepare only if cancel returns `status === 'cancelled'`**. Other cancel statuses (`already_completed`, `expired`, `unavailable`, `no_pending_change`) fail closed with zero prepare. New proposal still needs confirmation. |
+| `unrelated` | Preserve pending. Normal AI-first path; confirm/cancel tools suppressed. |
+| `ambiguous` / low confidence / extractor failure | Fail closed. Zero writes. Preserve pending. Concise clarification. |
 
 ## Confirmation UX
 
@@ -59,9 +68,9 @@ Do **not** tell users to type exact words. Example Thai copy:
 ## Source Code References
 
 - `src/lib/ai/pending-response/*`
-- `src/lib/ai/conversation.ts` (pending routing before `decideWithIntentExtraction`)
+- `src/lib/ai/conversation.ts`
 - `src/lib/timesheet/write/prepare.ts` (`NATURAL_CONFIRM_HINT_TH`)
 
 ## Required tests
 
-Covered in `src/lib/ai/pending-response/pending-response.test.ts`: semantic variations, unseen paraphrases, cancel/negation, correction, unrelated, ambiguous/low-confidence, extractor failures, ownership, no-pending acknowledgements, and `runConversation` production path with mocked transport.
+`pending-response.test.ts` and `pending-blockers.test.ts`: multi-owned clarification, selection by business fields, cancel confidence gates, correction cancel-result races, and `runConversation` production paths.

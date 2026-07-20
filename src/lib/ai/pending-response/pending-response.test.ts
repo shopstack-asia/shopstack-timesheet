@@ -188,7 +188,7 @@ describe('deterministic enforcement (A,C,D,E,F)', () => {
     expect(result.enforcementOutcome).toBe('confirm_authorized');
   });
 
-  it('C: cancel wins; never confirms', () => {
+  it('C: high-confidence cancel authorizes; never confirms', () => {
     const result = enforcePendingResponse({
       userMessage: 'ไม่เอาแล้ว ยกเลิกเลย',
       extraction: extraction({
@@ -203,6 +203,18 @@ describe('deterministic enforcement (A,C,D,E,F)', () => {
       action: 'call_tool',
       toolName: 'cancel_timesheet_change',
     });
+  });
+
+  it('C2: low-confidence cancel does not authorize', () => {
+    const result = enforcePendingResponse({
+      userMessage: 'ยกเลิก?',
+      extraction: extraction({
+        intent: 'cancel',
+        confidence: 0.2,
+      }),
+      ownedPending,
+    });
+    expect(result.enforcementOutcome).toBe('clarify_low_confidence');
   });
 
   it('D: correction never confirms old proposal; prepares replacement', () => {

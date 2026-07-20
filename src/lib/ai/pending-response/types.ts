@@ -62,17 +62,26 @@ export type PendingResponseEnforcementOutcome =
   | 'clarify_low_confidence'
   | 'clarify_conflict'
   | 'clarify_extractor_failure'
+  | 'clarify_multiple_owned'
   | 'ownership_denied'
-  | 'no_owned_pending';
+  | 'no_owned_pending'
+  | 'correction_cancel_blocked';
 
-/** Conservative confirm confidence threshold (documented). */
-export const PENDING_CONFIRM_CONFIDENCE_THRESHOLD = 0.75;
+/**
+ * Conservative confidence threshold for confirm AND cancel.
+ * Both change persistent pending state and must not authorize on weak signals.
+ */
+export const PENDING_ACTION_CONFIDENCE_THRESHOLD = 0.75;
+
+/** @deprecated Use PENDING_ACTION_CONFIDENCE_THRESHOLD */
+export const PENDING_CONFIRM_CONFIDENCE_THRESHOLD =
+  PENDING_ACTION_CONFIDENCE_THRESHOLD;
 
 export function confidenceBand(
   confidence: number
 ): 'high' | 'medium' | 'low' | 'none' {
   if (!Number.isFinite(confidence)) return 'none';
-  if (confidence >= PENDING_CONFIRM_CONFIDENCE_THRESHOLD) return 'high';
+  if (confidence >= PENDING_ACTION_CONFIDENCE_THRESHOLD) return 'high';
   if (confidence >= 0.5) return 'medium';
   if (confidence > 0) return 'low';
   return 'none';

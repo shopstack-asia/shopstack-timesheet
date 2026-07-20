@@ -15,7 +15,7 @@ This is **not** absolute exactly-once execution across Redis and Google Sheets. 
 | Key | Purpose |
 |-----|---------|
 | `timesheet:pending-change:{confirmationId}` | Full pending record JSON (snapshots, hashes, writeEntries, summary, ownership ids, status, `executionVersion`, timestamps) |
-| `timesheet:pending-by-conv:{conversationId}` | Redis SET of confirmationIds for owned-pending discovery (semantic pending-response routing) |
+| `timesheet:pending-by-conv:{conversationId}` | Redis SET of confirmationIds for owned-pending discovery (semantic pending-response routing). Multiple confirmable owned proposals are never selected by createdAt — the router clarifies or resolves by visible business fields. |
 
 Does **not** store Slack email or AI-supplied identity.
 
