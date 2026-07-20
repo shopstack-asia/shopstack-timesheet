@@ -19,7 +19,19 @@ export type IdentityResolverDeps = {
   lookup?: (
     slackUserId: string
   ) => Promise<
-    | { ok: true; auth: { staff: { EmployeeID: string; Email: string; FirstName?: string; LastName?: string }; slackUserId?: string } }
+    | {
+        ok: true;
+        auth: {
+          staff: {
+            EmployeeID: string;
+            Email: string;
+            FirstName?: string;
+            LastName?: string;
+            Position?: string;
+          };
+          slackUserId?: string;
+        };
+      }
     | { ok: false; message: string }
   >;
 };
@@ -53,15 +65,19 @@ export function createIdentityResolver(
         );
       }
 
-      const first = result.auth.staff.FirstName?.trim() || '';
-      const last = result.auth.staff.LastName?.trim() || '';
-      const employeeName = `${first} ${last}`.trim() || undefined;
+      const firstName = result.auth.staff.FirstName?.trim() || '';
+      const lastName = result.auth.staff.LastName?.trim() || '';
+      const position = result.auth.staff.Position?.trim() || '';
+      const employeeName = `${firstName} ${lastName}`.trim() || undefined;
 
       return {
         slackUserId: id,
         slackEmail,
         employeeId,
         employeeName,
+        ...(firstName ? { firstName } : {}),
+        ...(lastName ? { lastName } : {}),
+        ...(position ? { position } : {}),
       };
     },
   };

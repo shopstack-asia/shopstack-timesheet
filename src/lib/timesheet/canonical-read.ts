@@ -68,6 +68,10 @@ export function agentAuthFromConversationIdentity(input: {
   employeeId: string;
   email: string;
   slackUserId?: string;
+  /** Zoho StaffProfile fields for Time Log denormalized columns (Slack writes) */
+  firstName?: string;
+  lastName?: string;
+  position?: string;
 }): AgentAuthContext {
   const employeeId = input.employeeId?.trim() || '';
   const email = input.email?.trim() || '';
@@ -86,11 +90,11 @@ export function agentAuthFromConversationIdentity(input: {
 
   const staff: StaffProfile = {
     EmployeeID: employeeId,
-    FirstName: '',
-    LastName: '',
+    FirstName: input.firstName?.trim() || '',
+    LastName: input.lastName?.trim() || '',
     Nickname: '',
     Email: email,
-    Position: '',
+    Position: input.position?.trim() || '',
   };
 
   return {

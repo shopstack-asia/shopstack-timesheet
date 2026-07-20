@@ -39,6 +39,8 @@ There is **no** unconfirmed direct-write tool in the AI registry. Internal helpe
 - Employee identity comes **only** from Conversation Context.
 - Prepare/confirm tools reject AI-supplied `employeeId`, `staffId`, `email`, `slackUserId`.
 - Confirmation is bound to the same `slackUserId`, `conversationId`, and `employeeId`.
+- Conversation Context also carries Zoho `firstName` / `lastName` / `position` captured at identity resolution. Confirm passes them into `agentAuthFromConversationIdentity` so `submitDayTimesheetForStaff` writes Time Log **Staff First Name**, **Staff Last Name**, and **Staff Position** (same denormalized columns as the Weekly Timesheet UI). Missing fields write as empty strings.
+- **Natural-language confirm/cancel/correction** is decided by semantic pending-response extraction + deterministic enforcement — not a phrase list or regex. See [Semantic Pending-Response Extraction](../ai/features/Semantic%20Pending-Response%20Extraction.md).
 
 ## Day snapshot semantics
 
@@ -72,6 +74,7 @@ Design: **idempotent confirmation with snapshot reconciliation and fenced execut
 
 - Employee identity comes **only** from Conversation Context (never AI)
 - Confirm/cancel require same `slackUserId`, `conversationId`, and `employeeId`
+- Staff First/Last Name and Position for Sheets Time Log come from Conversation Context (Zoho at resolve time)
 
 ## Submit Week
 

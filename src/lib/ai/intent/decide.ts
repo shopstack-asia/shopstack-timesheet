@@ -1,6 +1,7 @@
 /**
  * AI-first decision orchestrator — always-on structured extraction.
- * Regex is used only for bare confirm/cancel and related deterministic helpers.
+ * Pending Timesheet confirm/cancel/correction is handled by semantic
+ * pending-response routing in runConversation (before this function).
  * Natural-language business intents never route through decideBusinessTool().
  */
 
@@ -25,11 +26,6 @@ import {
 } from '@/lib/ai/intent/extract';
 import { isExplicitDraftCancelPhrase } from '@/lib/ai/intent/follow-up';
 import type { IntentDraft, StructuredIntent } from '@/lib/ai/intent/types';
-import {
-  isBareCancelPhrase,
-  isBareConfirmPhrase,
-  resolveConfirmOrCancel,
-} from '@/lib/ai/write-decision';
 
 /** Controlled response when structured extraction fails technically. */
 export const EXTRACTION_FAILED_MESSAGE_TH =
@@ -56,7 +52,8 @@ export type ExtractionOutcome =
   | 'clarification_required'
   | 'general_conversation'
   | 'business_tool_selected'
-  | 'draft_store_unavailable';
+  | 'draft_store_unavailable'
+  | 'pending_semantic_handled';
 
 export type DecideWithIntentResult = {
   decision: BusinessToolDecision;
@@ -87,8 +84,8 @@ function extractionFailureDecision(): BusinessToolDecision {
 }
 
 /**
- * Production entry: bare confirm/cancel → AI structured extraction → enforce.
- * Never calls decideBusinessTool for natural-language business routing.
+ * Production entry: AI structured extraction → enforce.
+ * Confirm/cancel of pending writes is NOT authorized here — see routePendingResponse.
  */
 export async function decideWithIntentExtraction(
   userMessage: string,
@@ -103,65 +100,6 @@ export async function decideWithIntentExtraction(
     (options.conversationId && options.slackUserId
       ? createRedisIntentDraftStore()
       : undefined);
-
-  // --- Deterministic confirm / cancel precedence ---
-  if (isBareConfirmPhrase(text) || isBareCancelPhrase(text)) {
-    const cc = resolveConfirmOrCancel(text, pending);
-    if (cc && (cc.action === 'call_tool' || pending.length > 0)) {
-      if (draftStore && options.conversationId && options.slackUserId) {
-        await draftStore.clear(options.conversationId, options.slackUserId);
-      }
-      logIntent({
-        message: 'deterministic_confirm_cancel',
-        requestId: options.requestId,
-        eventId: options.eventId,
-        conversationId: options.conversationId,
-        extractionOutcome: 'skipped_deterministic',
-        selectedTool:
-          cc.action === 'call_tool' ? cc.toolName : undefined,
-        clarificationReason: cc.action === 'clarify' ? cc.reason : undefined,
-      });
-      return {
-        decision: cc,
-        extractionOutcome: 'skipped_deterministic',
-        draftStoreAvailable: true,
-      };
-    }
-
-    if (isBareCancelPhrase(text) && pending.length === 0) {
-      const draftLoad = await safeLoadDraft(draftStore, options);
-      if (draftLoad.draft) {
-        await draftStore?.clear(
-          options.conversationId!,
-          options.slackUserId!
-        );
-        return {
-          decision: {
-            action: 'clarify',
-            message: DRAFT_CANCELLED_MESSAGE,
-            reason: 'intent_draft_cancelled',
-          },
-          extractionOutcome: 'skipped_deterministic',
-          draftOutcome: 'draft_cleared',
-          draftStoreAvailable: draftLoad.available,
-        };
-      }
-      if (cc) {
-        return {
-          decision: cc,
-          extractionOutcome: 'skipped_deterministic',
-          draftStoreAvailable: draftLoad.available,
-        };
-      }
-    }
-
-    if (cc) {
-      return {
-        decision: cc,
-        extractionOutcome: 'skipped_deterministic',
-      };
-    }
-  }
 
   if (isExplicitDraftCancelPhrase(text)) {
     const draftLoad = await safeLoadDraft(draftStore, options);

@@ -81,7 +81,31 @@ describe('identity resolver', () => {
       slackEmail: 'x@shopstack.asia',
       employeeId: 'S42',
       employeeName: 'X Y',
+      firstName: 'X',
+      lastName: 'Y',
     });
+  });
+
+  it('captures Zoho Position for Time Log denormalized columns', async () => {
+    const resolver = createIdentityResolver({
+      lookup: async (slackUserId) => ({
+        ok: true,
+        auth: {
+          staff: {
+            EmployeeID: 'S42',
+            Email: 'x@shopstack.asia',
+            FirstName: 'X',
+            LastName: 'Y',
+            Position: 'Engineer',
+          },
+          slackUserId,
+        },
+      }),
+    });
+    const id = await resolver.resolveEmployee('U42');
+    expect(id.position).toBe('Engineer');
+    expect(id.firstName).toBe('X');
+    expect(id.lastName).toBe('Y');
   });
 
   it('employee lookup failure', async () => {
@@ -95,6 +119,41 @@ describe('identity resolver', () => {
 });
 
 describe('conversation context manager', () => {
+  it('stores Zoho staff name fields on identity cache miss', async () => {
+    const manager = createContextManager({
+      store: createContextStore(),
+      identityResolver: createIdentityResolver({
+        lookup: async () => ({
+          ok: true,
+          auth: {
+            staff: {
+              EmployeeID: 'S1',
+              Email: 'a@shopstack.asia',
+              FirstName: 'Ada',
+              LastName: 'Lovelace',
+              Position: 'Engineer',
+            },
+          },
+        }),
+      }),
+      businessClient: mockApi(async () => {
+        throw new Error('not used');
+      }),
+    });
+
+    const ctx = await manager.getConversationContext({
+      conversationId: 'c-staff',
+      slackUserId: 'U1',
+    });
+    expect(ctx).toMatchObject({
+      employeeId: 'S1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      position: 'Engineer',
+      employeeName: 'Ada Lovelace',
+    });
+  });
+
   it('cache miss then cache hit for work context', async () => {
     let apiCalls = 0;
     const client = mockApi(

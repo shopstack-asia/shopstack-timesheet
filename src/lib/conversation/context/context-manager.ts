@@ -107,6 +107,9 @@ export function createContextManager(deps: ContextManagerDeps = {}) {
         slackEmail: identity.slackEmail,
         employeeId: identity.employeeId,
         employeeName: identity.employeeName,
+        firstName: identity.firstName,
+        lastName: identity.lastName,
+        position: identity.position,
         loadedAt: new Date(),
       };
       store.set(ctx);

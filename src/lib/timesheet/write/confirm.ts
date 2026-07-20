@@ -415,6 +415,9 @@ export async function confirmTimesheetChange(
         employeeId: identity.employeeId,
         email: identity.email,
         slackUserId: identity.slackUserId,
+        firstName: identity.firstName,
+        lastName: identity.lastName,
+        position: identity.position,
       });
       await submit(auth, date, claimed.writeEntries, {
         allowCustomProject: false,

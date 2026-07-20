@@ -4,6 +4,10 @@
 
 `cancel_timesheet_change`
 
+## How users reach this tool
+
+Semantic pending-response extraction maps cancellation meaning (including negation and polite Thai/English variants) to this tool. Cancellation takes precedence over confirmation. **No phrase allow-list** authorizes the call — only validated semantic intent + ownership checks.
+
 ## Input
 
 | Field | Required |

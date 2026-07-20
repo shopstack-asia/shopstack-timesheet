@@ -41,11 +41,6 @@ import {
   resolveTask,
 } from '@/lib/timesheet/write/master-resolve';
 import type { PendingSummary } from '@/lib/ai/write-decision';
-import {
-  resolveConfirmOrCancel,
-  isBareConfirmPhrase,
-  isBareCancelPhrase,
-} from '@/lib/ai/write-decision';
 import { getCachedTasks, getCachedProjects } from '@/lib/google-sheets';
 
 export const DRAFT_STORE_UNAVAILABLE_CLARIFY =
@@ -320,37 +315,8 @@ export async function enforceStructuredIntentDetailed(
     };
   }
 
-  // Deterministic bare confirm always wins for pending confirmations
-  if (isBareConfirmPhrase(userMessage)) {
-    const cc = resolveConfirmOrCancel(userMessage, pending);
-    if (cc) {
-      await clearDraft(options);
-      return { decision: cc, draftStoreAvailable: true };
-    }
-  }
-
-  if (isBareCancelPhrase(userMessage)) {
-    const cc = resolveConfirmOrCancel(userMessage, pending);
-    if (cc && (cc.action === 'call_tool' || pending.length > 0)) {
-      await clearDraft(options);
-      return { decision: cc, draftStoreAvailable: true };
-    }
-    // Bare cancel with no pending: clear Intent Draft if present
-    if (options.draft) {
-      const cleared = await clearDraft(options);
-      return {
-        decision: {
-          action: 'clarify',
-          message: DRAFT_CANCELLED_MESSAGE,
-          reason: 'intent_draft_cancelled',
-        },
-        draftOutcome: cleared?.outcome ?? 'draft_cleared',
-      };
-    }
-    if (cc) {
-      return { decision: cc };
-    }
-  }
+  // Pending confirm/cancel/correction is authorized only by semantic
+  // pending-response routing (routePendingResponse) — never by phrase lists here.
 
   // Follow-up needed but draft store could not load — do not guess context.
   // Complete new requests may continue without a draft.
@@ -732,29 +698,22 @@ export async function enforceStructuredIntentDetailed(
       };
     }
 
-    case 'confirm_timesheet_change': {
+    case 'confirm_timesheet_change':
+    case 'cancel_timesheet_change': {
+      // Model must not authorize pending writes. Semantic pending-response
+      // routing owns confirm/cancel when an owned pending exists.
       await clearDraft(options);
-      const cc = resolveConfirmOrCancel('ยืนยัน', pending);
-      if (cc) return { decision: cc };
       return {
         decision: {
           action: 'clarify',
           message:
-            'ยืนยันอะไรครับ ตอนนี้ไม่มีรายการ Timesheet ที่รอการยืนยัน',
-          reason: 'confirm_without_pending',
-        },
-      };
-    }
-
-    case 'cancel_timesheet_change': {
-      await clearDraft(options);
-      const cc = resolveConfirmOrCancel('ยกเลิก', pending);
-      if (cc) return { decision: cc };
-      return {
-        decision: {
-          action: 'clarify',
-          message: 'ตอนนี้ไม่มีรายการ Timesheet ที่รอการยืนยันครับ',
-          reason: 'cancel_without_pending',
+            pending.length > 0
+              ? 'หากข้อมูลถูกต้อง สามารถตอบยืนยันได้ตามธรรมชาติ หรือแจ้งสิ่งที่ต้องการแก้ไขได้เลยครับ'
+              : 'ตอนนี้ไม่มีรายการ Timesheet ที่รอการยืนยันครับ',
+          reason:
+            pending.length > 0
+              ? 'confirm_cancel_via_pending_router_only'
+              : 'confirm_without_pending',
         },
       };
     }

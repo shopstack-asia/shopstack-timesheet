@@ -733,8 +733,8 @@ describe('extraction failure (fail-closed)', () => {
   });
 });
 
-describe('deterministic helpers remain for bare confirm/cancel (isolated)', () => {
-  it('preserves bare confirm via write-decision path through decideBusinessTool helper', () => {
+describe('pending confirm/cancel via semantic routing (not phrase lists)', () => {
+  it('legacy decideBusinessTool still has phrase helpers for non-production path', () => {
     expect(
       decideBusinessTool('ยืนยัน', {
         pendingChanges: [{ confirmationId: 'c1', summary: 's' }],
@@ -745,30 +745,39 @@ describe('deterministic helpers remain for bare confirm/cancel (isolated)', () =
     });
   });
 
-  it('bare confirm skips extractor in production orchestrator', async () => {
-    const extractIntent = vi.fn(async () => createIntent({}));
+  it('decideWithIntentExtraction does not authorize confirm via exact phrases', async () => {
+    const extractIntent = vi.fn(async () =>
+      createIntent({
+        intent: 'confirm_timesheet_change',
+        domain: 'timesheet',
+        confidence: 'high',
+      })
+    );
     const result = await decideWithIntentExtraction('ยืนยัน', {
       now: FIXED_NOW,
       extractIntent,
       pendingChanges: [{ confirmationId: 'c1', summary: 'create RMS' }],
     });
-    expect(extractIntent).not.toHaveBeenCalled();
-    expect(result.extractionOutcome).toBe('skipped_deterministic');
-    expect(result.decision).toMatchObject({
-      action: 'call_tool',
-      toolName: 'confirm_timesheet_change',
-    });
+    expect(extractIntent).toHaveBeenCalled();
+    // Model confirm intent alone never calls the writer — pending router owns that.
+    expect(result.decision.action).toBe('clarify');
   });
 
-  it('bare cancel skips extractor when pending exists', async () => {
-    const extractIntent = vi.fn(async () => createIntent({}));
+  it('decideWithIntentExtraction does not authorize cancel via exact phrases', async () => {
+    const extractIntent = vi.fn(async () =>
+      createIntent({
+        intent: 'cancel_timesheet_change',
+        domain: 'timesheet',
+        confidence: 'high',
+      })
+    );
     const result = await decideWithIntentExtraction('ยกเลิก', {
       now: FIXED_NOW,
       extractIntent,
       pendingChanges: [{ confirmationId: 'c1', summary: 'create RMS' }],
     });
-    expect(extractIntent).not.toHaveBeenCalled();
-    expect(result.extractionOutcome).toBe('skipped_deterministic');
+    expect(extractIntent).toHaveBeenCalled();
+    expect(result.decision.action).toBe('clarify');
   });
 });
 

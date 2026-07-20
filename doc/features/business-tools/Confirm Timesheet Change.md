@@ -4,6 +4,12 @@
 
 `confirm_timesheet_change`
 
+## How users reach this tool
+
+Natural-language replies to a pending proposal are classified by **semantic pending-response extraction** (`src/lib/ai/pending-response/*`). Application code maps a validated `confirm` intent (confidence ≥ 0.75, no mutation signals) to this tool with the **server-owned** `confirmationId`. The model never invents the id or authorizes the write.
+
+Standalone acknowledgements with **no owned pending** never call this tool.
+
 ## Input
 
 | Field | Required |

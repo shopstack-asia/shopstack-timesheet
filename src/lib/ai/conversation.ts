@@ -7,6 +7,11 @@ import {
   type ExtractIntentFn,
   type IntentDraftStore,
 } from '@/lib/ai/intent';
+import {
+  routePendingResponse,
+  type ExtractPendingResponseFn,
+  type RoutePendingResponseInput,
+} from '@/lib/ai/pending-response';
 import { buildPrompt } from '@/lib/ai/prompt';
 import type {
   AssistantToolCall,
@@ -22,13 +27,10 @@ import {
   type ToolRegistry,
   type ToolRouter,
 } from '@/lib/tools';
+import { cancelTimesheetChange } from '@/lib/timesheet/write/cancel';
 import { getDefaultPendingTimesheetChangeStore } from '@/lib/timesheet/write/pending-store';
 import { PendingStoreError } from '@/lib/timesheet/write/pending-store';
-import { STORE_UNAVAILABLE_SAFE_MESSAGE } from '@/lib/timesheet/write/pending-types';
-import {
-  isBareCancelPhrase,
-  isBareConfirmPhrase,
-} from '@/lib/ai/write-decision';
+import { getConversationContext } from '@/lib/conversation/context';
 
 /** Soft limit for Slack-friendly replies (chars). */
 export const MAX_AI_RESPONSE_CHARS = 3500;
@@ -60,10 +62,20 @@ export type RunConversationDeps = {
   ) => Promise<DecideWithIntentResult>;
   /** Injected structured intent extractor (tests). */
   extractIntent?: ExtractIntentFn;
+  /** Injected semantic pending-response extractor (tests). */
+  extractPendingResponse?: ExtractPendingResponseFn;
+  /** Injected pending router (tests). */
+  routePending?: (
+    input: RoutePendingResponseInput
+  ) => ReturnType<typeof routePendingResponse>;
   /** Intent draft store (tests). */
   intentDraftStore?: IntentDraftStore;
   /** Fixed "now" for Bangkok date resolution. */
   decisionNow?: Date;
+  /** Pending store override (tests). */
+  pendingStore?: Parameters<typeof routePendingResponse>[0]['pendingStore'];
+  /** Conversation context loader override (tests). */
+  getContext?: Parameters<typeof routePendingResponse>[0]['getContext'];
 };
 
 function validateResponseText(text: string): string {
@@ -179,52 +191,159 @@ export async function runConversation(
   const enableTools = deps?.enableTools !== false;
   const registry = deps?.toolRegistry ?? createDefaultToolRegistry();
   const router = deps?.toolRouter ?? createToolRouter(registry);
-  const llmTools = enableTools ? registry.toLlmToolDefinitions() : [];
   const conversationId =
     input.conversationId?.trim() ||
     input.metadata?.conversationId?.trim() ||
     '';
   const slackUserId = input.metadata?.slackUserId?.trim() || '';
-  let pendingChanges: Array<{ confirmationId: string; summary: string }> = [];
-  try {
-    pendingChanges = conversationId
-      ? (await getDefaultPendingTimesheetChangeStore().findPendingByConversation(
-          conversationId
-        )).map((c) => ({
-          confirmationId: c.confirmationId,
-          summary: c.summary,
-        }))
-      : [];
-  } catch (error) {
-    if (
-      error instanceof PendingStoreError &&
-      error.code === 'REDIS_UNAVAILABLE' &&
-      (isBareConfirmPhrase(userMessage) || isBareCancelPhrase(userMessage))
-    ) {
-      return {
-        text: STORE_UNAVAILABLE_SAFE_MESSAGE,
-        model: 'decision-engine',
-        usedFallback: false,
-        toolRounds: 0,
-      };
-    }
-    if (!(error instanceof PendingStoreError) || error.code !== 'REDIS_UNAVAILABLE') {
-      throw error;
-    }
-  }
 
-  const intentDecide = deps?.decideWithIntent ?? decideWithIntentExtraction;
-  const intentResult = await intentDecide(userMessage, {
-    now: deps?.decisionNow,
-    pendingChanges,
+  // --- Pending-aware semantic routing (before normal AI-first intent) ---
+  const pendingRouteFn = deps?.routePending ?? routePendingResponse;
+  let suppressConfirmCancelTools = false;
+  let decision: BusinessToolDecision;
+  let intentResult: DecideWithIntentResult | undefined;
+
+  const pendingRoute = await pendingRouteFn({
+    userMessage,
     conversationId,
     slackUserId,
     requestId: input.requestId,
     eventId: input.eventId,
-    extractIntent: deps?.extractIntent,
-    draftStore: deps?.intentDraftStore,
+    generate: deps?.generate,
+    extractPending: deps?.extractPendingResponse,
+    pendingStore: deps?.pendingStore,
+    getContext: deps?.getContext,
   });
-  const decision: BusinessToolDecision = intentResult.decision;
+
+  if (pendingRoute.handled) {
+    // Unrelated → answer normally; keep pending; strip confirm/cancel tools
+    if (
+      pendingRoute.enforcement.enforcementOutcome === 'unrelated_passthrough'
+    ) {
+      suppressConfirmCancelTools = true;
+      const intentDecide = deps?.decideWithIntent ?? decideWithIntentExtraction;
+      intentResult = await intentDecide(userMessage, {
+        now: deps?.decisionNow,
+        pendingChanges: [],
+        conversationId,
+        slackUserId,
+        requestId: input.requestId,
+        eventId: input.eventId,
+        extractIntent: deps?.extractIntent,
+        draftStore: deps?.intentDraftStore,
+      });
+      decision = intentResult.decision;
+      // Never allow confirm/cancel tools while an owned pending sits unanswered
+      if (
+        decision.action === 'call_tool' &&
+        (decision.toolName === 'confirm_timesheet_change' ||
+          decision.toolName === 'cancel_timesheet_change')
+      ) {
+        decision = { action: 'none', reason: 'pending_unrelated_passthrough' };
+      }
+    } else if (
+      pendingRoute.enforcement.enforcementOutcome === 'correction_prepare' &&
+      pendingRoute.enforcement.correctionPrepare
+    ) {
+      // Supersede old proposal safely, then prepare a replacement
+      try {
+        const conv = await (deps?.getContext ?? getConversationContext)({
+          conversationId,
+          slackUserId,
+          requestId: input.requestId,
+          ensureWorkContext: false,
+        });
+        await cancelTimesheetChange(
+          {
+            employeeId: conv.employeeId,
+            email: conv.slackEmail,
+            slackUserId: conv.slackUserId,
+            conversationId,
+            requestId: input.requestId,
+            sourceEventId: input.eventId,
+            firstName: conv.firstName,
+            lastName: conv.lastName,
+            position: conv.position,
+          },
+          pendingRoute.enforcement.correctionPrepare.cancelConfirmationId,
+          { pendingStore: deps?.pendingStore }
+        );
+      } catch {
+        // If cancel fails, still do not write the old proposal — clarify
+        return {
+          text: pendingRoute.decision.action === 'clarify'
+            ? pendingRoute.decision.message
+            : 'ยังไม่สามารถแทนที่รายการที่รออยู่ได้ครับ กรุณาลองใหม่อีกครั้ง',
+          model: 'pending-response',
+          usedFallback: false,
+          toolRounds: 0,
+        };
+      }
+      decision = pendingRoute.decision;
+      intentResult = {
+        decision,
+        extractionOutcome: 'pending_semantic_handled',
+      };
+    } else {
+      decision = pendingRoute.decision;
+      intentResult = {
+        decision,
+        extractionOutcome: 'pending_semantic_handled',
+      };
+    }
+  } else {
+    // No owned pending — normal AI-first path (acknowledgements cannot confirm)
+    let pendingChanges: Array<{ confirmationId: string; summary: string }> =
+      [];
+    try {
+      pendingChanges = conversationId
+        ? (
+            await (
+              deps?.pendingStore ?? getDefaultPendingTimesheetChangeStore()
+            ).findPendingByConversation(conversationId)
+          ).map((c) => ({
+            confirmationId: c.confirmationId,
+            summary: c.summary,
+          }))
+        : [];
+    } catch (error) {
+      if (
+        error instanceof PendingStoreError &&
+        error.code === 'REDIS_UNAVAILABLE'
+      ) {
+        // Fail closed only when we cannot safely know pending state for writes;
+        // read/general conversation may continue without confirm tools.
+        suppressConfirmCancelTools = true;
+      } else if (!(error instanceof PendingStoreError)) {
+        throw error;
+      }
+    }
+
+    const intentDecide = deps?.decideWithIntent ?? decideWithIntentExtraction;
+    intentResult = await intentDecide(userMessage, {
+      now: deps?.decisionNow,
+      pendingChanges,
+      conversationId,
+      slackUserId,
+      requestId: input.requestId,
+      eventId: input.eventId,
+      extractIntent: deps?.extractIntent,
+      draftStore: deps?.intentDraftStore,
+    });
+    decision = intentResult.decision;
+  }
+
+  const llmTools = enableTools
+    ? registry
+        .toLlmToolDefinitions()
+        .filter((t) => {
+          if (!suppressConfirmCancelTools) return true;
+          return (
+            t.function.name !== 'confirm_timesheet_change' &&
+            t.function.name !== 'cancel_timesheet_change'
+          );
+        })
+    : [];
 
   if (decision.action === 'clarify') {
     console.log(

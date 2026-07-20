@@ -15,7 +15,7 @@ This is **not** absolute exactly-once execution across Redis and Google Sheets. 
 | Key | Purpose |
 |-----|---------|
 | `timesheet:pending-change:{confirmationId}` | Full pending record JSON (snapshots, hashes, writeEntries, summary, ownership ids, status, `executionVersion`, timestamps) |
-| `timesheet:pending-by-conv:{conversationId}` | Redis SET of confirmationIds for bare ยืนยัน/ยกเลิก discovery |
+| `timesheet:pending-by-conv:{conversationId}` | Redis SET of confirmationIds for owned-pending discovery (semantic pending-response routing) |
 
 Does **not** store Slack email or AI-supplied identity.
 

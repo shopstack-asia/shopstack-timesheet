@@ -8,15 +8,18 @@ Architecture:
 
 ```text
 User text
-  → bare confirm/cancel (deterministic, when applicable)
-  → load Intent Draft (scoped Redis key)
+  → owned pending? → semantic pending-response extraction → deterministic enforce
+       (confirm / cancel / correction / unrelated / clarify — no phrase list)
+  → else: load Intent Draft (scoped Redis key)
   → AI structured intent (JSON schema)
   → deterministic enforce (dates, hours, Project/Task, tool mapping, merge rules)
   → Business Tool / clarification / general conversation
   → (writes) prepare → confirm → fenced Redis execution → Sheets
 ```
 
-**Regex is not a business-intent fallback.** Regex remains only for narrow deterministic cases (bare `ยืนยัน` / `confirm`, bare `ยกเลิก` / `cancel`, ISO date/range validation helpers, confirmation ownership, Redis safety). Natural-language Timesheet, profile, work-context, read, create, update, delete, and submit intents are never classified by the legacy regex Decision Engine on the production conversation path.
+**Regex is not a business-intent fallback and is not write authorization for pending confirmations.** ISO date/range helpers, Intent Draft explicit-cancel phrases, confirmation ownership, Redis fencing, and Slack button action IDs may remain deterministic. Natural-language Timesheet confirm/cancel/correction uses semantic pending-response extraction. Natural-language Timesheet, profile, work-context, read, create, update, delete, and submit intents are never classified by the legacy regex Decision Engine on the production conversation path.
+
+See also [Semantic Pending-Response Extraction.md](./Semantic%20Pending-Response%20Extraction.md).
 
 ## Migration note (removed flag)
 
