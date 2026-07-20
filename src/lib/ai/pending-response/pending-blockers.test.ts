@@ -3,7 +3,7 @@
  * B1 multiple-owned, B2 correction cancel gate, B3 cancel confidence.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { runConversation } from '@/lib/ai/conversation';
 import {
   PENDING_ACTION_CONFIDENCE_THRESHOLD,
@@ -13,6 +13,8 @@ import {
   resolveOwnedPendingSelection,
   routePendingResponse,
   gateCorrectionAfterCancel,
+  createInMemorySelectedPendingStore,
+  setDefaultSelectedPendingStore,
   type OwnedPendingRef,
   type PendingResponseExtraction,
 } from '@/lib/ai/pending-response';
@@ -39,6 +41,7 @@ function ownedRef(
   return {
     operation: 'create_entry',
     date: '2026-07-18',
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
     summaryPayload: {
       date: '2026-07-18',
       projectName: 'Commerce Suite (HERTZ)',
@@ -129,6 +132,14 @@ async function seedPending(
   }
   return created;
 }
+
+beforeEach(() => {
+  setDefaultSelectedPendingStore(createInMemorySelectedPendingStore());
+});
+
+afterEach(() => {
+  setDefaultSelectedPendingStore(null);
+});
 
 describe('B1: multiple owned pending — never silent newest selection', () => {
   it('loadOwned returns multiple_owned without picking createdAt winner', async () => {

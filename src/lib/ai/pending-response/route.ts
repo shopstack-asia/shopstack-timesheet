@@ -1,7 +1,6 @@
 /**
- * Pending-aware routing: semantic extraction → deterministic enforcement.
- * Runs before normal AI-first Timesheet intent extraction when an owned pending exists.
- * Never authorizes against an arbitrarily selected proposal when multiple are owned.
+ * Pending-aware routing with multi-pending selection persistence.
+ * Selection is navigation state — not write authorization.
  */
 
 import { logPendingResponseAudit } from '@/lib/ai/pending-response/audit';
@@ -20,9 +19,16 @@ import {
   type LoadOwnedPendingInput,
 } from '@/lib/ai/pending-response/load-owned';
 import {
+  buildChoiceSnapshot,
   formatOwnedPendingChoices,
-  resolveOwnedPendingSelection,
+  formatSelectedPendingSummary,
+  resolvePendingSelectionDecision,
 } from '@/lib/ai/pending-response/select-pending';
+import {
+  getDefaultSelectedPendingStore,
+  type SelectedPendingStore,
+} from '@/lib/ai/pending-response/selection-store';
+import { earliestPendingExpiryIso } from '@/lib/ai/pending-response/selection-types';
 import type { BusinessToolDecision } from '@/lib/ai/decision-engine';
 import type { GenerateResponseFn } from '@/lib/ai/types';
 
@@ -40,6 +46,9 @@ export type RoutePendingResponseInput = {
   pendingStore?: LoadOwnedPendingInput['pendingStore'];
   getContext?: LoadOwnedPendingInput['getContext'];
   nowMs?: number;
+  selectionStore?: SelectedPendingStore;
+  /** Employee id when already known (avoids double context load in tests). */
+  employeeId?: string;
 };
 
 export type RoutePendingResponseResult =
@@ -53,38 +62,182 @@ export type RoutePendingResponseResult =
       enforcement: EnforcePendingResponseResult;
       ownedPending?: OwnedPendingRef;
       extractorOutcome?: string;
+      /** Clear selection navigation after successful confirm/cancel/correction. */
+      clearSelectionOnSuccess?: boolean;
+      /** Clear selection immediately (expired / ownership / choose-another). */
+      clearSelectionNow?: boolean;
     };
 
-function multipleOwnedClarify(
-  userMessage: string,
-  candidates: OwnedPendingRef[]
-): RoutePendingResponseResult {
-  const message = formatOwnedPendingChoices(candidates, userMessage);
-  const enforcement: EnforcePendingResponseResult = {
+function looksThai(text: string): boolean {
+  return /[\u0E00-\u0E7F]/.test(text);
+}
+
+function selectionExpiredResult(userMessage: string): RoutePendingResponseResult {
+  const message = looksThai(userMessage)
+    ? 'รายการที่เลือกรอการยืนยันหมดอายุแล้วครับ กรุณาเสนอรายการใหม่'
+    : 'The selected pending proposal has expired. Please submit a new proposal.';
+  return {
+    handled: true,
+    decision: {
+      action: 'clarify',
+      message,
+      reason: 'selected_pending_expired',
+    },
+    enforcement: {
+      decision: {
+        action: 'clarify',
+        message,
+        reason: 'selected_pending_expired',
+      },
+      enforcementOutcome: 'selection_expired',
+      confidenceBand: 'none',
+    },
+    clearSelectionNow: true,
+  };
+}
+
+async function showMultipleChoices(input: {
+  userMessage: string;
+  candidates: OwnedPendingRef[];
+  conversationId: string;
+  slackUserId: string;
+  employeeId: string;
+  selectionStore: SelectedPendingStore;
+  nowMs: number;
+  requestId?: string;
+  eventId?: string;
+}): Promise<RoutePendingResponseResult> {
+  const { message, ordered } = formatOwnedPendingChoices(
+    input.candidates,
+    input.userMessage
+  );
+  const snapshot = buildChoiceSnapshot({
+    conversationId: input.conversationId,
+    slackUserId: input.slackUserId,
+    employeeId: input.employeeId,
+    ordered,
+    nowMs: input.nowMs,
+    expiresAt: earliestPendingExpiryIso(ordered, input.nowMs),
+  });
+  const saved = await input.selectionStore.setChoices(snapshot, input.nowMs);
+  if (saved.outcome === 'unavailable') {
+    return {
+      handled: true,
+      decision: {
+        action: 'clarify',
+        message: looksThai(input.userMessage)
+          ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+          : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+        reason: 'selection_store_unavailable',
+      },
+      enforcement: {
+        decision: {
+          action: 'clarify',
+          message: looksThai(input.userMessage)
+            ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+            : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+          reason: 'selection_store_unavailable',
+        },
+        enforcementOutcome: 'clarify_extractor_failure',
+        confidenceBand: 'none',
+      },
+    };
+  }
+
+  logPendingResponseAudit({
+    requestId: input.requestId,
+    eventId: input.eventId,
+    conversationId: input.conversationId,
+    pendingResponseOutcome: 'semantic_handled',
+    enforcementOutcome: 'clarify_multiple_owned',
+  });
+
+  return {
+    handled: true,
     decision: {
       action: 'clarify',
       message,
       reason: 'multiple_owned_pending',
     },
-    enforcementOutcome: 'clarify_multiple_owned',
-    confidenceBand: 'none',
+    enforcement: {
+      decision: {
+        action: 'clarify',
+        message,
+        reason: 'multiple_owned_pending',
+      },
+      enforcementOutcome: 'clarify_multiple_owned',
+      confidenceBand: 'none',
+    },
   };
+}
+
+function selectionPersistedResult(
+  pending: OwnedPendingRef,
+  userMessage: string
+): RoutePendingResponseResult {
+  const message = formatSelectedPendingSummary(pending, userMessage);
   return {
     handled: true,
-    decision: enforcement.decision,
-    enforcement,
+    decision: {
+      action: 'clarify',
+      message,
+      reason: 'pending_selection_persisted',
+    },
+    enforcement: {
+      decision: {
+        action: 'clarify',
+        message,
+        reason: 'pending_selection_persisted',
+      },
+      enforcementOutcome: 'selection_persisted',
+      confidenceBand: 'none',
+    },
+    ownedPending: pending,
   };
+}
+
+async function persistSelectedTarget(input: {
+  selectionStore: SelectedPendingStore;
+  conversationId: string;
+  slackUserId: string;
+  employeeId: string;
+  pending: OwnedPendingRef;
+  nowMs: number;
+  selectionVersion?: number;
+}): Promise<'ok' | 'unavailable'> {
+  const expiresAt = earliestPendingExpiryIso([input.pending], input.nowMs);
+  const result = await input.selectionStore.setSelected(
+    {
+      schemaVersion: 1,
+      conversationId: input.conversationId,
+      slackUserId: input.slackUserId,
+      employeeId: input.employeeId,
+      confirmationId: input.pending.confirmationId,
+      selectedAt: new Date(input.nowMs).toISOString(),
+      expiresAt,
+      selectionVersion: input.selectionVersion ?? 1,
+    },
+    input.nowMs
+  );
+  if (result.outcome === 'ok') {
+    await input.selectionStore.clearChoices(
+      input.conversationId,
+      input.slackUserId
+    );
+  }
+  return result.outcome === 'ok' ? 'ok' : 'unavailable';
 }
 
 async function runSemanticAgainstOwned(
   input: RoutePendingResponseInput,
   ownedPending: OwnedPendingRef,
   conversationId: string,
-  userMessage: string
+  userMessage: string,
+  options?: { responseTextOverride?: string; clearSelectionOnSuccess?: boolean }
 ): Promise<RoutePendingResponseResult> {
   const extract = input.extractPending ?? extractPendingResponse;
   const extracted = await extract({
-    userMessage,
+    userMessage: options?.responseTextOverride ?? userMessage,
     proposal: ownedPending.proposal,
     requestId: input.requestId,
     eventId: input.eventId,
@@ -109,6 +262,7 @@ async function runSemanticAgainstOwned(
       enforcement: failure,
       ownedPending,
       extractorOutcome: extracted.extractorOutcome,
+      // Preserve selection on extractor failure
     };
   }
 
@@ -132,26 +286,134 @@ async function runSemanticAgainstOwned(
         : undefined,
   });
 
+  const clearOnSuccess =
+    options?.clearSelectionOnSuccess !== false &&
+    (enforcement.enforcementOutcome === 'confirm_authorized' ||
+      enforcement.enforcementOutcome === 'cancel_authorized' ||
+      enforcement.enforcementOutcome === 'correction_prepare');
+
   return {
     handled: true,
     decision: enforcement.decision,
     enforcement,
     ownedPending,
     extractorOutcome: 'extracted',
+    clearSelectionOnSuccess: clearOnSuccess || undefined,
   };
 }
 
 /**
- * If an owned pending confirmation exists, classify the user reply semantically
- * and map to confirm / cancel / correction / clarify / unrelated passthrough.
- * Otherwise return handled:false so the caller continues the normal AI-first path.
+ * After a unique target is known from multi-pending selection, either persist
+ * selection-only or upgrade to action via semantic classification.
  */
+async function afterUniqueSelection(input: {
+  routeInput: RoutePendingResponseInput;
+  pending: OwnedPendingRef;
+  conversationId: string;
+  slackUserId: string;
+  employeeId: string;
+  userMessage: string;
+  selectionStore: SelectedPendingStore;
+  nowMs: number;
+  /** When true, always treat as selection-only (bare ordinal). */
+  forceSelectionOnly?: boolean;
+}): Promise<RoutePendingResponseResult> {
+  const saved = await persistSelectedTarget({
+    selectionStore: input.selectionStore,
+    conversationId: input.conversationId,
+    slackUserId: input.slackUserId,
+    employeeId: input.employeeId,
+    pending: input.pending,
+    nowMs: input.nowMs,
+  });
+  if (saved === 'unavailable') {
+    return {
+      handled: true,
+      decision: {
+        action: 'clarify',
+        message: looksThai(input.userMessage)
+          ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+          : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+        reason: 'selection_store_unavailable',
+      },
+      enforcement: {
+        decision: {
+          action: 'clarify',
+          message: looksThai(input.userMessage)
+            ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+            : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+          reason: 'selection_store_unavailable',
+        },
+        enforcementOutcome: 'clarify_extractor_failure',
+        confidenceBand: 'none',
+      },
+    };
+  }
+
+  if (input.forceSelectionOnly) {
+    logPendingResponseAudit({
+      requestId: input.routeInput.requestId,
+      eventId: input.routeInput.eventId,
+      conversationId: input.conversationId,
+      pendingResponseOutcome: 'semantic_handled',
+      enforcementOutcome: 'selection_persisted',
+    });
+    return selectionPersistedResult(input.pending, input.userMessage);
+  }
+
+  // Try semantic on the same message for selection-plus-action.
+  const semantic = await runSemanticAgainstOwned(
+    input.routeInput,
+    input.pending,
+    input.conversationId,
+    input.userMessage,
+    { clearSelectionOnSuccess: true }
+  );
+
+  if (
+    semantic.handled &&
+    (semantic.enforcement.enforcementOutcome === 'confirm_authorized' ||
+      semantic.enforcement.enforcementOutcome === 'cancel_authorized' ||
+      semantic.enforcement.enforcementOutcome === 'correction_prepare')
+  ) {
+    return semantic;
+  }
+
+  // Ambiguous / unrelated / low confidence / correction clarify → selection-only ask
+  if (
+    semantic.handled &&
+    (semantic.enforcement.enforcementOutcome === 'unrelated_passthrough' ||
+      semantic.enforcement.enforcementOutcome === 'clarify_ambiguous' ||
+      semantic.enforcement.enforcementOutcome === 'clarify_low_confidence' ||
+      semantic.enforcement.enforcementOutcome === 'clarify_conflict' ||
+      semantic.enforcement.enforcementOutcome === 'clarify_extractor_failure' ||
+      semantic.enforcement.enforcementOutcome === 'correction_clarify')
+  ) {
+    // If unrelated while selecting, still confirm the selection was stored
+    // (selection survives unrelated on later turns via selected target).
+    // For pure selection words like "Hertz", prefer selection_persisted UX.
+    logPendingResponseAudit({
+      requestId: input.routeInput.requestId,
+      eventId: input.routeInput.eventId,
+      conversationId: input.conversationId,
+      pendingResponseOutcome: 'semantic_handled',
+      enforcementOutcome: 'selection_persisted',
+    });
+    return selectionPersistedResult(input.pending, input.userMessage);
+  }
+
+  return semantic;
+}
+
 export async function routePendingResponse(
   input: RoutePendingResponseInput
 ): Promise<RoutePendingResponseResult> {
   const conversationId = input.conversationId?.trim() || '';
   const slackUserId = input.slackUserId?.trim() || '';
   const userMessage = input.userMessage?.trim() || '';
+  const nowMs = input.nowMs ?? Date.now();
+  const selectionStore =
+    input.selectionStore ?? getDefaultSelectedPendingStore();
 
   if (!conversationId || !slackUserId || !userMessage) {
     logPendingResponseAudit({
@@ -170,7 +432,7 @@ export async function routePendingResponse(
     requestId: input.requestId,
     pendingStore: input.pendingStore,
     getContext: input.getContext,
-    nowMs: input.nowMs,
+    nowMs,
   });
 
   if (ownedResult.status === 'store_unavailable') {
@@ -185,6 +447,7 @@ export async function routePendingResponse(
   }
 
   if (ownedResult.status === 'context_unavailable') {
+    await selectionStore.clearAll(conversationId, slackUserId);
     logPendingResponseAudit({
       requestId: input.requestId,
       eventId: input.eventId,
@@ -210,10 +473,55 @@ export async function routePendingResponse(
         enforcementOutcome: 'ownership_denied',
         confidenceBand: 'none',
       },
+      clearSelectionNow: true,
     };
   }
 
   if (ownedResult.status === 'none') {
+    const employeeId = input.employeeId?.trim() || ownedResult.employeeId;
+    if (employeeId) {
+      const prior = await selectionStore.getSelected(
+        conversationId,
+        slackUserId,
+        employeeId,
+        nowMs
+      );
+      if (prior.outcome === 'found' || prior.outcome === 'expired') {
+        await selectionStore.clearAll(conversationId, slackUserId);
+        logPendingResponseAudit({
+          requestId: input.requestId,
+          eventId: input.eventId,
+          conversationId,
+          pendingResponseOutcome: 'semantic_handled',
+          enforcementOutcome: 'selection_expired',
+        });
+        return selectionExpiredResult(userMessage);
+      }
+      if (prior.outcome === 'unavailable') {
+        return {
+          handled: true,
+          decision: {
+            action: 'clarify',
+            message: looksThai(userMessage)
+              ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+              : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+            reason: 'selection_store_unavailable',
+          },
+          enforcement: {
+            decision: {
+              action: 'clarify',
+              message: looksThai(userMessage)
+                ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+                : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+              reason: 'selection_store_unavailable',
+            },
+            enforcementOutcome: 'clarify_extractor_failure',
+            confidenceBand: 'none',
+          },
+        };
+      }
+    }
+    await selectionStore.clearAll(conversationId, slackUserId);
     logPendingResponseAudit({
       requestId: input.requestId,
       eventId: input.eventId,
@@ -224,34 +532,185 @@ export async function routePendingResponse(
     return { handled: false, reason: 'no_pending' };
   }
 
-  if (ownedResult.status === 'multiple_owned') {
-    const selection = resolveOwnedPendingSelection(
-      userMessage,
-      ownedResult.pending
+  const employeeId =
+    input.employeeId?.trim() || ownedResult.employeeId;
+  const candidates: OwnedPendingRef[] =
+    ownedResult.status === 'owned'
+      ? [ownedResult.pending]
+      : ownedResult.pending;
+
+  // --- Validate existing selected target ---
+  const selectedGet = await selectionStore.getSelected(
+    conversationId,
+    slackUserId,
+    employeeId,
+    nowMs
+  );
+  if (selectedGet.outcome === 'unavailable') {
+    return {
+      handled: true,
+      decision: {
+        action: 'clarify',
+        message: looksThai(userMessage)
+          ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+          : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+        reason: 'selection_store_unavailable',
+      },
+      enforcement: {
+        decision: {
+          action: 'clarify',
+          message: looksThai(userMessage)
+            ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+            : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+          reason: 'selection_store_unavailable',
+        },
+        enforcementOutcome: 'clarify_extractor_failure',
+        confidenceBand: 'none',
+      },
+    };
+  }
+
+  if (selectedGet.outcome === 'found') {
+    const live = candidates.find(
+      (c) => c.confirmationId === selectedGet.target.confirmationId
     );
-    if (selection.status !== 'unique') {
-      logPendingResponseAudit({
-        requestId: input.requestId,
-        eventId: input.eventId,
+    if (!live) {
+      await selectionStore.clearAll(conversationId, slackUserId);
+      // Fall through to multi/single selection
+    } else {
+      // Valid selection — semantic against this proposal only
+      const semantic = await runSemanticAgainstOwned(
+        input,
+        live,
         conversationId,
-        pendingResponseOutcome: 'semantic_handled',
-        enforcementOutcome: 'clarify_multiple_owned',
-      });
-      return multipleOwnedClarify(userMessage, ownedResult.pending);
+        userMessage,
+        { clearSelectionOnSuccess: true }
+      );
+
+      // Unrelated: answer normally but preserve selection
+      if (
+        semantic.handled &&
+        semantic.enforcement.enforcementOutcome === 'unrelated_passthrough'
+      ) {
+        return semantic;
+      }
+
+      // Ambiguous / low confidence: clarify, keep selection
+      return semantic;
     }
-    // Server-selected unique target — semantic may proceed against this record only.
+  }
+
+  // --- Exactly one owned pending ---
+  if (ownedResult.status === 'owned') {
     return runSemanticAgainstOwned(
       input,
-      selection.pending,
+      ownedResult.pending,
       conversationId,
       userMessage
     );
   }
 
-  return runSemanticAgainstOwned(
-    input,
-    ownedResult.pending,
+  // --- Multiple owned: ordinal / business selection ---
+  const choicesGet = await selectionStore.getChoices(
     conversationId,
-    userMessage
+    slackUserId,
+    employeeId,
+    nowMs
   );
+  if (choicesGet.outcome === 'unavailable') {
+    return {
+      handled: true,
+      decision: {
+        action: 'clarify',
+        message: looksThai(userMessage)
+          ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+          : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+        reason: 'selection_store_unavailable',
+      },
+      enforcement: {
+        decision: {
+          action: 'clarify',
+          message: looksThai(userMessage)
+            ? 'ระบบยืนยัน Timesheet ใช้งานไม่ได้ชั่วคราว กรุณาลองใหม่อีกครั้งครับ'
+            : 'Timesheet confirmation is temporarily unavailable. Please try again.',
+          reason: 'selection_store_unavailable',
+        },
+        enforcementOutcome: 'clarify_extractor_failure',
+        confidenceBand: 'none',
+      },
+    };
+  }
+
+  const snapshot =
+    choicesGet.outcome === 'found' ? choicesGet.snapshot : null;
+  const decision = resolvePendingSelectionDecision({
+    userMessage,
+    candidates,
+    snapshot,
+  });
+
+  if (decision.status === 'invalid_ordinal') {
+    return showMultipleChoices({
+      userMessage,
+      candidates,
+      conversationId,
+      slackUserId,
+      employeeId,
+      selectionStore,
+      nowMs,
+      requestId: input.requestId,
+      eventId: input.eventId,
+    });
+  }
+
+  if (decision.status === 'selected_only') {
+    const forceOnly =
+      // bare ordinal protocol is always selection-only
+      /^\d{1,2}$/.test(userMessage.trim()) ||
+      /^(?:ข้อ|รายการ|number|no\.?|#)\s*\d{1,2}$/i.test(userMessage.trim()) ||
+      /^เลือก\s*(?:ข้อ|รายการ)?\s*\d{1,2}$/i.test(userMessage.trim());
+
+    return afterUniqueSelection({
+      routeInput: input,
+      pending: decision.pending,
+      conversationId,
+      slackUserId,
+      employeeId,
+      userMessage,
+      selectionStore,
+      nowMs,
+      forceSelectionOnly: forceOnly,
+    });
+  }
+
+  if (decision.status === 'selected_with_action') {
+    await persistSelectedTarget({
+      selectionStore,
+      conversationId,
+      slackUserId,
+      employeeId,
+      pending: decision.pending,
+      nowMs,
+    });
+    return runSemanticAgainstOwned(
+      input,
+      decision.pending,
+      conversationId,
+      decision.responseText,
+      { clearSelectionOnSuccess: true }
+    );
+  }
+
+  // none / ambiguous / stale → re-list
+  return showMultipleChoices({
+    userMessage,
+    candidates,
+    conversationId,
+    slackUserId,
+    employeeId,
+    selectionStore,
+    nowMs,
+    requestId: input.requestId,
+    eventId: input.eventId,
+  });
 }

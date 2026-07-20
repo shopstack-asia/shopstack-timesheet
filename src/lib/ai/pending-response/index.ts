@@ -41,9 +41,31 @@ export {
 } from '@/lib/ai/pending-response/load-owned';
 export {
   resolveOwnedPendingSelection,
+  resolvePendingSelectionDecision,
+  resolveOwnedPendingByBusinessFields,
   formatOwnedPendingChoices,
-  type ResolveOwnedPendingSelectionResult,
+  formatSelectedPendingSummary,
+  parseOrdinalProtocol,
+  buildChoiceSnapshot,
+  resolveOrdinalFromSnapshot,
+  type PendingSelectionDecision,
 } from '@/lib/ai/pending-response/select-pending';
+export {
+  SELECTED_PENDING_TTL_SECONDS,
+  selectedPendingKey,
+  pendingChoicesKey,
+  safeFingerprint,
+  sortOwnedPendingForPresentation,
+  type SelectedPendingTimesheetTarget,
+  type PendingChoiceSnapshot,
+} from '@/lib/ai/pending-response/selection-types';
+export {
+  createRedisSelectedPendingStore,
+  createInMemorySelectedPendingStore,
+  getDefaultSelectedPendingStore,
+  setDefaultSelectedPendingStore,
+  type SelectedPendingStore,
+} from '@/lib/ai/pending-response/selection-store';
 export {
   gateCorrectionAfterCancel,
   type CorrectionCancelGate,

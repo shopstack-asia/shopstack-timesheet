@@ -41,9 +41,10 @@ There is **no** unconfirmed direct-write tool in the AI registry. Internal helpe
 - Confirmation is bound to the same `slackUserId`, `conversationId`, and `employeeId`.
 - Conversation Context also carries Zoho `firstName` / `lastName` / `position` captured at identity resolution. Confirm passes them into `agentAuthFromConversationIdentity` so `submitDayTimesheetForStaff` writes Time Log **Staff First Name**, **Staff Last Name**, and **Staff Position** (same denormalized columns as the Weekly Timesheet UI). Missing fields write as empty strings.
 - **Natural-language confirm/cancel/correction** is decided by semantic pending-response extraction + deterministic enforcement — not a phrase list or regex. See [Semantic Pending-Response Extraction](../ai/features/Semantic%20Pending-Response%20Extraction.md).
-- Multiple owned pending proposals are never selected by newest-created-at; the user must uniquely identify one via business details, or the assistant clarifies.
-- Confirm and cancel both require `PENDING_ACTION_CONFIDENCE_THRESHOLD` (0.75).
+- Multiple owned pending proposals are never selected by newest-created-at. The assistant shows numbered safe choices, persists a displayed-choice snapshot for ordinals, and persists a selected-pending navigation target across turns. Selection is not write authorization — confirm/cancel still revalidate the authoritative pending record.
+- Confirm, cancel, and correction prepare all require `PENDING_ACTION_CONFIDENCE_THRESHOLD` (0.75).
 - Correction replacement prepare runs only after authoritative `cancelTimesheetChange` returns `status === 'cancelled'`; cancel/confirm races fail closed with zero prepare.
+- Selected-pending / choice-snapshot Redis keys use a short TTL (≤ 10 minutes, never outliving the pending); Redis unavailable fails closed.
 
 ## Day snapshot semantics
 

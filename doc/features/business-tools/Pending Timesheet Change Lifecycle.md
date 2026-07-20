@@ -15,9 +15,18 @@ This is **not** absolute exactly-once execution across Redis and Google Sheets. 
 | Key | Purpose |
 |-----|---------|
 | `timesheet:pending-change:{confirmationId}` | Full pending record JSON (snapshots, hashes, writeEntries, summary, ownership ids, status, `executionVersion`, timestamps) |
-| `timesheet:pending-by-conv:{conversationId}` | Redis SET of confirmationIds for owned-pending discovery (semantic pending-response routing). Multiple confirmable owned proposals are never selected by createdAt — the router clarifies or resolves by visible business fields. |
+| `timesheet:pending-by-conv:{conversationId}` | Redis SET of confirmationIds for owned-pending discovery (semantic pending-response routing). Multiple confirmable owned proposals are never selected by createdAt — the router clarifies or resolves by visible business fields / persisted selection. |
+| `timesheet:selected-pending:{conversationId}:{slackUserId}` | Multi-pending **navigation** selection (not write authorization). TTL ≤ 10 minutes and never outlives the selected pending. |
+| `timesheet:pending-choices:{conversationId}:{slackUserId}` | Exact displayed-choice snapshot for ordinal replies (`1`, `2`, …). Ordinals never resolve against live Redis array order. |
 
 Does **not** store Slack email or AI-supplied identity.
+
+## Multi-pending selection navigation
+
+- Selected target and choice snapshot are scoped by conversation + Slack user; `employeeId` is verified against Conversation Context on every load.
+- Selection survives ambiguous/low-confidence/unrelated turns; it is cleared on confirm success, cancel success, correction supersede (cancel===cancelled), expiry, ownership failure, or stale snapshot.
+- Before confirm/cancel/correction, the authoritative pending record is revalidated — Redis selection never bypasses fencing or ownership checks.
+- Redis unavailable → fail closed (no silent in-memory fallback).
 
 ## TTL and retention
 

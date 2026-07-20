@@ -8,7 +8,7 @@
 
 Natural-language replies to a pending proposal are classified by **semantic pending-response extraction** (`src/lib/ai/pending-response/*`). Application code maps a validated `confirm` intent (`confidence >= 0.75`, no mutation signals) to this tool with the **server-owned** `confirmationId`. The model never invents the id or authorizes the write.
 
-When **more than one** confirmable owned pending exists, confirm is not authorized until the user uniquely identifies the proposal via date/project/task/hours (or the collection drops to one).
+When **more than one** confirmable owned pending exists, confirm is not authorized until the user uniquely identifies the proposal (numbered choice or date/project/task/hours). The selected target is **persisted** across turns as navigation state; a later natural confirmation (e.g. `ใช่`) applies only to that selected proposal after revalidation. Selection-only messages never call this tool.
 
 Standalone acknowledgements with **no owned pending** never call this tool.
 

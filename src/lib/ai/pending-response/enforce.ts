@@ -13,6 +13,8 @@ export type OwnedPendingRef = {
   confirmationId: string;
   operation: PendingTimesheetChange['operation'];
   date?: string;
+  /** ISO expiry of the authoritative PendingTimesheetChange (navigation TTL cap). */
+  expiresAt: string;
   summaryPayload: Record<string, unknown>;
   proposal: SafePendingProposalContext;
 };
@@ -272,6 +274,18 @@ function enforceCorrection(
   ownedPending: OwnedPendingRef,
   band: ReturnType<typeof confidenceBand>
 ): EnforcePendingResponseResult {
+  if (extraction.confidence < PENDING_ACTION_CONFIDENCE_THRESHOLD) {
+    return {
+      decision: {
+        action: 'clarify',
+        message: pendingClarifyMessage(userMessage, 'low_confidence'),
+        reason: 'pending_correction_low_confidence',
+      },
+      enforcementOutcome: 'clarify_low_confidence',
+      confidenceBand: band,
+    };
+  }
+
   if (!correctionHasAnyHint(extraction)) {
     return {
       decision: {

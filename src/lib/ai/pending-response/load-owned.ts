@@ -14,7 +14,7 @@ import {
 import type { PendingTimesheetChange } from '@/lib/timesheet/write/pending-types';
 
 export type LoadOwnedPendingResult =
-  | { status: 'none' }
+  | { status: 'none'; employeeId?: string }
   | { status: 'owned'; pending: OwnedPendingRef; employeeId: string }
   | {
       status: 'multiple_owned';
@@ -36,10 +36,15 @@ export type LoadOwnedPendingInput = {
 };
 
 function toOwnedRef(change: PendingTimesheetChange): OwnedPendingRef {
+  const expiresAt =
+    change.expiresAt instanceof Date
+      ? change.expiresAt.toISOString()
+      : String(change.expiresAt);
   return {
     confirmationId: change.confirmationId,
     operation: change.operation,
     date: change.date,
+    expiresAt,
     summaryPayload: change.summaryPayload,
     proposal: buildSafePendingProposalContext(change),
   };
@@ -119,7 +124,7 @@ export async function loadOwnedPendingChange(
     );
 
     if (owned.length === 0) {
-      return { status: 'none' };
+      return { status: 'none', employeeId: convEmployeeId };
     }
 
     if (owned.length === 1) {

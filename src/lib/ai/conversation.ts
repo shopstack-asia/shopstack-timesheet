@@ -13,6 +13,10 @@ import {
   type ExtractPendingResponseFn,
   type RoutePendingResponseInput,
 } from '@/lib/ai/pending-response';
+import {
+  getDefaultSelectedPendingStore,
+  type SelectedPendingStore,
+} from '@/lib/ai/pending-response/selection-store';
 import { buildPrompt } from '@/lib/ai/prompt';
 import type {
   AssistantToolCall,
@@ -82,6 +86,8 @@ export type RunConversationDeps = {
   pendingStore?: Parameters<typeof routePendingResponse>[0]['pendingStore'];
   /** Conversation context loader override (tests). */
   getContext?: Parameters<typeof routePendingResponse>[0]['getContext'];
+  /** Multi-pending selection store (tests inject in-memory; production uses Redis). */
+  selectionStore?: SelectedPendingStore;
   /** Injectable cancel for correction supersede race tests. */
   cancelPendingChange?: (
     identity: WriteIdentity,
@@ -211,9 +217,12 @@ export async function runConversation(
 
   // --- Pending-aware semantic routing (before normal AI-first intent) ---
   const pendingRouteFn = deps?.routePending ?? routePendingResponse;
+  const selectionStore =
+    deps?.selectionStore ?? getDefaultSelectedPendingStore();
   let suppressConfirmCancelTools = false;
   let decision: BusinessToolDecision;
   let intentResult: DecideWithIntentResult | undefined;
+  let clearSelectionAfterTools = false;
 
   const pendingRoute = await pendingRouteFn({
     userMessage,
@@ -225,7 +234,16 @@ export async function runConversation(
     extractPending: deps?.extractPendingResponse,
     pendingStore: deps?.pendingStore,
     getContext: deps?.getContext,
+    selectionStore,
+    nowMs: deps?.decisionNow?.getTime(),
   });
+
+  if (pendingRoute.handled && pendingRoute.clearSelectionNow) {
+    await selectionStore.clearAll(conversationId, slackUserId);
+  }
+  if (pendingRoute.handled && pendingRoute.clearSelectionOnSuccess) {
+    clearSelectionAfterTools = true;
+  }
 
   if (pendingRoute.handled) {
     // Unrelated → answer normally; keep pending; strip confirm/cancel tools
@@ -290,6 +308,9 @@ export async function runConversation(
             toolRounds: 0,
           };
         }
+        // Old selection cleared once replacement preparation is authorized
+        await selectionStore.clearAll(conversationId, slackUserId);
+        clearSelectionAfterTools = false;
       } catch {
         return {
           text: /[\u0E00-\u0E7F]/.test(userMessage)
@@ -587,6 +608,16 @@ export async function runConversation(
           },
           toolContext
         );
+
+        if (
+          clearSelectionAfterTools &&
+          (call.function.name === 'confirm_timesheet_change' ||
+            call.function.name === 'cancel_timesheet_change') &&
+          toolResult.success
+        ) {
+          await selectionStore.clearAll(conversationId, slackUserId);
+          clearSelectionAfterTools = false;
+        }
 
         messages.push({
           role: 'tool',

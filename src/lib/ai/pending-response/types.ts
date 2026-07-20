@@ -63,6 +63,8 @@ export type PendingResponseEnforcementOutcome =
   | 'clarify_conflict'
   | 'clarify_extractor_failure'
   | 'clarify_multiple_owned'
+  | 'selection_persisted'
+  | 'selection_expired'
   | 'ownership_denied'
   | 'no_owned_pending'
   | 'correction_cancel_blocked';

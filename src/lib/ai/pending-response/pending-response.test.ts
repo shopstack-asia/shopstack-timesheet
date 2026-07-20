@@ -3,7 +3,7 @@
  * Behavioral fixtures are examples only — not a production allow-list.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { runConversation } from '@/lib/ai/conversation';
 import {
   parsePendingResponseExtraction,
@@ -13,6 +13,8 @@ import {
   isConfirmAuthorized,
   extractPendingResponse,
   routePendingResponse,
+  createInMemorySelectedPendingStore,
+  setDefaultSelectedPendingStore,
   type OwnedPendingRef,
   type PendingResponseExtraction,
   type SafePendingProposalContext,
@@ -20,6 +22,15 @@ import {
 import { createInMemoryPendingTimesheetChangeStore } from '@/lib/timesheet/write/pending-store';
 import { createDefaultToolRegistry, createToolRouter } from '@/lib/tools';
 import type { GenerateResponseFn } from '@/lib/ai/types';
+
+beforeEach(() => {
+  setDefaultSelectedPendingStore(createInMemorySelectedPendingStore());
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  setDefaultSelectedPendingStore(null);
+});
 
 const proposal: SafePendingProposalContext = {
   operation: 'create_entry',
@@ -35,6 +46,7 @@ const ownedPending: OwnedPendingRef = {
   confirmationId: 'confirm_abc123',
   operation: 'create_entry',
   date: '2026-07-18',
+  expiresAt: new Date(Date.now() + 600_000).toISOString(),
   summaryPayload: {
     date: '2026-07-18',
     projectName: 'Commerce Suite (HERTZ)',
