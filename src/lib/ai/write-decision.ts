@@ -1,5 +1,11 @@
 /**
- * Write-intent helpers for the Decision Engine (prepare/confirm/cancel).
+ * Write-intent helpers for the Decision Engine (prepare args + legacy regex).
+ *
+ * Production pending confirm/cancel authorization uses semantic pending-response
+ * extraction (`src/lib/ai/pending-response/*`) — NOT phrase lists or regex.
+ * `isBareConfirmPhrase` / `resolveConfirmOrCancel` remain only for the legacy
+ * `decideBusinessTool` path and historical tests — never as write authorization
+ * on the `runConversation` production path.
  */
 
 import {

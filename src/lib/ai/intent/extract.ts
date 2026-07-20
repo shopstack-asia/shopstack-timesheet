@@ -38,7 +38,8 @@ Rules:
 - Example: "ลงเวลางาน RMS วันนี้ 3 ชม. เป็น PM" → create_timesheet_entry with projectHint=RMS, dateExpression=วันนี้, hours=3, taskHint=PM, missingFields=[].
 - For incomplete timesheet writes, set intent to the write type and list only truly missing slots in missingFields.
 - When a pending draft summary is provided, fill the outstanding missingFields from short answers (PM, 3, RMS, วันนี้). Set refersToPrevious=true for those answers.
-- Bare confirm/cancel phrases → confirm_timesheet_change / cancel_timesheet_change.
+- Bare confirm/cancel of a pending proposal is handled by a dedicated semantic pending-response extractor (not this schema). Do not invent confirmationId.
+- When no pending proposal applies, confirm_timesheet_change / cancel_timesheet_change should not be used to force a write.
 - General chit-chat (ขอบคุณ, สวัสดี, เล่าเรื่อง…, What is…) → general_conversation with refersToPrevious=false. Never treat thanks or off-topic chat as Project/Task/hours.
 - Set refersToPrevious=true when the user is answering a missing field from the pending draft summary.
 - If clearly timesheet-related but unclear which write → create_timesheet_entry with missingFields, not general_conversation.

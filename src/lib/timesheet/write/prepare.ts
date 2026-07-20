@@ -26,11 +26,19 @@ import {
 import { isValidCalendarDate } from '@/lib/tools/business/timesheet/date-input';
 import type { Project, Task } from '@/types';
 
+/** Natural confirmation hint — never requires an exact keyword. */
+export const NATURAL_CONFIRM_HINT_TH =
+  'หากข้อมูลถูกต้อง สามารถตอบยืนยันได้ตามธรรมชาติ หรือแจ้งสิ่งที่ต้องการแก้ไขได้เลยครับ';
+
 export type WriteIdentity = {
   employeeId: string;
   email: string;
   slackUserId: string;
   conversationId: string;
+  /** Zoho StaffProfile fields written to Time Log denormalized columns */
+  firstName?: string;
+  lastName?: string;
+  position?: string;
   requestId?: string;
   sourceEventId?: string;
 };
@@ -211,7 +219,7 @@ export async function prepareCreateTimesheetEntry(
     `• *${project.ProjectClient}* — ${formatProjectLabel(project)}: ${task.Task} ${input.hours} ชั่วโมง`,
     `• วันที่ ${input.date}`,
     '',
-    'ตอบ *ยืนยัน* หรือ *ยกเลิก*',
+    NATURAL_CONFIRM_HINT_TH,
   ].join('\n');
 
   try {
@@ -471,7 +479,7 @@ export async function prepareUpdateTimesheetEntry(
     '*ใหม่*',
     `• ${clientName} — ${projectLabel}: ${taskLabel} ${nextHours} ชั่วโมง`,
     '',
-    'ตอบ *ยืนยัน* เพื่อดำเนินการ หรือ *ยกเลิก*',
+    NATURAL_CONFIRM_HINT_TH,
   ].join('\n');
 
   const confirmationId = newConfirmationId();
@@ -656,7 +664,7 @@ export async function prepareDeleteTimesheetEntry(
     `• ${existing.clientName || ''} — ${existing.projectName || ''}: ${existing.taskName || ''} ${existing.hours} ชั่วโมง`,
     `• วันที่ ${input.date}`,
     '',
-    'ตอบ *ยืนยัน* เพื่อดำเนินการ หรือ *ยกเลิก*',
+    NATURAL_CONFIRM_HINT_TH,
   ].join('\n');
 
   const confirmationId = newConfirmationId();

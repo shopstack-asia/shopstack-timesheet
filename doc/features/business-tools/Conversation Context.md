@@ -39,6 +39,11 @@ interface ConversationContext {
   slackUserId: string;
   slackEmail: string;
   employeeId: string;
+  employeeName?: string;
+  /** Zoho StaffProfile fields for Time Log denormalized columns (Slack writes) */
+  firstName?: string;
+  lastName?: string;
+  position?: string;
   workContext?: WorkContext;
   selectedClient?: { id: string; name: string };
   selectedProject?: { id: string; name: string };
@@ -47,6 +52,7 @@ interface ConversationContext {
 }
 ```
 
+Identity resolution stores `firstName` / `lastName` / `position` from Zoho People when Conversation Context is first created. Confirm writes pass these into `agentAuthFromConversationIdentity` so Google Sheets Time Log columns **Staff First Name**, **Staff Last Name**, and **Staff Position** match the Weekly Timesheet UI path.
 ## Smart loading
 
 | Option | Behavior |

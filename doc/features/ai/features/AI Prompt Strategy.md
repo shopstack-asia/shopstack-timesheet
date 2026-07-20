@@ -17,9 +17,10 @@ The builder always starts with a Tool Calling Reliability prompt that:
 - Allows demonstration tools: `ping`, `current_time`, `current_date`  
 - Maps identity / work context / single-day / range / write-prepare / confirm / cancel intents to Business Tools  
 - Documents `get_my_profile` (empty args; Conversation Context only; reports canonical Time Log Staff ID; no Zoho re-verify)  
-- Documents confirmation-gated write tools (prepare never writes Sheets; confirm by `confirmationId` only)  
+- Documents confirmation-gated write tools (prepare never writes Sheets; confirm by server-owned `confirmationId` only after semantic pending-response enforcement)
 - Resolves relative dates in `Asia/Bangkok`  
 - **Slack Response Style**: same language as user; Slack mrkdwn (`*bold*`, `•` lists); compact daily/range/confirmation answers; Task ≠ Role; expected/remaining hours only when asked  
+- Pending confirmation UX invites natural confirm / cancel / correction — never requires an exact keyword such as “ยืนยัน”
 
 Canonical text lives in `src/lib/ai/prompt.ts` (`AI_TIMESHEET_SYSTEM_PROMPT`).
 

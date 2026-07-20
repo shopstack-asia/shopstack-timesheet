@@ -86,6 +86,9 @@ const identity = {
   email: 'test@shopstack.asia',
   slackUserId: 'U1',
   conversationId: 'C1',
+  firstName: 'Ada',
+  lastName: 'Lovelace',
+  position: 'Engineer',
 };
 
 function day(
@@ -345,7 +348,7 @@ describe('confirm / cancel', () => {
     const readDaily = vi.fn(async () => sheets);
     const submitDay = vi.fn(
       async (
-        _auth: unknown,
+        _auth: { staff: { EmployeeID: string; FirstName: string; LastName: string; Position: string } },
         _date: string,
         entries: Array<{ projectId: string; taskId: string; hours: number }>
       ) => {
@@ -386,6 +389,12 @@ describe('confirm / cancel', () => {
     );
     expect(confirmed.status).toBe('completed');
     expect(submitDay).toHaveBeenCalledTimes(1);
+    expect(submitDay.mock.calls[0]![0].staff).toMatchObject({
+      EmployeeID: 'S0005',
+      FirstName: 'Ada',
+      LastName: 'Lovelace',
+      Position: 'Engineer',
+    });
     expect(sheets.totalHours).toBe(10);
 
     const retry = await confirmTimesheetChange(

@@ -3,7 +3,7 @@
 | Doc | Description |
 |-----|-------------|
 | [AI-First Intent Extraction.md](./features/AI-First%20Intent%20Extraction.md) | Structured NLU → Draft state machine → tools; canonical slot completion (IDs only); target-only merge; general+not_found=general |
-
+| [Semantic Pending-Response Extraction.md](./features/Semantic%20Pending-Response%20Extraction.md) | Owned pending → multi-pending selection persistence + semantic confirm/cancel/correction; deterministic enforcement; no phrase-list write auth |
 
 | [AI Conversation Architecture.md](./features/AI%20Conversation%20Architecture.md) | Modules and boundaries |
 | [AI Prompt Strategy.md](./features/AI%20Prompt%20Strategy.md) | System prompt and extensibility |
@@ -13,6 +13,7 @@
 ## Related code
 
 - `src/lib/ai/intent/*`
+- `src/lib/ai/pending-response/*`
 - `src/lib/ai/client.ts`
 - `src/lib/ai/conversation.ts`
 - `src/lib/ai/prompt.ts`

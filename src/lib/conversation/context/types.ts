@@ -16,6 +16,10 @@ export type ConversationContext = {
   employeeId: string;
   /** Optional display name captured when identity was first resolved */
   employeeName?: string;
+  /** Zoho StaffProfile fields for Time Log denormalized columns */
+  firstName?: string;
+  lastName?: string;
+  position?: string;
   workContext?: WorkContext;
   selectedClient?: SelectedRef;
   selectedProject?: SelectedRef;
@@ -29,6 +33,10 @@ export type ResolvedIdentity = {
   employeeId: string;
   /** Optional display name from Zoho */
   employeeName?: string;
+  /** Zoho StaffProfile fields for Time Log denormalized columns */
+  firstName?: string;
+  lastName?: string;
+  position?: string;
 };
 
 export type GetConversationContextOptions = {

@@ -46,6 +46,9 @@ async function loadWriteIdentity(
     email: conv.slackEmail,
     slackUserId: conv.slackUserId,
     conversationId,
+    firstName: conv.firstName,
+    lastName: conv.lastName,
+    position: conv.position,
     requestId: context.requestId,
     sourceEventId: context.eventId,
   };

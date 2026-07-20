@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CanonicalTimesheetReadError,
+  agentAuthFromConversationIdentity,
   mapRowsToDailyTimesheet,
   mapTimeLogRowToEntry,
   readDailyTimesheetForEmployee,
@@ -62,6 +63,34 @@ const july18Fixture: TimeLogRow[] = [
 ];
 
 describe('canonical Timesheet read mapping', () => {
+  it('agentAuthFromConversationIdentity populates Time Log staff name fields', () => {
+    const auth = agentAuthFromConversationIdentity({
+      employeeId: 'S0018',
+      email: 'ada@shopstack.asia',
+      slackUserId: 'U1',
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      position: 'Engineer',
+    });
+    expect(auth.staff).toMatchObject({
+      EmployeeID: 'S0018',
+      FirstName: 'Ada',
+      LastName: 'Lovelace',
+      Position: 'Engineer',
+      Email: 'ada@shopstack.asia',
+    });
+  });
+
+  it('agentAuthFromConversationIdentity defaults missing staff name fields to empty', () => {
+    const auth = agentAuthFromConversationIdentity({
+      employeeId: 'S0018',
+      email: 'ada@shopstack.asia',
+    });
+    expect(auth.staff.FirstName).toBe('');
+    expect(auth.staff.LastName).toBe('');
+    expect(auth.staff.Position).toBe('');
+  });
+
   it('maps Time Log rows to DailyTimesheet with client/project/task names', () => {
     const day = mapRowsToDailyTimesheet('2026-07-18', july18Fixture);
     expect(day.date).toBe('2026-07-18');

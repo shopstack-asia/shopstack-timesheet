@@ -246,7 +246,7 @@ describe('topic switching / no draft hijack', () => {
     expect(cat.merge).toBe(false);
   });
 
-  it('explicit draft cancel clears draft; bare cancel prioritizes pending confirmation', async () => {
+  it('explicit draft cancel clears draft; pending cancel is owned by semantic router', async () => {
     const store = createInMemoryIntentDraftStore();
     await store.set({
       intent: 'create_timesheet_entry',
@@ -258,6 +258,8 @@ describe('topic switching / no draft hijack', () => {
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
     });
 
+    // decideWithIntentExtraction no longer phrase-authorizes pending cancel.
+    // With pendingChanges present, model cancel intent clarifies (router owns writes).
     const pendingFirst = await decideWithIntentExtraction('ยกเลิก', {
       now: FIXED_NOW,
       extractIntent: async () =>
@@ -267,10 +269,7 @@ describe('topic switching / no draft hijack', () => {
       slackUserId: 'U1',
       pendingChanges: [{ confirmationId: 'p1', summary: 'pending write' }],
     });
-    expect(pendingFirst.decision.action).toBe('call_tool');
-    if (pendingFirst.decision.action === 'call_tool') {
-      expect(pendingFirst.decision.toolName).toBe('cancel_timesheet_change');
-    }
+    expect(pendingFirst.decision.action).toBe('clarify');
 
     await store.set({
       intent: 'create_timesheet_entry',
@@ -281,7 +280,7 @@ describe('topic switching / no draft hijack', () => {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
     });
-    const draftCancel = await decideWithIntentExtraction('ยกเลิก', {
+    const draftCancel = await decideWithIntentExtraction('ยกเลิกคำขอนี้', {
       now: FIXED_NOW,
       extractIntent: async () =>
         createIntent({ intent: 'cancel_timesheet_change' }),
