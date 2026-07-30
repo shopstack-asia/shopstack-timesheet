@@ -6,7 +6,7 @@
 | [weekly-submit-and-sheets-sync.md](./features/weekly-submit-and-sheets-sync.md) | Submit validation + Sheets upsert/delete sync |
 | [custom-project-on-submit.md](./features/custom-project-on-submit.md) | `*New` custom project creation |
 | [copy-yesterday.md](./features/copy-yesterday.md) | Copy previous day entries |
-| [leave-and-holiday-day-ux.md](./features/leave-and-holiday-day-ux.md) | FULL leave blocks edit; holiday/weekend editable with cues |
+| [leave-and-holiday-day-ux.md](./features/leave-and-holiday-day-ux.md) | Leave/holiday cues; all day types editable; submit ack for FULL leave/holiday |
 
 Slack AI write path reuses the same day writer (`submitDayTimesheetForStaff`) via confirmation-gated Business Tools — see [Timesheet Write Foundation](../business-tools/Timesheet%20Write%20Foundation.md). UI Submit Week has no separate Sheets submitted flag; Slack `prepare_submit_timesheet` is unsupported.
 

@@ -2,7 +2,7 @@
 
 ### Overview
 
-On an empty non-FULL-leave day (Tue–Sun), staff can copy the previous day’s entries into the current day with new entry IDs.
+On an empty day (Tue–Sun), staff can copy the previous day’s entries into the current day with new entry IDs — including FULL leave and holiday days.
 
 ### Business Purpose
 
@@ -16,15 +16,15 @@ Speed up repetitive weekly logging.
 
 ### Workflow
 
-1. Show **Copy Yesterday** when `dayIndex > 0`, `day.entries.length === 0`, and day is not FULL leave.
+1. Show **Copy Yesterday** when `dayIndex > 0` and `day.entries.length === 0`.
 2. On click, clone previous day’s entries with new client IDs into current day (local state only).
-3. User must still **Submit Week** to persist to Sheets.
+3. User must still **Submit Week** to persist to Sheets (leave OVERRIDE / holiday ack may apply).
 
 ### Screen Behavior
 
 - Button disabled while `submitting`.
-- Not shown on Monday (`dayIndex === 0`), when day already has entries, or when FULL leave.
-- Holidays do not hide or disable Copy Yesterday.
+- Not shown on Monday (`dayIndex === 0`) or when day already has entries.
+- FULL leave and holidays do not hide or disable Copy Yesterday.
 
 ### Business Logic
 
@@ -33,7 +33,7 @@ Speed up repetitive weekly logging.
 
 ### Edge Cases
 
-- Copy into a holiday or weekend day is allowed; user can edit and submit like any other day.
+- Copy into a holiday, weekend, or FULL leave day is allowed; user can edit and submit like any other day (submit ack may still apply).
 
 ### Source Code References
 
