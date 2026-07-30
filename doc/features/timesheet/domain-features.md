@@ -7,8 +7,8 @@
 3. **Edit entries** — multiple project/task/hours rows per day; searchable selects; hours step 0.25, max 24.
 4. **Submit week** — one click; POST each day with entries **sequentially**; Redis write lock around Sheets sync by `ProjectID|TaskID` key.
 5. **Custom projects** — free-text project name under client `*New` flow; server creates Projects row.
-6. **Copy yesterday** — copy previous day’s entries into an empty non-FULL-leave day.
-7. **Leave/holiday UX** — FULL leave disables add/edit; holidays and weekends remain editable (visual cues only); HALF leave still editable.
+6. **Copy yesterday** — copy previous day’s entries into an empty day (Tue–Sun), including leave and holiday days.
+7. **Leave/holiday UX** — FULL leave, HALF leave, holidays, and weekends remain editable (visual cues only); submit still requires leave OVERRIDE / holiday ack when policy applies.
 8. **Week total + Submit Week** button with client validation.
 
 ## Dependencies
