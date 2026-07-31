@@ -19,6 +19,7 @@ Slack AI write path reuses the same day writer (`submitDayTimesheetForStaff`) vi
 - `src/app/api/timesheet/get/route.ts`
 - `src/app/api/timesheet/submit/route.ts`
 - `src/lib/google-sheets.ts`
+- `src/lib/sheets-date.ts` (Time Log Date serial ↔ ISO)
 - `src/lib/timesheet/timesheet-service.ts` (`getTimeLogRowsForStaffRange`, `getWeeklyTimesheetForStaff`)
 - `src/lib/timesheet/canonical-read.ts` (AI + domain `DailyTimesheet` mapping over the same Time Log rows)
 - `src/lib/sheets-write-lock.ts`

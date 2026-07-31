@@ -71,7 +71,7 @@
 2. **Secrets:** `NEXTAUTH_SECRET` no longer inlined via Next `env` config.
 3. **Debug:** Production returns 404 unless `ENABLE_DEBUG_API=true`; always needs Bearer secret; no arbitrary HTML email/Slack body; no stacks/token previews.
 4. **Business rules:** Leave / holiday / future / day-total > 24 / hours > 0 enforced in `submitDayTimesheetForStaff` for all callers; web must send ack flags; Slack tools pass acks after conversational confirmation.
-5. **Sheets:** All writes use `valueInputOption: 'RAW'` and sanitize leading `= + - @`.
+5. **Sheets:** All writes use `valueInputOption: 'RAW'` and sanitize leading `= + - @`. Time Log **Date** cells are written as numeric Sheets date serials (still `RAW`) so the column can be a real date without reopening `USER_ENTERED` formula injection (H-02 remains closed). See `src/lib/sheets-date.ts`.
 6. **Rate limits:** Redis-backed IP (+ user where available) on timesheet, leave, slack, cron, debug → **429**.
 7. **URLs:** Reminder/debug Slack links use `getConfiguredTimesheetUrl()` only; fail if unset.
 8. **Errors:** Client-facing messages sanitized on submit/get/cron/debug failure paths.

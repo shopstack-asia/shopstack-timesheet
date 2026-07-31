@@ -78,7 +78,16 @@ Drive timesheet dropdowns without exposing Sheets credentials to the browser.
 
 **Time Log** (written by timesheet submit — see timesheet feature):
 
-Time Log ID, Date, Staff ID, Staff First Name, Staff Last Name, Staff Position, Project ID, Project Client, Project Name, Project Code, Task ID, Task, Hours.
+| Col | Field | Notes |
+|-----|--------|--------|
+| A | Time Log ID | Text hash |
+| B | Date | **Sheets date** (serial + Date number format). Writes use RAW serials via `src/lib/sheets-date.ts`; reads use `UNFORMATTED_VALUE` + normalize to `YYYY-MM-DD`. Prefer column format `yyyy-mm-dd`. |
+| C–F | Staff ID / First / Last / Position | Text |
+| G–J | Project ID / Client / Name / Code | Text (IDs may appear numeric under UNFORMATTED_VALUE; app coerces to string) |
+| K–L | Task ID / Task | Text |
+| M | Hours | Number |
+
+If new submit rows show a raw serial in column B, select the column and set **Format → Number → Date** once so appended cells inherit date formatting.
 
 #### Service account setup
 

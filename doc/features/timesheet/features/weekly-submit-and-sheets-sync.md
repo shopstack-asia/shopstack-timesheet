@@ -45,6 +45,8 @@ Persist accurate weekly time against projects/tasks for reporting.
 - Empty submit array → delete all existing rows for staff/date.
 - Staff identity from `session.staffProfile` (EmployeeID, names, position).
 - Concurrent submits across users/instances are serialized by the Redis write lock so `rowNumber`-based deletes/updates do not race.
+- **Time Log Date (column B)** is written as a Google Sheets **date serial number** (day count from 1899-12-30) via `valueInputOption: 'RAW'` — not as ISO text and not via `USER_ENTERED` (keeps H-02 formula-injection remediations closed). App-layer `TimeLogRow.Date` remains `YYYY-MM-DD`; conversion lives in `src/lib/sheets-date.ts`.
+- Upsert / day lookup **normalizes** column B with `normalizeSheetDate` before comparing to the submit ISO date, so serial cells and any leftover legacy ISO text rows both match.
 
 ### Validation Rules
 
@@ -82,7 +84,7 @@ Persist accurate weekly time against projects/tasks for reporting.
 | Column | Source |
 |--------|--------|
 | Time Log ID | SHA-256 prefix of `date\|staffId\|projectId\|taskId` |
-| Date | Submit `date` |
+| Date | Submit `date` (`YYYY-MM-DD`) converted to Sheets date serial on write; number format on the column should be Date (e.g. `yyyy-mm-dd`) so the UI shows a date, not a raw serial |
 | Staff ID / First / Last / Position | Session `staffProfile` |
 | Project ID / Client / Name / Code | Master project or newly created `*New` project |
 | Task ID / Task | Master task |
@@ -95,6 +97,8 @@ Sheet structure setup: [master-data/projects-and-tasks-from-sheets.md](../../mas
 - UI ↔ API gap on clearing days (documented above).
 - Week submit is sequential per-day POSTs (not a single week transaction).
 - Submit requires Redis; without it the API returns 503 rather than writing unlocked.
+- Sheets date serial math inherits the Lotus 1900 leap-year fiction; conversions are reliable for dates on/after 1900-03-01 (all real timesheet data).
+- Newly appended rows inherit column number formats when the whole Date column is formatted as Date. If a new row shows a raw serial (e.g. `46223`), set **Format → Number → Date** once on column B.
 
 ### Source Code References
 
@@ -103,11 +107,14 @@ Sheet structure setup: [master-data/projects-and-tasks-from-sheets.md](../../mas
 - `src/app/api/timesheet/submit/route.ts`
 - `src/lib/sheets-write-lock.ts` (Redis Time Log write lock)
 - `src/lib/google-sheets.ts` (`generateTimeLogId`, upsert/delete helpers)
+- `src/lib/sheets-date.ts` (ISO ↔ Sheets date serial)
 
 ### Required tests
 
 - `src/lib/sheets-write-lock.test.ts` — acquire/release; wait then acquire; lock timeout; token-safe release; Redis errors
 - `src/lib/submit-week-days.test.ts` — sequential order; skip empty days; continue after mid failure
+- `src/lib/sheets-date.test.ts` — ISO ↔ serial round trip; reject invalid/ambiguous dates; write helper uses serial
+- `src/lib/google-sheets-date.test.ts` — find/get match serial + legacy ISO; coerce numeric Project/Task IDs under `UNFORMATTED_VALUE`; update writes serial with `RAW`
 - Zod rejects bad date / hours > 24
 - Invalid task → 400
 - Empty entries deletes existing rows (mocked Sheets)

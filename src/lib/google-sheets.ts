@@ -2,6 +2,43 @@ import { google } from 'googleapis';
 import { createHash } from 'crypto';
 import { Project, Task, TimeLogRow } from '@/types';
 import { sanitizeSheetRow } from '@/lib/sheets-sanitize';
+import {
+  dateCellForSheetsWrite,
+  normalizeSheetDate,
+} from '@/lib/sheets-date';
+
+function cellAsString(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value);
+}
+
+function cellAsHours(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapTimeLogRow(row: unknown[]): TimeLogRow {
+  return {
+    'Time Log ID': cellAsString(row[0]),
+    Date: normalizeSheetDate(row[1]) || cellAsString(row[1]),
+    'Staff ID': cellAsString(row[2]),
+    'Staff First Name': cellAsString(row[3]),
+    'Staff Last Name': cellAsString(row[4]),
+    'Staff Position': cellAsString(row[5]),
+    'Project ID': cellAsString(row[6]),
+    'Project Client': cellAsString(row[7]),
+    'Project Name': cellAsString(row[8]),
+    'Project Code': cellAsString(row[9]),
+    'Task ID': cellAsString(row[10]),
+    Task: cellAsString(row[11]),
+    Hours: cellAsHours(row[12]),
+  };
+}
 
 export class GoogleSheetsService {
   /**
@@ -248,6 +285,7 @@ export class GoogleSheetsService {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
         range: 'Time Log!A2:M', // Skip header row
+        valueRenderOption: 'UNFORMATTED_VALUE',
       });
 
       const rows = response.data.values || [];
@@ -256,7 +294,7 @@ export class GoogleSheetsService {
       // Column order: Time Log ID (A), Date (B), Staff ID (C), Project ID (G), Task ID (K)
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const timeLogId = row[0] ? String(row[0]) : '';
+        const timeLogId = cellAsString(row[0]);
         
         // Check by Time Log ID first (faster)
         if (timeLogId === expectedTimeLogId) {
@@ -267,12 +305,13 @@ export class GoogleSheetsService {
         }
         
         // Fallback: check by Date + Staff ID + Project ID + Task ID (for backward compatibility)
+        // Date may be a Sheets serial (number) or legacy ISO/text — normalize before compare.
         if (
           row.length >= 11 &&
-          row[1] === date && // Date (column B, index 1)
-          row[2] === staffId && // Staff ID (column C, index 2)
-          row[6] === projectId && // Project ID (column G, index 6)
-          row[10] === taskId // Task ID (column K, index 10)
+          normalizeSheetDate(row[1]) === date &&
+          cellAsString(row[2]) === staffId &&
+          cellAsString(row[6]) === projectId &&
+          cellAsString(row[10]) === taskId
         ) {
           // Use generated ID if existing ID is not in the correct format
           return {
@@ -297,7 +336,7 @@ export class GoogleSheetsService {
     try {
       const row = [
         entry['Time Log ID'],
-        entry.Date,
+        dateCellForSheetsWrite(entry.Date),
         entry['Staff ID'],
         entry['Staff First Name'],
         entry['Staff Last Name'],
@@ -382,7 +421,7 @@ export class GoogleSheetsService {
         const rows = entriesToAppend.map((entry) =>
           sanitizeSheetRow([
             entry['Time Log ID'],
-            entry.Date,
+            dateCellForSheetsWrite(entry.Date),
             entry['Staff ID'],
             entry['Staff First Name'],
             entry['Staff Last Name'],
@@ -438,6 +477,7 @@ export class GoogleSheetsService {
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
         range: 'Time Log!A2:M', // Skip header row
+        valueRenderOption: 'UNFORMATTED_VALUE',
       });
 
       const rows = response.data.values || [];
@@ -448,27 +488,12 @@ export class GoogleSheetsService {
         const row = rows[i];
         if (
           row.length >= 11 &&
-          row[1] === date && // Date (column B, index 1)
-          row[2] === staffId // Staff ID (column C, index 2)
+          normalizeSheetDate(row[1]) === date &&
+          cellAsString(row[2]) === staffId
         ) {
-          const entry: TimeLogRow = {
-            'Time Log ID': String(row[0] || ''),
-            Date: row[1],
-            'Staff ID': row[2],
-            'Staff First Name': row[3],
-            'Staff Last Name': row[4],
-            'Staff Position': row[5],
-            'Project ID': row[6],
-            'Project Client': row[7],
-            'Project Name': row[8],
-            'Project Code': row[9],
-            'Task ID': row[10],
-            Task: row[11],
-            Hours: parseFloat(row[12]) || 0,
-          };
           result.push({
             rowNumber: i + 2, // 2-indexed because we skipped header
-            entry,
+            entry: mapTimeLogRow(row),
           });
         }
       }
@@ -548,111 +573,32 @@ export class GoogleSheetsService {
   }
 
   /**
-   * Get time log entries for a specific date range (optional, for viewing)
+   * Get time log entries for a specific date range (optional, for viewing).
+   * Reads UNFORMATTED_VALUE so Date column B is a Sheets serial (or legacy text).
    */
-  /**
-   * Normalize date format from Google Sheets to YYYY-MM-DD
-   * Google Sheets may return dates in various formats (DD/MM/YYYY, MM/DD/YYYY, serial number, etc.)
-   */
-  private normalizeDate(dateValue: any): string | null {
-    if (!dateValue) return null;
-    
-    const dateStr = String(dateValue).trim();
-    
-    // If already in YYYY-MM-DD format, return as is
-    if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-      return dateStr;
-    }
-    
-    // Try to parse as Date object
-    const date = new Date(dateStr);
-    if (!isNaN(date.getTime())) {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      return `${year}-${month}-${day}`;
-    }
-    
-    // Try to parse DD/MM/YYYY or MM/DD/YYYY format
-    const parts = dateStr.split(/[-\/]/);
-    if (parts.length === 3) {
-      let year: string, month: string, day: string;
-      
-      // Try DD/MM/YYYY first (common in many regions)
-      if (parts[0].length === 2 && parts[1].length === 2 && parts[2].length === 4) {
-        day = parts[0];
-        month = parts[1];
-        year = parts[2];
-      }
-      // Try MM/DD/YYYY (US format)
-      else if (parts[0].length <= 2 && parts[1].length <= 2 && parts[2].length === 4) {
-        month = parts[0];
-        day = parts[1];
-        year = parts[2];
-      }
-      // Try YYYY/MM/DD
-      else if (parts[0].length === 4) {
-        year = parts[0];
-        month = parts[1];
-        day = parts[2];
-      } else {
-        return null;
-      }
-      
-      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-    }
-    
-    return null;
-  }
-
   async getTimeLogEntries(startDate: string, endDate: string): Promise<TimeLogRow[]> {
     try {
-      // console.log(`[Google Sheets] Fetching time log entries from ${startDate} to ${endDate}`);
       const response = await this.sheets.spreadsheets.values.get({
         spreadsheetId: this.spreadsheetId,
         range: 'Time Log!A2:M',
+        valueRenderOption: 'UNFORMATTED_VALUE',
       });
 
       const rows = response.data.values || [];
-      // console.log(`[Google Sheets] Found ${rows.length} total rows in Time Log sheet`);
 
       const filteredRows = rows.filter((row: any[]) => {
         if (row.length < 2) return false;
-        const rawDate = row[1]; // Column B is Date
-        const normalizedDate = this.normalizeDate(rawDate);
-        
+        const normalizedDate = normalizeSheetDate(row[1]);
+
         if (!normalizedDate) {
-          console.warn(`[Google Sheets] Could not parse date: ${rawDate}`);
+          console.warn(`[Google Sheets] Could not parse date: ${row[1]}`);
           return false;
         }
-        
-        const inRange = normalizedDate >= startDate && normalizedDate <= endDate;
-        if (inRange) {
-          // console.log(`[Google Sheets] Found entry with date ${normalizedDate} (raw: ${rawDate})`);
-        }
-        return inRange;
+
+        return normalizedDate >= startDate && normalizedDate <= endDate;
       });
 
-      // console.log(`[Google Sheets] Filtered to ${filteredRows.length} entries in date range`);
-
-      return filteredRows.map((row: any[]) => {
-        const normalizedDate = this.normalizeDate(row[1]) || row[1];
-        return {
-          'Time Log ID': String(row[0] || ''),
-          Date: normalizedDate,
-          'Staff ID': row[2],
-          'Staff First Name': row[3],
-          'Staff Last Name': row[4],
-          'Staff Position': row[5],
-          'Project ID': row[6],
-          'Project Client': row[7],
-          'Project Name': row[8],
-          'Project Code': row[9],
-          'Task ID': row[10],
-          Task: row[11],
-          Hours: parseFloat(row[12]) || 0,
-        };
-      });
+      return filteredRows.map((row: any[]) => mapTimeLogRow(row));
     } catch (error) {
       console.error('Error fetching time log entries:', error);
       throw new Error('Failed to fetch time log entries from Google Sheets');

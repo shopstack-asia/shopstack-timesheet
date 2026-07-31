@@ -36,6 +36,7 @@ Show the current week’s logged time and context needed to edit accurately.
 
 - Week: `weekStartsOn: 1`; days `i = 0..6` (Monday–Sunday).
 - Get API: `getWeeklyTimesheetForStaff` → shared `getTimeLogRowsForStaffRange` (calendar Mon–Sun); filter Sheets rows by `Staff ID` (= Zoho EmployeeID); group by `Date`; dedupe by Time Log ID.
+- Time Log reads use `valueRenderOption: 'UNFORMATTED_VALUE'` so column B returns a Sheets date serial (or legacy ISO text). `normalizeSheetDate` maps that to `YYYY-MM-DD` before grouping; text columns (Project ID, Task ID, etc.) are coerced with `String()` because unformatted numerics arrive as numbers.
 - AI Business Tools (`get_timesheet` / `get_timesheet_range`) use the same shared row load via `src/lib/timesheet/canonical-read.ts`.
 - Client holiday/leave caches in refs to avoid refetch thrash.
 
@@ -67,9 +68,12 @@ Show the current week’s logged time and context needed to edit accurately.
 - `src/app/api/timesheet/get/route.ts`
 - `src/lib/timesheet/timesheet-service.ts`
 - `src/lib/timesheet/canonical-read.ts`
+- `src/lib/google-sheets.ts` (`getTimeLogEntries`, `UNFORMATTED_VALUE`)
+- `src/lib/sheets-date.ts` (`normalizeSheetDate`)
 
 ### Required tests
 
 - 401 without session
 - 400 without weekStart
 - Groups and dedupes Time Log rows by staff/date/id
+- `src/lib/google-sheets-date.test.ts` — range filter accepts mixed serial + legacy ISO Date cells; Project/Task IDs remain strings
