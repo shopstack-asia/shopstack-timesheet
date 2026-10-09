@@ -33,12 +33,33 @@ export interface Task {
   Task: string;
 }
 
+/** How a timesheet row is entered and how it is written to the Time Log. */
+export type TimesheetTaskType =
+  | 'project_delivery'
+  | 'sales_presales'
+  | 'internal_development'
+  | 'internal_operations';
+
+/** Row on the Sales Projects sheet (no Project ID). */
+export interface SalesProject {
+  ProjectClient: string;
+  ProjectName: string;
+  ProjectCode: string;
+}
+
 // Time Entry (UI representation)
 export interface TimeEntry {
   id: string;
+  /** Absent on older in-memory rows; treat as project_delivery. */
+  taskType?: TimesheetTaskType;
   projectId: string; // Can be either a valid project ID or a custom project name (text)
   taskId: string;
   hours: number;
+  projectClient?: string;
+  projectName?: string;
+  projectCode?: string;
+  /** Operation task name, or the fixed Sales & Presales task label. */
+  taskName?: string;
 }
 
 // Daily Timesheet Entry

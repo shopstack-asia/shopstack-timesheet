@@ -4,7 +4,7 @@
 
 1. **Weekly grid** — Monday–Sunday; column or tab view.
 2. **Load week** — `GET /api/timesheet/get?weekStart=` → entries grouped by date for session staff (Mon–Sun).
-3. **Edit entries** — multiple project/task/hours rows per day; searchable selects; hours step 0.25, max 24.
+3. **Edit entries** — task type first (Project Delivery, Sales & Presales, Internal Development, Internal Operations); searchable selects; hours step 0.25, max 24.
 4. **Submit week** — one click; POST each day with entries **sequentially**; Redis write lock around Sheets sync by `ProjectID|TaskID` key.
 5. **Custom projects** — free-text project name under client `*New` flow; server creates Projects row.
 6. **Copy yesterday** — copy previous day’s entries into an empty day (Tue–Sun), including leave and holiday days.

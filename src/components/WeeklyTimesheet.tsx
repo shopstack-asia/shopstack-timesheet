@@ -4,9 +4,10 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import { format, startOfWeek, addDays, parseISO } from 'date-fns';
 import DailyCard from './DailyCard';
-import { Project, Task, TimeEntry, DailyTimesheet, LeaveDayEntry, Holiday } from '@/types';
+import { Project, SalesProject, Task, TimeEntry, DailyTimesheet, LeaveDayEntry, Holiday } from '@/types';
 import { getLeaveEntry, isFullLeave, isHalfLeave } from '@/lib/leave-utils';
 import { submitWeekDaysSequentially } from '@/lib/submit-week-days';
+import { isTimeEntryReady, toSubmitEntryPayload } from '@/lib/timesheet/task-type';
 
 type ViewMode = 'column' | 'tab';
 
@@ -26,6 +27,8 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
   const [projects, setProjects] = useState<Project[]>([]);
   const [clients, setClients] = useState<string[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [salesProjects, setSalesProjects] = useState<SalesProject[]>([]);
+  const [operationTasks, setOperationTasks] = useState<string[]>([]);
   const [timesheet, setTimesheet] = useState<DailyTimesheet[]>([]);
   const [leaveData, setLeaveData] = useState<LeaveDayEntry[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
@@ -288,9 +291,11 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
   useEffect(() => {
     async function loadMasterData() {
       try {
-        const [projectsRes, tasksRes] = await Promise.all([
+        const [projectsRes, tasksRes, salesRes, operationRes] = await Promise.all([
           fetch('/api/master/projects'),
           fetch('/api/master/tasks'),
+          fetch('/api/master/sales-projects'),
+          fetch('/api/master/operation-tasks'),
         ]);
 
         if (projectsRes.ok) {
@@ -315,6 +320,16 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
           const tasksData = await tasksRes.json();
           setTasks(tasksData.data || []);
         }
+
+        if (salesRes.ok) {
+          const salesData = await salesRes.json();
+          setSalesProjects(salesData.data?.projects || []);
+        }
+
+        if (operationRes.ok) {
+          const operationData = await operationRes.json();
+          setOperationTasks(operationData.data || []);
+        }
       } catch (error) {
         console.error('Error loading master data:', error);
       } finally {
@@ -328,6 +343,7 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
   const handleAddEntry = (dayIndex: number) => {
     const newEntry: TimeEntry = {
       id: Date.now().toString(),
+      taskType: 'project_delivery',
       projectId: '',
       taskId: '',
       hours: 0,
@@ -390,6 +406,35 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     setTimesheet(updatedTimesheet);
   };
 
+  const handleCreateSalesProject = async (input: {
+    projectClient: string;
+    projectName: string;
+    projectCode: string;
+  }): Promise<{ ok: true; project: SalesProject } | { ok: false; error: string }> => {
+    const response = await fetch('/api/master/sales-projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.success || !result.data) {
+      return {
+        ok: false,
+        error: result.error || 'Failed to add sales project',
+      };
+    }
+    const created = result.data as SalesProject;
+    setSalesProjects((prev) => {
+      const exists = prev.some(
+        (project) =>
+          project.ProjectCode.trim().toLowerCase() ===
+          created.ProjectCode.trim().toLowerCase()
+      );
+      return exists ? prev : [...prev, created];
+    });
+    return { ok: true, project: created };
+  };
+
   const handleSubmitWeek = async () => {
     // Check if there are any entries in the week
     const hasEntries = timesheet.some((day) => day.entries.length > 0);
@@ -401,13 +446,7 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
     // Validate all entries across all days
     const invalidDays: string[] = [];
     timesheet.forEach((day, index) => {
-      const invalidEntries = day.entries.filter((entry) => {
-        // Check if entry has all required fields
-        // Note: We can't check client here as it's not stored in entry
-        // Client validation is handled in TimeEntryForm component
-        // projectId can be either a valid project ID or a custom project name (text from textbox)
-        return !entry.projectId || entry.projectId.trim() === '' || !entry.taskId || entry.hours <= 0;
-      });
+      const invalidEntries = day.entries.filter((entry) => !isTimeEntryReady(entry));
       if (invalidEntries.length > 0) {
         const dayName = format(parseISO(day.date), 'EEEE');
         invalidDays.push(dayName);
@@ -416,7 +455,7 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
 
     if (invalidDays.length > 0) {
       alert(
-        `Please complete all required fields (Client, Project, Task, and Hours) for: ${invalidDays.join(', ')}`
+        `Please complete all required fields and enter hours greater than 0 for: ${invalidDays.join(', ')}`
       );
       return;
     }
@@ -427,11 +466,7 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
       const results = await submitWeekDaysSequentially(
         timesheet.map((day) => ({
           date: day.date,
-          entries: day.entries.map((entry) => ({
-            projectId: entry.projectId,
-            taskId: entry.taskId,
-            hours: entry.hours,
-          })),
+          entries: day.entries.map((entry) => toSubmitEntryPayload(entry)),
           // No automatic acknowledgments — server returns policyCode; we confirm explicitly.
         })),
         async (day) => {
@@ -761,6 +796,9 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
               projects={projects}
               clients={clients}
               tasks={tasks}
+              salesProjects={salesProjects}
+              operationTasks={operationTasks}
+              onCreateSalesProject={handleCreateSalesProject}
               leaveData={leaveData}
               holidays={visibleHolidays}
               onAddEntry={() => handleAddEntry(dayIndex)}
@@ -787,6 +825,9 @@ export default function WeeklyTimesheet({ weekStart, viewMode, onViewModeChange 
             projects={projects}
             clients={clients}
             tasks={tasks}
+            salesProjects={salesProjects}
+            operationTasks={operationTasks}
+            onCreateSalesProject={handleCreateSalesProject}
             leaveData={leaveData}
             holidays={visibleHolidays}
             showLabels={true}

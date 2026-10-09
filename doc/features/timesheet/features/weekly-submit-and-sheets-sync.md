@@ -41,7 +41,8 @@ Persist accurate weekly time against projects/tasks for reporting.
 
 ### Business Logic
 
-- Sync key: `` `${projectId}|${taskId}` `` (custom name uses the name as project key until created).
+- Sync key: `` `${projectId}|${taskId}` `` for Project Delivery and Internal Development (custom name uses the name as project key until created).
+- Sales & Presales and Internal Operations write Project ID `0` and Task ID `0`. Their sync key and Time Log ID also include Project Code and Task so those rows do not collapse. See [task-type-entries.md](./task-type-entries.md).
 - Empty submit array → delete all existing rows for staff/date.
 - Staff identity from `session.staffProfile` (EmployeeID, names, position).
 - Concurrent submits across users/instances are serialized by the Redis write lock so `rowNumber`-based deletes/updates do not race.

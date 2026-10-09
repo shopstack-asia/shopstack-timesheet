@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { format, parseISO } from 'date-fns';
 import TimeEntryForm from './TimeEntryForm';
-import { DailyTimesheet, Project, Task, TimeEntry, LeaveDayEntry, Holiday } from '@/types';
+import { DailyTimesheet, Project, SalesProject, Task, TimeEntry, LeaveDayEntry, Holiday } from '@/types';
 import { getLeaveEntry, isFullLeave, isHalfLeave } from '@/lib/leave-utils';
 
 interface DailyCardProps {
@@ -12,6 +12,13 @@ interface DailyCardProps {
   projects: Project[];
   clients: string[];
   tasks: Task[];
+  salesProjects: SalesProject[];
+  operationTasks: string[];
+  onCreateSalesProject: (input: {
+    projectClient: string;
+    projectName: string;
+    projectCode: string;
+  }) => Promise<{ ok: true; project: SalesProject } | { ok: false; error: string }>;
   leaveData: LeaveDayEntry[];
   holidays: Holiday[];
   showLabels?: boolean;
@@ -28,6 +35,9 @@ export default function DailyCard({
   projects,
   clients,
   tasks,
+  salesProjects,
+  operationTasks,
+  onCreateSalesProject,
   leaveData,
   holidays,
   showLabels = false,
@@ -153,6 +163,9 @@ export default function DailyCard({
             projects={projects}
             clients={clients}
             tasks={tasks}
+            salesProjects={salesProjects}
+            operationTasks={operationTasks}
+            onCreateSalesProject={onCreateSalesProject}
             disabled={submitting}
             showLabels={showLabels}
             onUpdate={(updates) => onUpdateEntry(entryIndex, updates)}

@@ -30,7 +30,7 @@ Provide navigation and personal preferences around the weekly grid without ownin
 ### Business Logic
 
 - Theme toggle flips light ↔ dark and writes `localStorage`.
-- View mode invalid stored values ignored; default `column`.
+- View mode invalid stored values ignored; default `tab` (day switcher). A saved `column` or `tab` value still wins.
 
 ### Data Model Summary
 

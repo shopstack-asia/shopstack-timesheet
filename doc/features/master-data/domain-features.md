@@ -4,7 +4,9 @@
 
 1. **Projects list** — Sheets `Projects!A2:D` → `Project` objects + sorted unique `clients`.
 2. **Tasks list** — Roles and Tasks sheet → `Task` objects.
-3. **In-process cache** — 5 minute TTL for projects/tasks (not Redis). Cleared when a custom project is created.
+3. **Sales Projects** — `Sales Projects!A2:C` (client, name, code) plus create with a unique project code.
+4. **Operation tasks** — `Dropdown` sheet column `Operation Task`.
+5. **In-process cache** — 5 minute TTL for projects, tasks, sales projects, and operation tasks (not Redis). Cleared when a custom project or sales project is created.
 
 ## Dependencies
 

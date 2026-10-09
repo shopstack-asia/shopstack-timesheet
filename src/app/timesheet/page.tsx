@@ -15,7 +15,7 @@ export default function TimesheetPage() {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const [currentWeek, setCurrentWeek] = useState(new Date());
-  const [viewMode, setViewMode] = useState<ViewMode>('column');
+  const [viewMode, setViewMode] = useState<ViewMode>('tab');
   const [viewModeInitialized, setViewModeInitialized] = useState(false);
 
   // Load saved view mode preference

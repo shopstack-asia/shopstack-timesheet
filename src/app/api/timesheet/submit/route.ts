@@ -17,9 +17,21 @@ const submitTimesheetSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   entries: z.array(
     z.object({
+      taskType: z
+        .enum([
+          'project_delivery',
+          'sales_presales',
+          'internal_development',
+          'internal_operations',
+        ])
+        .optional(),
       projectId: z.string().min(1),
       taskId: z.string().min(1),
       hours: z.number().min(0).max(24),
+      projectClient: z.string().optional(),
+      projectName: z.string().optional(),
+      projectCode: z.string().optional(),
+      taskName: z.string().optional(),
     })
   ),
   leaveOverride: z.boolean().optional(),
@@ -138,7 +150,7 @@ export async function POST(request: NextRequest) {
     const message =
       error instanceof Error ? error.message : 'Failed to submit timesheet';
     const status =
-      message.startsWith('Invalid task ID') ||
+      message.startsWith('Invalid ') ||
       message.startsWith('Validation') ||
       message.startsWith('Unknown project')
         ? 400

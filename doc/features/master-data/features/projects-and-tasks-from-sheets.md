@@ -69,6 +69,20 @@ Drive timesheet dropdowns without exposing Sheets credentials to the browser.
 | C | ProjectName |
 | D | ProjectCode |
 
+**Sales Projects** (`Sales Projects!A2:C`):
+
+| Col | Field |
+|-----|--------|
+| A | Project Client |
+| B | Project Name |
+| C | Project Code |
+
+No Project ID. `GET/POST /api/master/sales-projects`. Create rejects a project code that already exists (trim, case-insensitive) with HTTP 409.
+
+**Dropdown** (`Dropdown!A1:ZZ`):
+
+Row 1 is headers. The column named `Operation Task` supplies Internal Operations task names (`GET /api/master/operation-tasks`).
+
 **Roles and Tasks**:
 
 | Col | Field |

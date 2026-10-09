@@ -7,6 +7,7 @@
 | [custom-project-on-submit.md](./features/custom-project-on-submit.md) | `*New` custom project creation |
 | [copy-yesterday.md](./features/copy-yesterday.md) | Copy previous day entries |
 | [leave-and-holiday-day-ux.md](./features/leave-and-holiday-day-ux.md) | Leave/holiday cues; all day types editable; submit ack for FULL leave/holiday |
+| [task-type-entries.md](./features/task-type-entries.md) | Task type dropdown: Project Delivery, Sales & Presales, Internal Development, Internal Operations |
 
 Slack AI write path reuses the same day writer (`submitDayTimesheetForStaff`) via confirmation-gated Business Tools — see [Timesheet Write Foundation](../business-tools/Timesheet%20Write%20Foundation.md). UI Submit Week has no separate Sheets submitted flag; Slack `prepare_submit_timesheet` is unsupported.
 
@@ -20,7 +21,8 @@ Slack AI write path reuses the same day writer (`submitDayTimesheetForStaff`) vi
 - `src/app/api/timesheet/submit/route.ts`
 - `src/lib/google-sheets.ts`
 - `src/lib/sheets-date.ts` (Time Log Date serial ↔ ISO)
-- `src/lib/timesheet/timesheet-service.ts` (`getTimeLogRowsForStaffRange`, `getWeeklyTimesheetForStaff`)
+- `src/lib/timesheet/timesheet-service.ts` (`getTimeLogRowsForStaffRange`, `getWeeklyTimesheetForStaff`, `submitDayTimesheetForStaff`)
+- `src/lib/timesheet/task-type.ts` (task type classification, zero-id row identity)
 - `src/lib/timesheet/canonical-read.ts` (AI + domain `DailyTimesheet` mapping over the same Time Log rows)
 - `src/lib/sheets-write-lock.ts`
 - `src/lib/submit-week-days.ts`

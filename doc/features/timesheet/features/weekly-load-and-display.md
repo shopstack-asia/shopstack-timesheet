@@ -20,6 +20,8 @@ Show the current week’s logged time and context needed to edit accurately.
 2. Parallel client fetches:
    - `GET /api/master/projects` → projects + clients
    - `GET /api/master/tasks`
+   - `GET /api/master/sales-projects`
+   - `GET /api/master/operation-tasks`
    - `GET /api/timesheet/get?weekStart=YYYY-MM-DD`
    - `GET /api/staff/leave/monthly?year=&month=` (for months spanned by week)
    - `GET /api/timesheet/holidays?year=` (when location available)

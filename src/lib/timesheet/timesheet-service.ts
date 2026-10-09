@@ -1,6 +1,21 @@
 import { getGoogleSheetsService } from '@/lib/google-sheets';
-import { TimeEntry, TimeLogRow } from '@/types';
+import { Project, SalesProject, Task, TimeEntry, TimeLogRow, TimesheetTaskType } from '@/types';
 import { AgentAuthContext, assertAgentAuth } from '@/lib/timesheet/agent-auth';
+import {
+  findSalesProject,
+  isShopstackClient,
+  operationTimeLogFields,
+  resolveOperationTaskName,
+  salesTimeLogFields,
+  TASK_TYPE_INTERNAL_DEVELOPMENT,
+  TASK_TYPE_INTERNAL_OPERATIONS,
+  TASK_TYPE_PROJECT_DELIVERY,
+  TASK_TYPE_SALES_PRESALES,
+  timeLogRowIdentity,
+  timeLogRowToTimeEntry,
+  timeLogSyncKey,
+  type ResolvedTimeLogFields,
+} from '@/lib/timesheet/task-type';
 
 /** Calendar-day arithmetic in UTC date parts (YYYY-MM-DD). */
 function addCalendarDays(isoDate: string, deltaDays: number): string {
@@ -50,9 +65,7 @@ export async function getTimeLogRowsForStaffRange(
     if (String(entry['Staff ID'] || '').trim() !== staffId) {
       continue;
     }
-    const uniqueId =
-      entry['Time Log ID'] ||
-      `existing-${entry.Date}-${entry['Project ID']}-${entry['Task ID']}`;
+    const uniqueId = timeLogRowIdentity(entry);
     if (seenIds.has(uniqueId)) {
       continue;
     }
@@ -93,30 +106,92 @@ export async function getWeeklyTimesheetForStaff(
 
   staffEntries.forEach((entry) => {
     const date = entry.Date;
-    const uniqueId =
-      entry['Time Log ID'] ||
-      `existing-${date}-${entry['Project ID']}-${entry['Task ID']}`;
-
     if (!entriesByDate[date]) {
       entriesByDate[date] = [];
     }
 
-    entriesByDate[date].push({
-      id: uniqueId,
-      projectId: entry['Project ID'],
-      taskId: entry['Task ID'],
-      hours: entry.Hours,
-    });
+    entriesByDate[date].push(timeLogRowToTimeEntry(entry));
   });
 
   return entriesByDate;
 }
 
 export type SubmitDayEntryInput = {
+  taskType?: TimesheetTaskType;
   projectId: string;
   taskId: string;
   hours: number;
+  projectClient?: string;
+  projectName?: string;
+  projectCode?: string;
+  taskName?: string;
 };
+
+function entryTaskType(entry: SubmitDayEntryInput): TimesheetTaskType {
+  return entry.taskType ?? TASK_TYPE_PROJECT_DELIVERY;
+}
+
+function syncKeyForRow(entry: TimeLogRow): string {
+  return timeLogSyncKey({
+    projectId: entry['Project ID'],
+    taskId: entry['Task ID'],
+    projectCode: entry['Project Code'],
+    taskName: entry.Task,
+  });
+}
+
+function resolveSubmitFields(
+  entry: SubmitDayEntryInput,
+  deps: {
+    projectMap: Map<string, Project>;
+    projectIdMap: Map<string, string>;
+    taskMap: Map<string, Task>;
+    salesProjects: SalesProject[];
+    operationTasks: string[];
+  }
+): ResolvedTimeLogFields {
+  const taskType = entryTaskType(entry);
+  if (taskType === TASK_TYPE_SALES_PRESALES) {
+    const sales = findSalesProject(deps.salesProjects, entry.projectCode || '');
+    if (!sales) {
+      throw new Error(`Invalid sales project code: ${entry.projectCode || '(empty)'}`);
+    }
+    return salesTimeLogFields(sales);
+  }
+  if (taskType === TASK_TYPE_INTERNAL_OPERATIONS) {
+    const taskName = resolveOperationTaskName(deps.operationTasks, entry.taskName || '');
+    if (!taskName) {
+      throw new Error(`Invalid operation task: ${entry.taskName || '(empty)'}`);
+    }
+    return operationTimeLogFields(taskName);
+  }
+
+  const task = deps.taskMap.get(entry.taskId);
+  if (!task) {
+    throw new Error(`Invalid task ID: ${entry.taskId}`);
+  }
+  let project = deps.projectMap.get(entry.projectId);
+  if (!project && deps.projectIdMap.has(entry.projectId)) {
+    project = deps.projectMap.get(deps.projectIdMap.get(entry.projectId)!);
+  }
+  if (!project) {
+    throw new Error(`Project not found: ${entry.projectId}`);
+  }
+  if (
+    taskType === TASK_TYPE_INTERNAL_DEVELOPMENT &&
+    !isShopstackClient(project.ProjectClient)
+  ) {
+    throw new Error(`Invalid internal development project: ${entry.projectId}`);
+  }
+  return {
+    projectId: project.ProjectID,
+    projectClient: project.ProjectClient,
+    projectName: project.ProjectName,
+    projectCode: project.ProjectCode,
+    taskId: task.TaskID,
+    taskName: task.Task,
+  };
+}
 
 export type SubmitDayOptions = {
   /** When false (Slack agent), unknown projectId is an error — never createProject */
@@ -153,12 +228,10 @@ async function restoreDayToSnapshot(
   }
 
   const current = await sheetsService.getTimeLogEntriesByDateAndStaff(date, staffId);
-  const snapshotKeys = new Set(
-    snapshotRows.map((r) => `${r['Project ID']}|${r['Task ID']}`)
-  );
+  const snapshotKeys = new Set(snapshotRows.map((row) => syncKeyForRow(row)));
 
   const extras = current
-    .filter(({ entry }) => !snapshotKeys.has(`${entry['Project ID']}|${entry['Task ID']}`))
+    .filter(({ entry }) => !snapshotKeys.has(syncKeyForRow(entry)))
     .map(({ rowNumber }) => rowNumber);
 
   if (extras.length > 0) {
@@ -181,9 +254,8 @@ export async function submitDayTimesheetForStaff(
   const { withTimeLogWriteLock, SheetsWriteLockError } = await import(
     '@/lib/sheets-write-lock'
   );
-  const { getCachedProjects, getCachedTasks, getGoogleSheetsService } = await import(
-    '@/lib/google-sheets'
-  );
+  const sheetsMod = await import('@/lib/google-sheets');
+  const { getCachedProjects, getCachedTasks, getGoogleSheetsService } = sheetsMod;
   const { z } = await import('zod');
 
   assertAgentAuth(ctx);
@@ -192,9 +264,21 @@ export async function submitDayTimesheetForStaff(
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     entries: z.array(
       z.object({
+        taskType: z
+          .enum([
+            TASK_TYPE_PROJECT_DELIVERY,
+            TASK_TYPE_SALES_PRESALES,
+            TASK_TYPE_INTERNAL_DEVELOPMENT,
+            TASK_TYPE_INTERNAL_OPERATIONS,
+          ])
+          .optional(),
         projectId: z.string().min(1),
         taskId: z.string().min(1),
         hours: z.number().min(0).max(24),
+        projectClient: z.string().optional(),
+        projectName: z.string().optional(),
+        projectCode: z.string().optional(),
+        taskName: z.string().optional(),
       })
     ),
   });
@@ -221,14 +305,50 @@ export async function submitDayTimesheetForStaff(
     throw error;
   }
 
+  const needsSales = parsed.data.entries.some(
+    (entry) => entryTaskType(entry) === TASK_TYPE_SALES_PRESALES
+  );
+  const needsOperations = parsed.data.entries.some(
+    (entry) => entryTaskType(entry) === TASK_TYPE_INTERNAL_OPERATIONS
+  );
+
   // Validate master data BEFORE lock / mutations
-  const [projects, tasks] = await Promise.all([getCachedProjects(), getCachedTasks()]);
+  const [projects, tasks, salesProjects, operationTasks] = await Promise.all([
+    getCachedProjects(),
+    getCachedTasks(),
+    needsSales ? sheetsMod.getCachedSalesProjects() : Promise.resolve([]),
+    needsOperations ? sheetsMod.getCachedOperationTasks() : Promise.resolve([]),
+  ]);
   const projectMap = new Map(projects.map((p) => [p.ProjectID, p]));
   const taskMap = new Map(tasks.map((t) => [t.TaskID, t]));
 
   for (const entry of parsed.data.entries) {
+    const taskType = entryTaskType(entry);
+    if (taskType === TASK_TYPE_SALES_PRESALES) {
+      if (!findSalesProject(salesProjects, entry.projectCode || '')) {
+        throw new Error(
+          `Invalid sales project code: ${entry.projectCode || '(empty)'}`
+        );
+      }
+      continue;
+    }
+    if (taskType === TASK_TYPE_INTERNAL_OPERATIONS) {
+      if (!resolveOperationTaskName(operationTasks, entry.taskName || '')) {
+        throw new Error(`Invalid operation task: ${entry.taskName || '(empty)'}`);
+      }
+      continue;
+    }
     if (!taskMap.has(entry.taskId)) {
       throw new Error(`Invalid task ID: ${entry.taskId}`);
+    }
+    if (taskType === TASK_TYPE_INTERNAL_DEVELOPMENT) {
+      const project = projectMap.get(entry.projectId);
+      if (!project || !isShopstackClient(project.ProjectClient)) {
+        throw new Error(
+          `Invalid internal development project: ${entry.projectId}`
+        );
+      }
+      continue;
     }
     if (!allowCustomProject && !projectMap.has(entry.projectId)) {
       throw new Error(
@@ -245,6 +365,7 @@ export async function submitDayTimesheetForStaff(
       const projectIdMap = new Map<string, string>();
       if (allowCustomProject) {
         for (const entry of parsed.data.entries) {
+          if (entryTaskType(entry) !== TASK_TYPE_PROJECT_DELIVERY) continue;
           if (!projectMap.has(entry.projectId) && !projectIdMap.has(entry.projectId)) {
             const newProject = await sheetsService.createProject(entry.projectId);
             projectIdMap.set(entry.projectId, newProject.ProjectID);
@@ -263,21 +384,20 @@ export async function submitDayTimesheetForStaff(
 
       // Build final TimeLogRow set (fail before deletes if anything missing)
       const timeLogRows: TimeLogRow[] = parsed.data.entries.map((entry) => {
-        const task = taskMap.get(entry.taskId)!;
-        let project = projectMap.get(entry.projectId);
-        if (!project && projectIdMap.has(entry.projectId)) {
-          project = projectMap.get(projectIdMap.get(entry.projectId)!);
-        }
-        if (!project) {
-          throw new Error(`Project not found: ${entry.projectId}`);
-        }
-
-        const resolvedProjectId = project.ProjectID;
+        const fields = resolveSubmitFields(entry, {
+          projectMap,
+          projectIdMap,
+          taskMap,
+          salesProjects,
+          operationTasks,
+        });
         const timeLogId = sheetsService.generateTimeLogId(
           parsed.data.date,
           ctx.staff.EmployeeID,
-          resolvedProjectId,
-          task.TaskID
+          fields.projectId,
+          fields.taskId,
+          fields.projectCode,
+          fields.taskName
         );
 
         return {
@@ -287,12 +407,12 @@ export async function submitDayTimesheetForStaff(
           'Staff First Name': ctx.staff.FirstName,
           'Staff Last Name': ctx.staff.LastName,
           'Staff Position': ctx.staff.Position,
-          'Project ID': resolvedProjectId,
-          'Project Client': project.ProjectClient,
-          'Project Name': project.ProjectName,
-          'Project Code': project.ProjectCode,
-          'Task ID': task.TaskID,
-          Task: task.Task,
+          'Project ID': fields.projectId,
+          'Project Client': fields.projectClient,
+          'Project Name': fields.projectName,
+          'Project Code': fields.projectCode,
+          'Task ID': fields.taskId,
+          Task: fields.taskName,
           Hours: entry.hours,
         };
       });
@@ -307,13 +427,10 @@ export async function submitDayTimesheetForStaff(
         { rowNumber: number; entry: TimeLogRow }
       >();
       existingEntries.forEach(({ rowNumber, entry }) => {
-        const key = `${entry['Project ID']}|${entry['Task ID']}`;
-        existingEntriesMap.set(key, { rowNumber, entry });
+        existingEntriesMap.set(syncKeyForRow(entry), { rowNumber, entry });
       });
 
-      const submittedKeys = new Set(
-        timeLogRows.map((r) => `${r['Project ID']}|${r['Task ID']}`)
-      );
+      const submittedKeys = new Set(timeLogRows.map((row) => syncKeyForRow(row)));
 
       const snapshotRows = existingEntries.map(({ entry }) => ({ ...entry }));
 

@@ -8,6 +8,8 @@ Serve Projects and Tasks from Google Sheets to the timesheet UI, with short in-p
 
 - `src/app/api/master/projects/route.ts`
 - `src/app/api/master/tasks/route.ts`
+- `src/app/api/master/sales-projects/route.ts`
+- `src/app/api/master/operation-tasks/route.ts`
 - `getCachedProjects` / `getCachedTasks` / `clearSheetsCache` in `src/lib/google-sheets.ts`
 
 ## Reading order

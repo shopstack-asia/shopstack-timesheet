@@ -1,11 +1,18 @@
 import { google } from 'googleapis';
-import { createHash } from 'crypto';
-import { Project, Task, TimeLogRow } from '@/types';
+import { Project, SalesProject, Task, TimeLogRow } from '@/types';
 import { sanitizeSheetRow } from '@/lib/sheets-sanitize';
 import {
   dateCellForSheetsWrite,
   normalizeSheetDate,
 } from '@/lib/sheets-date';
+import {
+  buildTimeLogId,
+  DROPDOWN_SHEET,
+  DuplicateSalesProjectCodeError,
+  operationTaskNamesFromDropdownRows,
+  SALES_PROJECTS_SHEET,
+  salesProjectCodeTaken,
+} from '@/lib/timesheet/task-type';
 
 function cellAsString(value: unknown): string {
   if (value === null || value === undefined) {
@@ -42,19 +49,19 @@ function mapTimeLogRow(row: unknown[]): TimeLogRow {
 
 export class GoogleSheetsService {
   /**
-   * Generate Time Log ID from Date + Staff ID + Project ID + Task ID
+   * Generate Time Log ID from Date + Staff ID + Project ID + Task ID.
+   * When both IDs are 0, Project Code and Task are part of the hash so
+   * sales and operation rows on the same day stay distinct.
    */
   generateTimeLogId(
     date: string,
     staffId: string,
     projectId: string,
-    taskId: string
+    taskId: string,
+    projectCode?: string,
+    taskName?: string
   ): string {
-    // Create a unique ID by combining all components
-    const combined = `${date}|${staffId}|${projectId}|${taskId}`;
-    // Use SHA-256 hash and take first 16 characters for a shorter ID
-    const hash = createHash('sha256').update(combined).digest('hex');
-    return hash.substring(0, 16);
+    return buildTimeLogId(date, staffId, projectId, taskId, projectCode, taskName);
   }
   private spreadsheetId: string;
   private sheets: any;
@@ -266,6 +273,104 @@ export class GoogleSheetsService {
     }
   }
 
+  /**
+   * Sales Projects sheet: Project Client, Project Name, Project Code (no Project ID).
+   */
+  async getSalesProjects(): Promise<SalesProject[]> {
+    try {
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: `'${SALES_PROJECTS_SHEET}'!A2:C`,
+      });
+
+      const rows = response.data.values || [];
+      return rows
+        .filter(
+          (row: unknown[]) =>
+            String(row?.[0] ?? '').trim() &&
+            String(row?.[1] ?? '').trim() &&
+            String(row?.[2] ?? '').trim()
+        )
+        .map((row: unknown[]) => ({
+          ProjectClient: String(row[0]).trim(),
+          ProjectName: String(row[1]).trim(),
+          ProjectCode: String(row[2]).trim(),
+        }));
+    } catch (error: any) {
+      console.error('[Google Sheets] Error fetching sales projects:', error);
+      throw new Error(
+        `Failed to fetch Sales Projects. Confirm the sheet "${SALES_PROJECTS_SHEET}" exists with columns Project Client, Project Name, and Project Code. ${error.message}`
+      );
+    }
+  }
+
+  /**
+   * Append one Sales Projects row. Rejects a project code that already exists.
+   */
+  async createSalesProject(input: {
+    projectClient: string;
+    projectName: string;
+    projectCode: string;
+  }): Promise<SalesProject> {
+    const projectClient = input.projectClient.trim();
+    const projectName = input.projectName.trim();
+    const projectCode = input.projectCode.trim();
+    if (!projectClient || !projectName || !projectCode) {
+      throw new Error('Client, project name, and project code are required');
+    }
+
+    const existing = await this.getSalesProjects();
+    if (salesProjectCodeTaken(existing.map((project) => project.ProjectCode), projectCode)) {
+      throw new DuplicateSalesProjectCodeError(projectCode);
+    }
+
+    const created: SalesProject = {
+      ProjectClient: projectClient,
+      ProjectName: projectName,
+      ProjectCode: projectCode,
+    };
+
+    await this.sheets.spreadsheets.values.append({
+      spreadsheetId: this.spreadsheetId,
+      range: `'${SALES_PROJECTS_SHEET}'!A:C`,
+      valueInputOption: 'RAW',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [
+          sanitizeSheetRow([
+            created.ProjectClient,
+            created.ProjectName,
+            created.ProjectCode,
+          ]),
+        ],
+      },
+    });
+
+    clearSheetsCache();
+    return created;
+  }
+
+  /**
+   * Operation task names from the Dropdown sheet, column header "Operation Task".
+   */
+  async getOperationTasks(): Promise<string[]> {
+    try {
+      const response = await this.sheets.spreadsheets.values.get({
+        spreadsheetId: this.spreadsheetId,
+        range: `'${DROPDOWN_SHEET}'!A1:ZZ`,
+      });
+      const rows = (response.data.values || []) as unknown[][];
+      return operationTaskNamesFromDropdownRows(rows);
+    } catch (error: any) {
+      if (error instanceof Error && error.message.includes('Operation Task')) {
+        throw error;
+      }
+      console.error('[Google Sheets] Error fetching operation tasks:', error);
+      throw new Error(
+        `Failed to fetch operation tasks from the "${DROPDOWN_SHEET}" sheet. Confirm that sheet exists and has an "Operation Task" column. ${error.message}`
+      );
+    }
+  }
 
   /**
    * Find existing time log entry by Date, Staff ID, Project ID, and Task ID
@@ -275,11 +380,23 @@ export class GoogleSheetsService {
     date: string,
     staffId: string,
     projectId: string,
-    taskId: string
+    taskId: string,
+    projectCode?: string,
+    taskName?: string
   ): Promise<{ rowNumber: number; timeLogId: string } | null> {
     try {
       // Generate expected Time Log ID
-      const expectedTimeLogId = this.generateTimeLogId(date, staffId, projectId, taskId);
+      const expectedTimeLogId = this.generateTimeLogId(
+        date,
+        staffId,
+        projectId,
+        taskId,
+        projectCode,
+        taskName
+      );
+      const zeroIds = projectId === '0' && taskId === '0';
+      const code = (projectCode || '').trim();
+      const task = (taskName || '').trim();
       
       // Get all time log entries
       const response = await this.sheets.spreadsheets.values.get({
@@ -306,8 +423,13 @@ export class GoogleSheetsService {
         
         // Fallback: check by Date + Staff ID + Project ID + Task ID (for backward compatibility)
         // Date may be a Sheets serial (number) or legacy ISO/text — normalize before compare.
+        // Zero IDs also require Project Code and Task so sales/operation rows do not collide.
+        const zeroIdentityMatches =
+          !zeroIds ||
+          (cellAsString(row[9]).trim() === code && cellAsString(row[11]).trim() === task);
         if (
           row.length >= 11 &&
+          zeroIdentityMatches &&
           normalizeSheetDate(row[1]) === date &&
           cellAsString(row[2]) === staffId &&
           cellAsString(row[6]) === projectId &&
@@ -383,7 +505,9 @@ export class GoogleSheetsService {
           entry.Date,
           entry['Staff ID'],
           entry['Project ID'],
-          entry['Task ID']
+          entry['Task ID'],
+          entry['Project Code'],
+          entry.Task
         );
         
         // Ensure entry has the correct Time Log ID
@@ -396,7 +520,9 @@ export class GoogleSheetsService {
           entry.Date,
           entry['Staff ID'],
           entry['Project ID'],
-          entry['Task ID']
+          entry['Task ID'],
+          entry['Project Code'],
+          entry.Task
         );
 
         if (existing) {
@@ -611,6 +737,10 @@ let sheetsServiceInstance: GoogleSheetsService | null = null;
 let projectsCache: Project[] | null = null;
 let tasksCache: Task[] | null = null;
 let cacheTimestamp: number = 0;
+let salesProjectsCache: SalesProject[] | null = null;
+let salesCacheTimestamp: number = 0;
+let operationTasksCache: string[] | null = null;
+let operationTasksCacheTimestamp: number = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 export function getGoogleSheetsService(): GoogleSheetsService {
@@ -650,6 +780,30 @@ export async function getCachedTasks(): Promise<Task[]> {
   return tasksCache;
 }
 
+export async function getCachedSalesProjects(): Promise<SalesProject[]> {
+  const now = Date.now();
+  if (salesProjectsCache && now - salesCacheTimestamp < CACHE_TTL) {
+    return salesProjectsCache;
+  }
+
+  const service = getGoogleSheetsService();
+  salesProjectsCache = await service.getSalesProjects();
+  salesCacheTimestamp = now;
+  return salesProjectsCache;
+}
+
+export async function getCachedOperationTasks(): Promise<string[]> {
+  const now = Date.now();
+  if (operationTasksCache && now - operationTasksCacheTimestamp < CACHE_TTL) {
+    return operationTasksCache;
+  }
+
+  const service = getGoogleSheetsService();
+  operationTasksCache = await service.getOperationTasks();
+  operationTasksCacheTimestamp = now;
+  return operationTasksCache;
+}
+
 /**
  * Clear cache (useful after updates)
  */
@@ -657,5 +811,9 @@ export function clearSheetsCache(): void {
   projectsCache = null;
   tasksCache = null;
   cacheTimestamp = 0;
+  salesProjectsCache = null;
+  salesCacheTimestamp = 0;
+  operationTasksCache = null;
+  operationTasksCacheTimestamp = 0;
 }
 
