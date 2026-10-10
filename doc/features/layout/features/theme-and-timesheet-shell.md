@@ -2,7 +2,7 @@
 
 ### Overview
 
-Timesheet page chrome: week navigation, staff display, sign-out, dark mode toggle, and column vs tab view preference.
+Week navigation and the column/tab preference stay on the timesheet page. Staff display, sign-out, and the dark mode toggle live in the shared workspace header.
 
 ### Business Purpose
 
@@ -23,8 +23,8 @@ Provide navigation and personal preferences around the weekly grid without ownin
 
 ### Screen Behavior
 
-- Nav: title, staff First+Last name, theme button, Sign Out.
-- Week: Previous / Current / Next.
+- Workspace header: ShopStack Workspace, staff First+Last name, theme button, Sign Out, module menu.
+- Week: Previous / Current / Next (timesheet page only).
 - View mode controls (wired into `WeeklyTimesheet` via props).
 
 ### Business Logic
@@ -43,7 +43,8 @@ Provide navigation and personal preferences around the weekly grid without ownin
 ### Source Code References
 
 - `src/contexts/ThemeContext.tsx`
-- `src/app/timesheet/page.tsx`
+- `src/components/workspace/layout/WorkspaceFrame.tsx`
+- `src/app/(workspace)/timesheet/page.tsx`
 - `src/app/providers.tsx`
 - `src/app/layout.tsx`
 

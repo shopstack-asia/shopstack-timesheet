@@ -15,6 +15,8 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 
 | Feature area | Doc folder | README | Area feature-logic summary |
 |--------------|------------|--------|----------------------------|
+| `workspace` | [features/workspace/](./features/workspace/) | [README.md](./features/workspace/README.md) | [feature-logic-summary.md](./features/workspace/feature-logic-summary.md) |
+| `expense` | [features/expense/](./features/expense/) | [README.md](./features/expense/README.md) | [feature-logic-summary.md](./features/expense/feature-logic-summary.md) |
 | `auth` | [features/auth/](./features/auth/) | [README.md](./features/auth/README.md) | [feature-logic-summary.md](./features/auth/feature-logic-summary.md) |
 | `layout` | [features/layout/](./features/layout/) | [README.md](./features/layout/README.md) | [feature-logic-summary.md](./features/layout/feature-logic-summary.md) |
 | `timesheet` | [features/timesheet/](./features/timesheet/) | [README.md](./features/timesheet/README.md) | [feature-logic-summary.md](./features/timesheet/feature-logic-summary.md) |
@@ -36,7 +38,9 @@ Navigation index only. Canonical behavior lives under `doc/features/<feature-are
 | Google Sheets Time Log R/W | `timesheet`, `master-data` | `src/lib/google-sheets.ts` — in-process master cache 5 min |
 | Zoho People | `auth`, `staff`, `holidays`, `reminders` | `src/lib/zoho-people.ts`, `src/lib/zoho/` |
 | Redis | `staff`, `holidays`, `timesheet` | Leave TTL 21600s; holidays cache-aside TTL ~1 year (Zoho reload on miss); Time Log write lock on submit |
-| NextAuth + middleware | `auth`, `layout` | Matcher: `/timesheet`, `/api/timesheet`, `/api/master`, `/api/staff` |
+| NextAuth + middleware | `auth`, `layout`, `workspace` | Matcher: `/timesheet`, `/dashboard`, `/expense`, `/settings`, `/api/timesheet`, `/api/master`, `/api/staff`, `/api/expense`, `/api/workspace`, `/api/settings` |
+| Workspace shell | `workspace`, `layout` | Shared branding, navigation, theme, sign-out. Timesheet week chrome stays on `/timesheet`. |
+| Expense prototype | `expense` | Browser-local entries, claims, and PDFs. No PostgreSQL, Drive upload, or approval. |
 | Cron bearer secret | `reminders`, `holidays` | `Authorization: Bearer ${CRON_SECRET}` |
 | Theme / view prefs | `layout` | `localStorage` keys `theme`, `timesheetViewMode` |
 | Slack Timesheet AI Agent | `slack`, `timesheet`, `ai` | Events foundation: `src/lib/slack/*`; App Home (read-only): `src/lib/slack/app-home/*`; always-on AI-first NLU: `src/lib/ai/intent/*`; legacy regex helpers (non-production NL): `src/lib/ai/decision-engine.ts` |

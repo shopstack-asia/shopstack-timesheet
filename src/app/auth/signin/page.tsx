@@ -3,6 +3,8 @@
 import { signIn } from 'next-auth/react';
 import { useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense } from 'react';
+import { APP_NAME } from '@/lib/workspace/branding';
+import { WORKSPACE_ROUTES } from '@/lib/workspace/routes';
 
 function SignInForm() {
   const searchParams = useSearchParams();
@@ -24,7 +26,7 @@ function SignInForm() {
       setError(null);
       // console.log('Attempting to sign in with Google...');
       const result = await signIn('google', { 
-        callbackUrl: '/timesheet',
+        callbackUrl: WORKSPACE_ROUTES.timesheet,
         redirect: true 
       });
       // console.log('Sign in result:', result);
@@ -40,7 +42,7 @@ function SignInForm() {
       <div className="max-w-md w-full space-y-8 p-8 bg-white dark:bg-gray-800 rounded-lg shadow-md">
         <div>
           <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900 dark:text-white">
-            Shopstack Timesheet
+            {APP_NAME}
           </h2>
           <p className="mt-2 text-center text-sm text-gray-600 dark:text-gray-400">
             Sign in with your Shopstack Google account

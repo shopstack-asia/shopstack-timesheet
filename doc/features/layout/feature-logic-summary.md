@@ -11,5 +11,6 @@
 - `src/app/page.tsx`
 - `src/app/layout.tsx`
 - `src/app/providers.tsx`
-- `src/app/timesheet/page.tsx`
+- `src/app/(workspace)/layout.tsx`
+- `src/app/(workspace)/timesheet/page.tsx`
 - `src/contexts/ThemeContext.tsx`

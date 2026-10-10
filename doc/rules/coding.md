@@ -8,13 +8,13 @@
 
 | Layer | Location | Responsibility |
 |--------|-----------|----------------|
-| **Pages** | `src/app/` | Routing and composition (`/`, `/timesheet`, `/auth/*`). |
+| **Pages** | `src/app/` | Routing and composition. Authenticated modules use the `(workspace)` route group (`/dashboard`, `/timesheet`, `/expense`) without changing public URLs. Auth pages stay at `/auth/*`. |
 | **Components** | `src/components/` | Presentation and local UI state. **No** direct Zoho/Sheets/Slack/SMTP calls. Call **`/api/*` only**. |
 | **API routes** | `src/app/api/` | Auth-gated handlers, cron jobs, debug probes; validate input; return `ApiResponse<T>`. |
 | **Lib** | `src/lib/` | Server-only integrations and helpers (`auth`, `google-sheets`, `zoho-people`, `redis`, cache, leave/holiday utils). |
 | **Contexts** | `src/contexts/` | Global client state (e.g. `ThemeContext`). |
 | **Types** | `src/types/` | Shared domain and API types. |
-| **Middleware** | `src/middleware.ts` | NextAuth protection for `/timesheet` and selected `/api/*` paths. |
+| **Middleware** | `src/middleware.ts` | NextAuth protection for `/timesheet`, `/dashboard`, `/expense`, and `/api/timesheet`, `/api/master`, `/api/staff`, `/api/expense`. |
 
 ## 3. Component rules
 

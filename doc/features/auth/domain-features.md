@@ -19,3 +19,4 @@
 - Sign-in denies when Zoho throws — not only when employee is missing.
 - Middleware (layout area) protects timesheet UI/APIs; `/api/auth/*` is not in the matcher (NextAuth handles it).
 - UI primarily uses `useSession().staffProfile`; `/api/staff/profile` exists but is unused by current UI.
+- `staffProfile.Position` is a job title. Workspace HR/Admin checks do not read it. See `workspace` authorization.

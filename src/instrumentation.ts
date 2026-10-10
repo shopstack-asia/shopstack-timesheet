@@ -1,6 +1,7 @@
 /**
  * Next.js instrumentation — runs once when the Node server starts.
  * Validates Slack env when Slack is configured for this deployment.
+ * Applies expense SQL migrations when EXPENSE_DATABASE_URL is set.
  * @see https://nextjs.org/docs/app/building-your-application/optimizing/instrumentation
  */
 export async function register(): Promise<void> {
@@ -38,6 +39,19 @@ export async function register(): Promise<void> {
   } catch (error) {
     console.error(
       '[startup] Business API configuration validation failed:',
+      error instanceof Error ? error.message : String(error)
+    );
+    throw error;
+  }
+
+  const { migrateExpenseDatabaseOnStartup } = await import(
+    '@/lib/expense/db/migrate-on-startup'
+  );
+  try {
+    await migrateExpenseDatabaseOnStartup();
+  } catch (error) {
+    console.error(
+      '[startup] Expense database migration failed:',
       error instanceof Error ? error.message : String(error)
     );
     throw error;

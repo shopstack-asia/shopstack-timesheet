@@ -2,13 +2,13 @@
 
 ## Purpose
 
-App shell: root redirect, providers, middleware-protected routes, timesheet page chrome (week nav, sign-out), dark/light theme, and column/tab view preference.
+App shell: root redirect, providers, middleware-protected routes, and theme. Shared header and module navigation live in the workspace area. The timesheet page keeps week navigation and the column/tab view preference.
 
 ## Scope
 
 - `src/app/layout.tsx`, `providers.tsx`, `page.tsx`
 - `src/middleware.ts`
-- `src/app/timesheet/page.tsx` (shell only; grid logic is `timesheet`)
+- `src/app/(workspace)/timesheet/page.tsx` (week chrome only; grid logic is `timesheet`; header is `workspace`)
 - `src/contexts/ThemeContext.tsx`
 
 ## Reading order

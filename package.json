@@ -25,6 +25,8 @@
     "next": "14.2.35",
     "next-auth": "^4.24.0",
     "nodemailer": "^7.0.7",
+    "pdf-lib": "^1.17.1",
+    "pg": "^8.23.1",
     "postcss": "^8.4.31",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -34,6 +36,7 @@
   },
   "devDependencies": {
     "@types/nodemailer": "^7.0.4",
+    "@types/pg": "^8.23.1",
     "eslint": "^8.0.0",
     "eslint-config-next": "^14.0.0",
     "vitest": "^3.2.4"

@@ -142,6 +142,25 @@ Local Redis: no token. `rediss://` embeds token in URL. `https://` Redis URL nee
 
 Lock key: `timesheet:sheets:timelog:write` (see `src/lib/sheets-write-lock.ts`).
 
+#### Expense PostgreSQL (optional)
+
+| Variable | Purpose |
+|----------|---------|
+| `EXPENSE_DATABASE_URL` | Postgres connection string for the expense database. Unset: skip migrations, and expense screens cannot load. Set: apply pending SQL migrations at Node server start, then read and write expense rows. A migration failure stops startup. Never prefix with `NEXT_PUBLIC_`. |
+
+Timesheet does not read this variable. There is no ORM. Ledger migrations are `001_expense_ledger` and `002_expense_request_numbers` in `src/lib/expense/db/migrations.ts`. Attachment bytes stay in that database. Drive receives a copy when both folder ids are set.
+
+#### Expense Google Drive
+
+Both ids are required. When either is empty, attachments stay in PostgreSQL only. When both are set, each expense folder is `Expenses/YYYY/EXP-YYYY-NNNNNN/`. Deleting the expense removes that request folder. The year folder stays.
+
+| Variable | Purpose |
+|----------|---------|
+| `GOOGLE_DRIVE_SHARED_DRIVE_ID` | Company Shared Drive id for expense attachments |
+| `GOOGLE_DRIVE_EXPENSES_ROOT_FOLDER_ID` | Existing `Expenses` folder id inside that Shared Drive |
+
+Reuse `GOOGLE_SERVICE_ACCOUNT_EMAIL` and `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY` on the server. The Drive client uses `https://www.googleapis.com/auth/drive`, separate from the Sheets scope, so it can open and delete files in the Shared Drive. See [expense Drive plan](../../expense/features/expense-drive-and-persistence-plan.md).
+
 ### Security Notes
 
 - Never commit `.env` (gitignored). Use `.env.example` as template only.

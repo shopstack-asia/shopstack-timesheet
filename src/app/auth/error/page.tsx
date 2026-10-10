@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
+import { APP_NAME } from '@/lib/workspace/branding';
 
 function ErrorContent() {
   const searchParams = useSearchParams();
@@ -34,7 +35,8 @@ function ErrorContent() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
       <div className="max-w-md w-full space-y-8 p-8 bg-white dark:bg-gray-800 rounded-lg shadow-md">
         <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">{errorMessage}</h2>
+          <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">{APP_NAME}</p>
+          <h2 className="mt-2 text-2xl font-bold text-gray-900 dark:text-white">{errorMessage}</h2>
           <p className="mt-4 text-gray-600 dark:text-gray-400">{errorDetails}</p>
           
           {error === 'AccessDenied' && (

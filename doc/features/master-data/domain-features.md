@@ -7,6 +7,7 @@
 3. **Sales Projects** — `Sales Projects!A2:C` (client, name, code) plus create with a unique project code.
 4. **Operation tasks** — `Dropdown` sheet column `Operation Task`.
 5. **In-process cache** — 5 minute TTL for projects, tasks, sales projects, and operation tasks (not Redis). Cleared when a custom project or sales project is created.
+6. **Shared work context** — optional reference for future modules. It does not change these Sheets APIs. ProjectID is not required for every context.
 
 ## Dependencies
 

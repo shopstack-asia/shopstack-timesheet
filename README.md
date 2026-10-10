@@ -1,14 +1,18 @@
-# Shopstack Timesheet
+# ShopStack Workspace
 
-Internal timesheet app for Shopstack employees (Next.js, TypeScript, Tailwind).
+Internal business workspace for Shopstack employees (Next.js, TypeScript, Tailwind).
+
+Timesheet stays on Google Sheets. Expense is a browser-local prototype and does not use PostgreSQL or Google Drive.
 
 ## Features (summary)
 
 - Google SSO (`@shopstack.asia`) + Zoho People staff profile
+- Shared workspace layout and module navigation
 - Weekly Mon–Sun timesheet; Google Sheets Time Log
 - Leave / holiday awareness; Redis cache + timesheet write lock
 - Friday Slack / email reminders (cron)
 - Slack Timesheet AI Agent (DM / mention) — see [`docs/ai-implementation/`](./docs/ai-implementation/)
+- Expense prototype (`/expense/mine`, `/expense/new`, `/expense/claims`, `/expense/management/*`) — see [expense prototype](./doc/features/expense/features/expense-prototype-workflow.md)
 
 **Canonical behavior docs:** [`doc/features/`](./doc/features/) — start at [`doc/feature-logic-summary.md`](./doc/feature-logic-summary.md).  
 **Agent / engineering rules:** [`doc/ai-agent-instruction.md`](./doc/ai-agent-instruction.md).  
@@ -28,6 +32,8 @@ Setup details by area:
 
 | Topic | Doc |
 |-------|-----|
+| Workspace and modules | [workspace](./doc/features/workspace/README.md) |
+| Expense prototype | [expense](./doc/features/expense/README.md) |
 | Env vars | [ops/environment-variables](./doc/features/ops/features/environment-variables.md) |
 | Google + Zoho auth credentials | [auth/google-oauth-and-zoho-credentials-setup](./doc/features/auth/features/google-oauth-and-zoho-credentials-setup.md) |
 | Google Sheets tabs / service account | [master-data/projects-and-tasks-from-sheets](./doc/features/master-data/features/projects-and-tasks-from-sheets.md) |
