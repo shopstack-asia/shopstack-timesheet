@@ -322,6 +322,42 @@ async function syncClaimStatus(db: ExpenseDatabase, claimId: string): Promise<vo
   await db.saveClaim({ ...claim, status });
 }
 
+export type EligibleClaimGroup = {
+  employeeId: string;
+  employeeName: string;
+  businessUnit: string;
+  entries: ExpenseEntry[];
+  totalThb: string;
+};
+
+/** Submitted expenses that are not on a claim, grouped by employee for the selected month. */
+export function groupEligibleClaimExpenses(
+  expenses: readonly ExpenseEntry[],
+  year: number,
+  month: number
+): EligibleClaimGroup[] {
+  const groups = new Map<string, EligibleClaimGroup>();
+  const waiting = expenses
+    .filter((entry) => entry.status === 'SUBMITTED' && !entry.claimId && expenseInMonth(entry.expenseDate, year, month))
+    .sort((a, b) => a.employeeName.localeCompare(b.employeeName) || a.expenseDate.localeCompare(b.expenseDate) || a.id.localeCompare(b.id));
+  for (const entry of waiting) {
+    const current = groups.get(entry.employeeId);
+    if (!current) {
+      groups.set(entry.employeeId, {
+        employeeId: entry.employeeId,
+        employeeName: entry.employeeName,
+        businessUnit: entry.businessUnit,
+        entries: [entry],
+        totalThb: entry.amountThb,
+      });
+      continue;
+    }
+    current.entries.push(entry);
+    current.totalThb = addThb(current.totalThb, entry.amountThb);
+  }
+  return [...groups.values()];
+}
+
 export function eligibleClaimExpenses(
   expenses: readonly ExpenseEntry[],
   employeeId: string,

@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { addThb, formatMoney } from '@/lib/expense/prototype/money';
-import { expenseInMonth } from '@/lib/expense/prototype/service';
+import { formatMoney } from '@/lib/expense/prototype/money';
+import { groupEligibleClaimExpenses } from '@/lib/expense/prototype/service';
 import { useExpenseWorkspace } from '@/components/expense/prototype/ExpenseProvider';
 import { StatusPill, claimCardClass } from '@/components/expense/prototype/ExpenseList';
 import { expenseBusyLabel, expenseInputClass, expenseNeutralButtonClass, expensePrimaryButtonClass, expenseSecondaryButtonClass, type ExpenseActionName } from '@/components/expense/prototype/fields';
@@ -30,35 +30,11 @@ export function MonthlySummary() {
   const [purpose, setPurpose] = useState('Monthly expense claim');
   const [year, month] = monthValue.split('-').map(Number);
 
-  const employees = useMemo(() => {
-    const people = new Map<string, { id: string; name: string; businessUnit: string }>();
-    for (const entry of workspace.expenses) {
-      if (!people.has(entry.employeeId)) {
-        people.set(entry.employeeId, {
-          id: entry.employeeId,
-          name: entry.employeeName,
-          businessUnit: entry.businessUnit,
-        });
-      }
-    }
-    return [...people.values()].sort((left, right) => left.name.localeCompare(right.name));
-  }, [workspace.expenses]);
-  const rows = useMemo(() => {
-    return employees.filter((employee) => !employeeId || employee.id === employeeId).map((employee) => {
-      const entries = workspace.expenses.filter(
-        (entry) =>
-          entry.employeeId === employee.id &&
-          entry.status === 'SUBMITTED' &&
-          !entry.claimId &&
-          expenseInMonth(entry.expenseDate, year, month)
-      );
-      return {
-        employee,
-        count: entries.length,
-        total: entries.reduce((sum, entry) => addThb(sum, entry.amountThb), '0.00'),
-      };
-    });
-  }, [employeeId, employees, month, workspace.expenses, year]);
+  const groups = useMemo(
+    () => groupEligibleClaimExpenses(workspace.expenses, year, month),
+    [month, workspace.expenses, year]
+  );
+  const rows = employeeId ? groups.filter((group) => group.employeeId === employeeId) : groups;
 
   return (
     <div>
@@ -72,22 +48,25 @@ export function MonthlySummary() {
             placeholder="All employees"
             options={[
               { value: '', label: 'All employees' },
-              ...employees.map((employee) => ({ value: employee.id, label: employee.name })),
+              ...groups.map((group) => ({ value: group.employeeId, label: group.employeeName })),
             ]}
           />
         </div>
         <input value={purpose} onChange={(event) => setPurpose(event.target.value)} className={`${expenseInputClass({ fullWidth: false })} min-w-[16rem]`} />
       </div>
       {message ? <p className="mt-3 text-sm text-red-700 dark:text-red-300">{message}</p> : null}
+      {rows.length === 0 ? (
+        <p className="mt-6 text-gray-600 dark:text-gray-300">No submitted expenses are waiting for this month.</p>
+      ) : null}
       <ul className="mt-4 space-y-3">
         {rows.map((row) => (
-          <li key={row.employee.id} className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-            <p className="font-medium text-gray-900 dark:text-white">{row.employee.name} · {row.employee.businessUnit}</p>
-            <p className="text-sm text-gray-700 dark:text-gray-300">{row.count} eligible entries · {formatMoney(row.total)} THB</p>
+          <li key={row.employeeId} className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
+            <p className="font-medium text-gray-900 dark:text-white">{row.employeeName} · {row.businessUnit}</p>
+            <p className="text-sm text-gray-700 dark:text-gray-300">{row.entries.length} eligible entries · {formatMoney(row.totalThb)} THB</p>
             <div className="mt-3 flex flex-wrap gap-3 text-sm">
               <Link
                 className={expenseSecondaryButtonClass}
-                href={`${WORKSPACE_ROUTES.expenseManagementSummaryPreview}?employee=${row.employee.id}&month=${monthValue}&purpose=${encodeURIComponent(purpose)}`}
+                href={`${WORKSPACE_ROUTES.expenseManagementSummaryPreview}?employee=${row.employeeId}&month=${monthValue}&purpose=${encodeURIComponent(purpose)}`}
               >
                 View expenses
               </Link>
@@ -95,14 +74,14 @@ export function MonthlySummary() {
                 type="button"
                 className={expensePrimaryButtonClass}
                 disabled={generatingId !== null}
-                aria-busy={generatingId === row.employee.id}
+                aria-busy={generatingId === row.employeeId}
                 onClick={() => {
                   if (generateLock.current) return;
                   generateLock.current = true;
-                  setGeneratingId(row.employee.id);
+                  setGeneratingId(row.employeeId);
                   setMessage(null);
                   void workspace.generateClaim({
-                    employeeId: row.employee.id,
+                    employeeId: row.employeeId,
                     year,
                     month,
                     purpose,
@@ -116,7 +95,7 @@ export function MonthlySummary() {
                   });
                 }}
               >
-                {generatingId === row.employee.id ? expenseBusyLabel('generate') : 'Generate monthly claim'}
+                {generatingId === row.employeeId ? expenseBusyLabel('generate') : 'Generate monthly claim'}
               </button>
             </div>
           </li>

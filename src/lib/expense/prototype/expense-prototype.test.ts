@@ -12,6 +12,7 @@ import {
   deleteDraftExpense,
   deleteExpenseRecord,
   deleteMonthlyClaim,
+  groupEligibleClaimExpenses,
   listCategories,
   saveCategories,
   saveCategory,
@@ -20,6 +21,7 @@ import {
 } from '@/lib/expense/prototype/service';
 import { validateAttachmentFile, validateExpenseDraft } from '@/lib/expense/prototype/validation';
 import type { SaveExpenseInput } from '@/lib/expense/prototype/service';
+import type { ExpenseEntry } from '@/lib/expense/prototype/types';
 
 function draft(overrides: Partial<SaveExpenseInput> = {}): SaveExpenseInput {
   return {
@@ -129,6 +131,53 @@ describe('expense entries and monthly claims', () => {
     const remaining = (await db.listExpenses()).find((entry) => entry.id === kept.id);
     expect(remaining?.status).toBe('PAID');
     expect(remaining?.claimId).toBeNull();
+  });
+
+  it('groups only submitted expenses that are not already on a claim', () => {
+    const entry = (overrides: Partial<ExpenseEntry>): ExpenseEntry => ({
+      id: 'expense-1',
+      employeeId: 'S0005',
+      employeeCode: 'S0005',
+      employeeName: 'Prakasit Kitrakham',
+      businessUnit: 'Chief Technology Officer',
+      expenseDate: '2026-10-05',
+      categoryCode: '453',
+      description: 'Taxi',
+      currency: 'THB',
+      amount: '100.00',
+      exchangeRate: '1.00',
+      amountThb: '100.00',
+      projectLabel: '',
+      requestNumber: 'EXP-2026-000001',
+      status: 'SUBMITTED',
+      claimId: null,
+      createdAt: '2026-10-05T00:00:00.000Z',
+      updatedAt: '2026-10-05T00:00:00.000Z',
+      ...overrides,
+    });
+    const groups = groupEligibleClaimExpenses(
+      [
+        entry({ id: 'waiting', amountThb: '100.00' }),
+        entry({ id: 'another', employeeId: 'S0005', amountThb: '50.00', description: 'Meal' }),
+        entry({ id: 'paid', status: 'PAID' }),
+        entry({ id: 'draft', status: 'DRAFT' }),
+        entry({ id: 'claimed', claimId: 'claim-1' }),
+        entry({ id: 'other-month', expenseDate: '2026-09-05' }),
+        entry({
+          id: 'other-person',
+          employeeId: 'S0008',
+          employeeName: 'Anong Siri',
+          businessUnit: 'Finance',
+          amountThb: '20.00',
+        }),
+      ],
+      2026,
+      10
+    );
+    expect(groups.map((group) => group.employeeId)).toEqual(['S0008', 'S0005']);
+    expect(groups.find((group) => group.employeeId === 'S0005')?.entries.map((item) => item.id)).toEqual(['another', 'waiting']);
+    expect(groups.find((group) => group.employeeId === 'S0005')?.totalThb).toBe('150.00');
+    expect(groupEligibleClaimExpenses([entry({ status: 'PAID' })], 2026, 10)).toEqual([]);
   });
 
   it('consolidates submitted expenses and blocks a second claim', async () => {
